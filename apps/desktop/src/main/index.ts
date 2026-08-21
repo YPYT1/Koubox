@@ -7,7 +7,7 @@ let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
 
 function findModelsDirectory(): string {
   return process.env.KOUBOX_MODELS_DIR
-    ?? (app.isPackaged ? join(process.resourcesPath, 'model') : resolve(process.cwd(), '../../model'))
+    ?? (app.isPackaged ? join(process.resourcesPath, 'models') : resolve(process.cwd(), '../../models'))
 }
 
 function findWindowIcon(): string {
@@ -31,7 +31,7 @@ function findPythonProjectDirectory(): string {
 }
 
 function findBundledPythonExecutable(): string | undefined {
-  return app.isPackaged ? join(process.resourcesPath, 'python', 'python.exe') : undefined
+  return app.isPackaged ? join(process.resourcesPath, 'python', 'Scripts', 'python.exe') : undefined
 }
 
 async function createWindow(): Promise<void> {
@@ -50,6 +50,18 @@ async function createWindow(): Promise<void> {
         title,
         defaultPath,
         properties: ['openDirectory', 'createDirectory']
+      }
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions)
+      return result.canceled ? undefined : result.filePaths[0]
+    },
+    selectAudioFile: async (title, defaultPath) => {
+      const dialogOptions: OpenDialogOptions = {
+        title,
+        defaultPath,
+        properties: ['openFile'],
+        filters: [{ name: '音频文件', extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma'] }]
       }
       const result = mainWindow
         ? await dialog.showOpenDialog(mainWindow, dialogOptions)

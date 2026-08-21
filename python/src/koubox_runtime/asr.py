@@ -33,7 +33,6 @@ def run(model_directory: str, audio_path: str) -> None:
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         model_directory,
         torch_dtype=dtype,
-        low_cpu_mem_usage=True,
         use_safetensors=True,
         local_files_only=True,
     ).to(device)

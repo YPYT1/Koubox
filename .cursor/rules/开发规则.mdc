@@ -1,3 +1,8 @@
+---
+description: Koubox 简洁代码开发规则，约束 AI 最小改动、禁止兜底与过度抽象
+alwaysApply: true
+---
+
 # 开发规则（给 AI）
 
 1. 禁止写各种兜底代码；错误直接报错，不 silent fallback、不吞异常、不用默认值掩盖失败。

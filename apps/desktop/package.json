@@ -5,8 +5,9 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "set \"ELECTRON_EXEC_PATH=%CD%\\..\\..\\node_modules\\.pnpm\\electron@33.4.11\\node_modules\\electron\\dist\\electron.exe\" && electron-vite dev",
     "build": "electron-vite build",
+    "package": "pnpm build && electron-builder --win",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -25,8 +26,22 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "electron": "33.4.11",
+    "electron-builder": "^26.0.0",
     "electron-vite": "^5.0.0",
     "typescript": "^5.9.0",
     "vite": "^7.0.0"
+  },
+  "build": {
+    "appId": "com.koubox.desktop",
+    "productName": "口播匣",
+    "directories": { "output": "release" },
+    "files": ["out/**/*", "package.json"],
+    "extraResources": [
+      { "from": "../../vendor", "to": "vendor" },
+      { "from": "../../models", "to": "models" },
+      { "from": "../../python/.venv", "to": "python" }
+    ],
+    "win": { "target": ["nsis"] },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
   }
 }

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { KouboxConfig } from '@koubox/shared'
 import { tools } from '@koubox/shared'
 import { RuntimeStore, getRuntimeStatus } from './runtime.js'
@@ -15,6 +16,7 @@ type ServerOptions = {
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
   selectDirectory(title: string, defaultPath?: string): Promise<string | undefined>
+  selectAudioFile(title: string, defaultPath?: string): Promise<string | undefined>
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -40,8 +42,10 @@ export async function startLocalApi(options: ServerOptions) {
     vendorDirectory: options.vendorDirectory,
     projectDirectory: options.projectDirectory,
     pythonProjectDirectory: options.pythonProjectDirectory,
-    bundledPythonExecutable: options.bundledPythonExecutable
+    bundledPythonExecutable: options.bundledPythonExecutable,
+    taskIndexFile: join(dirname(options.configFile), 'tasks.json')
   })
+  tasks.restore(store.read().outputDirectory)
   const token = randomBytes(24).toString('hex')
   const server = createServer(async (request, response) => {
     try {
@@ -60,6 +64,7 @@ export async function startLocalApi(options: ServerOptions) {
 
       if (method === 'GET' && url.pathname === '/health') return json(response, 200, { ok: true })
       if (method === 'GET' && url.pathname === '/tools') return json(response, 200, tools)
+      if (method === 'GET' && url.pathname === '/tasks') return json(response, 200, tasks.list())
       if (method === 'GET' && url.pathname === '/runtime/status') return json(response, 200, getRuntimeStatus(config, options.vendorDirectory))
       if (method === 'GET' && url.pathname === '/config') return json(response, 200, config)
       if (method === 'PUT' && url.pathname === '/config') {
@@ -77,6 +82,12 @@ export async function startLocalApi(options: ServerOptions) {
         const title = typeof body.title === 'string' ? body.title : '选择文件夹'
         const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined
         return json(response, 200, { path: await options.selectDirectory(title, defaultPath) ?? null })
+      }
+      if (method === 'POST' && url.pathname === '/dialog/select-audio') {
+        const body = await readJson(request)
+        const title = typeof body.title === 'string' ? body.title : '选择音频文件'
+        const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined
+        return json(response, 200, { path: await options.selectAudioFile(title, defaultPath) ?? null })
       }
       const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)(?:\/(events|translate|cancel|export))?$/)
       if (taskMatch) {
@@ -114,6 +125,15 @@ export async function startLocalApi(options: ServerOptions) {
         const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim() ? body.outputDirectory : store.read().outputDirectory
         mkdirSync(outputDirectory, { recursive: true })
         return json(response, 202, tasks.startRequirementOne(urlValue, outputDirectory, store.read().modelsDirectory))
+      }
+      if (method === 'POST' && url.pathname === '/pipelines/req2') {
+        const body = await readJson(request)
+        const audioPath = typeof body.audioPath === 'string' ? body.audioPath.trim() : ''
+        if (!audioPath) return json(response, 400, { error: '请选择本地音频文件。' })
+        const sourceText = typeof body.sourceText === 'string' ? body.sourceText : ''
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim() ? body.outputDirectory : store.read().outputDirectory
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startRequirementTwo(audioPath, sourceText, outputDirectory, store.read().modelsDirectory))
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {

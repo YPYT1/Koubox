@@ -22,6 +22,7 @@ def run(model_directory: str, text: str) -> None:
         return
     if not Path(model_directory).is_dir():
         fail("MODEL_NOT_FOUND", "HYMT21.8B 模型目录不存在。")
+        return
     if not text.strip():
         fail("EMPTY_TEXT", "没有可翻译的原文。")
         return
@@ -31,22 +32,28 @@ def run(model_directory: str, text: str) -> None:
     model = AutoModelForCausalLM.from_pretrained(
         model_directory,
         torch_dtype=torch.bfloat16,
-        device_map="auto",
         local_files_only=True,
         trust_remote_code=True,
-    )
+    ).to("cuda:0")
     model.eval()
-    prompt = f"将以下文本翻译为中文，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
+    prompt = f"将以下文本翻译为中文，注意只需要输出原文翻译后的结果，不要添加任何额外解释和润色：\n\n{text}"
     messages = [{"role": "user", "content": prompt}]
-    encoded = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt")
-    if hasattr(encoded, "to"):
-        encoded = encoded.to(model.device)
-    if isinstance(encoded, dict):
-        input_ids = encoded["input_ids"]
-        output = model.generate(**encoded, max_new_tokens=4096, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05)
-    else:
-        input_ids = encoded
-        output = model.generate(encoded, max_new_tokens=4096, temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05)
+    encoded = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    ).to(model.device)
+    input_ids = encoded["input_ids"]
+    output = model.generate(
+        **encoded,
+        do_sample=True,
+        max_new_tokens=4096,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        repetition_penalty=1.05,
+    )
     result = tokenizer.decode(output[0][input_ids.shape[-1]:], skip_special_tokens=True)
     send("progress", stage="translating", percent=95, message="正在整理译文")
     send("translation", text=clean_translation(result))

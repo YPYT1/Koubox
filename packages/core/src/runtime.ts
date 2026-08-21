@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { GpuStatus, KouboxConfig, ModelCheck, RuntimeStatus } from '@koubox/shared'
 
@@ -11,7 +11,8 @@ const asrModelFiles = [
 
 const translationModelFiles = [
   'chat_template.jinja', 'config.json', 'configuration.json', 'generation_config.json',
-  'model.safetensors', 'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json'
+  'model.safetensors', 'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json',
+  'README_CN.md', 'LICENSE.txt'
 ]
 
 export class RuntimeStore {
@@ -19,7 +20,12 @@ export class RuntimeStore {
 
   read(): KouboxConfig {
     if (!existsSync(this.file)) return this.write(this.defaults)
-    return { ...this.defaults, ...JSON.parse(readFileSync(this.file, 'utf8')) as Partial<KouboxConfig> }
+    const config = { ...this.defaults, ...JSON.parse(readFileSync(this.file, 'utf8')) as Partial<KouboxConfig> }
+    if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
+      config.modelsDirectory = this.defaults.modelsDirectory
+      return this.write(config)
+    }
+    return config
   }
 
   write(next: KouboxConfig): KouboxConfig {

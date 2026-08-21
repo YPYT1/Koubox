@@ -79,16 +79,20 @@ export type RuntimeStatus = {
   }
 }
 
-export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'asr' | 'translation' | 'complete' | 'error' | 'cancelled'
+export type TaskKind = 'req1' | 'req2'
+export type RequirementTwoMode = 'align' | 'asr-only'
+export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
 
 export type TaskArtifacts = {
   video?: string
+  sourceAudio?: string
   audio?: string
   transcript?: string
   transcriptText?: string
   translation?: string
   translationText?: string
+  srt?: string
 }
 
 export type TaskError = {
@@ -98,11 +102,14 @@ export type TaskError = {
 
 export type TaskSnapshot = {
   taskId: string
+  kind: TaskKind
+  mode?: RequirementTwoMode
   status: TaskStatus
   stage: TaskStage
   percent: number
   message: string
   url: string
+  sourceText?: string
   outputDirectory: string
   taskDirectory: string
   language?: string

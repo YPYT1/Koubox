@@ -1,15 +1,18 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { detectGpu } from './runtime.js'
-import type { TaskArtifacts, TaskError, TaskEvent, TaskSnapshot, Transcript } from '@koubox/shared'
+import { alignKnownText } from './align.js'
+import { transcriptToSrt } from './srt.js'
+import type { RequirementTwoMode, TaskArtifacts, TaskError, TaskEvent, TaskSnapshot, Transcript } from '@koubox/shared'
 
 type TaskManagerOptions = {
   vendorDirectory: string
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
+  taskIndexFile: string
 }
 
 type TaskRecord = {
@@ -32,8 +35,8 @@ type WorkerMessage = {
 
 function now(): string { return new Date().toISOString() }
 
-function taskId(): string {
-  return `req1-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`
+function taskId(kind: 'req1' | 'req2'): string {
+  return `${kind}-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
@@ -49,11 +52,33 @@ export class TaskManager {
 
   constructor(private readonly options: TaskManagerOptions) {}
 
+  restore(outputDirectory: string): void {
+    if (existsSync(this.options.taskIndexFile)) {
+      try {
+        const taskFiles = JSON.parse(readFileSync(this.options.taskIndexFile, 'utf8')) as string[]
+        for (const taskFile of taskFiles) this.restoreTask(taskFile)
+      } catch { /* A malformed index must not stop the desktop application. */ }
+    }
+    const root = resolve(outputDirectory)
+    if (!existsSync(root)) return
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || (!entry.name.startsWith('req1-') && !entry.name.startsWith('req2-'))) continue
+      try {
+        const taskFile = join(root, entry.name, 'task.json')
+        if (!existsSync(taskFile)) continue
+        this.restoreTask(taskFile)
+      } catch { /* Ignore unrelated or malformed task directories. */ }
+    }
+  }
+
+  list(): TaskSnapshot[] { return [...this.records.values()].map((record) => this.clone(record.task)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) }
+
   startRequirementOne(url: string, outputDirectory: string, modelsDirectory: string): TaskSnapshot {
-    const id = taskId()
+    const id = taskId('req1')
     const taskDirectory = join(resolve(outputDirectory), id)
     const task: TaskSnapshot = {
       taskId: id,
+      kind: 'req1',
       status: 'queued',
       stage: 'queued',
       percent: 0,
@@ -67,7 +92,35 @@ export class TaskManager {
     }
     const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
     this.records.set(id, record)
+    this.persist(record)
     void this.executeRequirementOne(record, modelsDirectory)
+    return this.clone(task)
+  }
+
+  startRequirementTwo(audioPath: string, sourceText: string, outputDirectory: string, modelsDirectory: string): TaskSnapshot {
+    const id = taskId('req2')
+    const mode: RequirementTwoMode = sourceText.trim() ? 'align' : 'asr-only'
+    const taskDirectory = join(resolve(outputDirectory), id)
+    const task: TaskSnapshot = {
+      taskId: id,
+      kind: 'req2',
+      mode,
+      status: 'queued',
+      stage: 'queued',
+      percent: 0,
+      message: mode === 'align' ? '精准对齐任务已排队' : '音频识别任务已排队',
+      url: resolve(audioPath),
+      sourceText: sourceText.trim() || undefined,
+      outputDirectory: resolve(outputDirectory),
+      taskDirectory,
+      artifacts: {},
+      createdAt: now(),
+      updatedAt: now()
+    }
+    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    this.records.set(id, record)
+    this.persist(record)
+    void this.executeRequirementTwo(record, modelsDirectory)
     return this.clone(task)
   }
 
@@ -163,30 +216,75 @@ export class TaskManager {
       this.persist(record)
       const gpu = detectGpu()
       if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '视频和音频已保存，但当前没有可用的 NVIDIA GPU，无法执行语音识别。')
-      this.update(record, { stage: 'asr', percent: 42, message: '正在加载语音识别模型' })
-      const response = await this.runWorker(record, 'asr', {
-        modelDirectory: join(modelsDirectory, 'whisperlargev3turbo'),
-        audioPath: audio
-      }, (message) => {
-        if (message.type === 'progress') this.update(record, { percent: Math.max(43, Math.min(98, message.percent ?? 0)), message: message.message ?? '正在识别音频' })
-      })
-      if (response.type !== 'transcript' || !response.segments) throw new Error('ASR 运行器没有返回带时间戳的原文。')
-      const transcript: Transcript = { language: response.language, segments: response.segments }
-      const transcriptPath = join(textDirectory, 'transcript.json')
-      const transcriptTextPath = join(textDirectory, 'transcript.txt')
-      writeFileSync(transcriptPath, JSON.stringify(transcript, null, 2), 'utf8')
-      writeFileSync(transcriptTextPath, transcript.segments.map((segment) => segment.text.trim()).filter(Boolean).join('\n'), 'utf8')
-      record.task.transcript = transcript
-      record.task.language = response.language
-      record.task.artifacts.transcript = transcriptPath
-      record.task.artifacts.transcriptText = transcriptTextPath
-      this.persist(record)
+      await this.performAsr(record, audio, modelsDirectory, textDirectory, 42)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别完成' })
     } catch (error) {
       if (record.cancelled) return
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
       else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
     }
+  }
+
+  private async executeRequirementTwo(record: TaskRecord, modelsDirectory: string): Promise<void> {
+    const { task } = record
+    const sourceDirectory = join(task.taskDirectory, 'source')
+    const mediaDirectory = join(task.taskDirectory, 'media')
+    const textDirectory = join(task.taskDirectory, 'text')
+    mkdirSync(sourceDirectory, { recursive: true }); mkdirSync(mediaDirectory, { recursive: true }); mkdirSync(textDirectory, { recursive: true })
+    try {
+      if (!existsSync(task.url)) throw this.failWithCode(record, 'AUDIO_NOT_FOUND', '选择的音频文件不存在。')
+      const sourceAudio = join(sourceDirectory, `input${extname(task.url).toLowerCase() || '.audio'}`)
+      copyFileSync(task.url, sourceAudio)
+      record.task.artifacts.sourceAudio = sourceAudio
+      this.update(record, { status: 'running', stage: 'extract-audio', percent: 8, message: '正在转换音频' })
+      const audio = await this.extractAudio(record, sourceAudio, mediaDirectory)
+      record.task.artifacts.audio = audio
+      this.persist(record)
+      const gpu = detectGpu()
+      if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '音频已保存，但当前没有可用的 NVIDIA GPU，无法执行语音识别。')
+      await this.performAsr(record, audio, modelsDirectory, textDirectory, 35)
+      let finalTranscript = record.task.transcript
+      if (!finalTranscript) throw new Error('ASR 未返回有效字幕。')
+      if (task.mode === 'align' && task.sourceText) {
+        this.update(record, { stage: 'align', percent: 84, message: '正在按原文整理时间轴' })
+        finalTranscript = alignKnownText(task.sourceText, finalTranscript)
+        this.writeTranscript(record, finalTranscript, textDirectory)
+      }
+      this.update(record, { stage: 'export-srt', percent: 92, message: '正在导出 SRT' })
+      const srtPath = join(textDirectory, 'subtitles.srt')
+      writeFileSync(srtPath, transcriptToSrt(finalTranscript), 'utf8')
+      record.task.artifacts.srt = srtPath
+      this.persist(record)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: 'SRT 已生成' })
+    } catch (error) {
+      if (record.cancelled) return
+      if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
+      else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
+    }
+  }
+
+  private async performAsr(record: TaskRecord, audio: string, modelsDirectory: string, textDirectory: string, startPercent: number): Promise<void> {
+    this.update(record, { stage: 'asr', percent: startPercent, message: '正在加载语音识别模型' })
+    const response = await this.runWorker(record, 'asr', {
+      modelDirectory: join(modelsDirectory, 'whisperlargev3turbo'),
+      audioPath: audio
+    }, (message) => {
+      if (message.type === 'progress') this.update(record, { percent: Math.max(startPercent + 1, Math.min(82, message.percent ?? 0)), message: message.message ?? '正在识别音频' })
+    })
+    if (response.type !== 'transcript' || !response.segments) throw new Error('ASR 运行器没有返回带时间戳的原文。')
+    this.writeTranscript(record, { language: response.language, segments: response.segments }, textDirectory)
+  }
+
+  private writeTranscript(record: TaskRecord, transcript: Transcript, textDirectory: string): void {
+    const transcriptPath = join(textDirectory, 'transcript.json')
+    const transcriptTextPath = join(textDirectory, 'transcript.txt')
+    writeFileSync(transcriptPath, JSON.stringify(transcript, null, 2), 'utf8')
+    writeFileSync(transcriptTextPath, transcript.segments.map((segment) => segment.text.trim()).filter(Boolean).join('\n'), 'utf8')
+    record.task.transcript = transcript
+    record.task.language = transcript.language
+    record.task.artifacts.transcript = transcriptPath
+    record.task.artifacts.transcriptText = transcriptTextPath
+    this.persist(record)
   }
 
   private async download(record: TaskRecord, directory: string): Promise<string> {
@@ -228,7 +326,9 @@ export class TaskManager {
   }
 
   private runWorker(record: TaskRecord, operation: 'asr' | 'translate', payload: Record<string, unknown>, onMessage: (message: WorkerMessage) => void): Promise<WorkerMessage> {
-    const python = this.options.bundledPythonExecutable && existsSync(this.options.bundledPythonExecutable) ? { command: this.options.bundledPythonExecutable, prefix: [] as string[] } : { command: 'uv', prefix: ['run', '--project', this.options.pythonProjectDirectory, 'python', '-m', 'koubox_runtime'] }
+    const python = this.options.bundledPythonExecutable && existsSync(this.options.bundledPythonExecutable)
+      ? { command: this.options.bundledPythonExecutable, prefix: ['-m', 'koubox_runtime'] }
+      : { command: 'uv', prefix: ['run', '--project', this.options.pythonProjectDirectory, 'python', '-m', 'koubox_runtime'] }
     const child = spawn(python.command, [...python.prefix], { cwd: this.options.projectDirectory, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } })
     record.processes.add(child)
     return new Promise((resolvePromise, reject) => {
@@ -289,7 +389,26 @@ export class TaskManager {
     for (const listener of record.listeners) listener(event)
   }
 
-  private persist(record: TaskRecord): void { mkdirSync(record.task.taskDirectory, { recursive: true }); writeFileSync(join(record.task.taskDirectory, 'task.json'), JSON.stringify(record.task, null, 2), 'utf8') }
+  private restoreTask(taskFile: string): void {
+    try {
+      const task = JSON.parse(readFileSync(taskFile, 'utf8')) as TaskSnapshot
+      if (!task.taskId || !task.taskDirectory) return
+      task.kind ??= task.taskId.startsWith('req2-') ? 'req2' : 'req1'
+      if (task.status === 'running' || task.status === 'queued') {
+        task.status = 'error'; task.stage = 'error'; task.message = '应用退出导致任务中断。'; task.error = { code: 'INTERRUPTED', message: task.message }; task.updatedAt = now()
+        writeFileSync(taskFile, JSON.stringify(task, null, 2), 'utf8')
+      }
+      this.records.set(task.taskId, { task, listeners: new Set(), processes: new Set(), cancelled: false })
+    } catch { /* Ignore malformed task records. */ }
+  }
+
+  private persist(record: TaskRecord): void {
+    mkdirSync(record.task.taskDirectory, { recursive: true })
+    writeFileSync(join(record.task.taskDirectory, 'task.json'), JSON.stringify(record.task, null, 2), 'utf8')
+    mkdirSync(dirname(this.options.taskIndexFile), { recursive: true })
+    const files = [...this.records.values()].map((item) => join(item.task.taskDirectory, 'task.json'))
+    writeFileSync(this.options.taskIndexFile, JSON.stringify(files, null, 2), 'utf8')
+  }
   private clone(task: TaskSnapshot): TaskSnapshot { return JSON.parse(JSON.stringify(task)) as TaskSnapshot }
 }
 
