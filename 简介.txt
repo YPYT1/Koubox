@@ -1,0 +1,4 @@
+1.Koubox\docs 这个下面都有对应的技术分析和开发文档和需求分析，
+2.D:\Project\Koubox\skills 这个下面都是对应的设计前端的skiils,看看那个最合适加载那个
+（）
+3.

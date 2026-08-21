@@ -1,0 +1,21 @@
+{
+  "name": "koubox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "口播匣 — 本地桌面工具箱",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @koubox/desktop dev",
+    "build": "pnpm --filter @koubox/desktop build",
+    "preview": "pnpm --filter @koubox/desktop preview",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @koubox/core test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.1.2",
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

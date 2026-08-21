@@ -1,0 +1,102 @@
+口播匣 (Koubox) 视觉设计系统与全栈 UI 规范指南
+系统定位： 面向本地 GPU（RTX 5070 Ti / 2060）高性能创作者桌面工作台。设计风格定位于 Modern Clean Glassmorphism（现代极简拟物与微质感浅色系统），强调轻盈、专业工具感、高信噪比与极速响应反馈。
+一、 设计哲学与核心基调
+传统本地 AI 工具界面往往存在两大极端：要么是生硬简陋的 Gradio/Tkinter 开发者后台，要么是过度渲染的赛博朋克暗黑风。口播匣 (Koubox) 确立了第三种形态——“Apple 原生工坊质感 + Linear 极简效能系统”：
+高亮浅色基底 (Pure & Breathable)： 放弃厚重暗黑与纯灰色块，采用极淡蓝灰（#F8FAFC ~ #F0F2F5）配合多层高扩散漫反射阴影，营造通透呼吸感。
+货物契约可视化 (Contract & Artifacts First)： 界面不仅是表单输入，更要具象化呈现 URL → Video → Audio → Transcript → SRT 的流转形态。
+状态零猜忌 (Zero Uncertainty)： 模型完整性校验（12个文件）、GPU 显存负载（RTX 5070 Ti 16GB）、流水线步骤毫秒级反馈全部直观常驻。
+二、 完整色彩系统 (Color Palette Matrix)
+所有配色均经过 WCAG 2.1 AA 级对比度认证，确保在浅色背景下的极佳可读性：
+分类
+变量名
+Hex 色值
+应用场景
+ 
+主背景
+--bg-desktop
+#F0F2F5
+应用外围桌面衬底、渐变光斑底层
+窗口层
+--bg-window
+#FFFFFF
+Electron 主窗口背景、纯白操作面板
+侧边底色
+--bg-sidebar
+#FAFBFD
+左侧导航、参数配置区底色
+主品牌色
+--accent-primary
+#0F766E (松石绿)
+主 CTA 按钮、选中态、品牌 Logo、核心进度条
+辅助色 1
+--accent-blue
+#2563EB (电光蓝)
+需求 2 精准 SRT 图标、对齐模式 A 徽标
+辅助色 2
+--accent-purple
+#7C3AED (丁香紫)
+LLM 中文翻译积木、多语言扩展项
+状态色
+--success
+#10B981 (翡翠绿)
+GPU 就绪指示灯、模型 12 项文件校验通过
+主字色
+--text-main
+#0F172A (深板岩)
+大标题、核心指标数字、聚焦输入内容
+次字色
+--text-secondary
+#475569 (石板灰)
+积木描述文案、表单 Label、菜单项
+
+三、 核心页面布局与信息架构 (Information Architecture)
+1. 顶部全局视窗栏 (Header Bar)
+左侧控制区： macOS 风格标准红黄绿三色圆形控制微件（#FF5F56, #FFBD2E, #27C93F）。
+居中品牌微标： Koubox 渐变小图标 + 产品名称 + 语义化版本号（v1.0.0 本地 GPU 版）。
+右侧硬件传感器徽章： 动态读取本地 GPU 状态，常驻显示 ● NVIDIA GeForce RTX 5070 Ti · 16GB，带有脉冲微绿光。
+2. 左侧智能工作区导航 (Sidebar)
+固化入口区： “工具箱”（全量积木库）、“模型与环境注册表”（ASR/GPU 管理）、“全局设置”。
+活跃标签区 (Active Opened Sessions)： 当用户点击具体工具时，自动以 Tab 形式入驻左侧（如 🎬 爆款素材获取、📑 精准 SRT 对齐），支持一键关闭与即时状态保留。
+底部运行时负载区 (Runtime Monitor)： 实时显示显存占用率条形图（已用 3.2GB / 16.0GB）与 Electron-TS 引擎状态。
+3. 主工作视口 (Main Viewport)
+首页工具网格 (Tools Grid)： 自适应 3 列布局（响应式折叠为 2 列或 1 列）。每个卡片包含：积木业务大图标 + 需求分类徽章（如“需求 1 · 核心”） + 简明能力描述 + 底部货物输入输出 Chips（如 download asr translate）。
+流水线工作台 (Pipeline Workspace)： 左右分栏设计。左侧为结构化参数表单与执行触发，右侧为流水线 Stepper 进度条（带耗时反馈）以及实时 Transcript 时间戳文案预览器。
+四、 CSS 变量与核心样式规范 (Design Tokens)
+:root {
+  /* 基础与表面层 */
+  --bg-desktop: #f0f2f5;
+  --bg-window: #ffffff;
+  --bg-sidebar: #fafbfd;
+  --bg-card: #ffffff;
+  --bg-card-subtle: #f8fafc;
+  
+  /* 边框体系 */
+  --border-subtle: #edf1f7;
+  --border-main: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* 字体排印 */
+  --font-sans: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, monospace;
+
+  /* 阴影层级 */
+  --shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+  --shadow-card-hover: 0 12px 30px -4px rgba(15, 23, 42, 0.08), 0 4px 12px -2px rgba(15, 23, 42, 0.03);
+  --shadow-float: 0 20px 40px -8px rgba(15, 23, 42, 0.12);
+
+  /* 倒角系统 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-full: 9999px;
+}
+
+
+五、 动效与微交互规范 (Motion & Micro-interactions)
+卡片悬停 (Hover Lift)： transform: translateY(-4px); 配合 box-shadow 的平滑放大（transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1)），顶部呼应 3px 的品牌松石绿渐变指示线。
+流水线状态指示灯： 完成步骤采用浅绿底深绿标（✓ 1.2s），运行中步骤采用电光蓝脉冲光晕（⚡ 识别中...），排队中呈现微灰浅点。
+输入框聚焦： 采用 3px rgba(15, 118, 110, 0.1) 柔和光圈，消除传统浏览器刺眼的黑色外轮廓。
+六、 落地建议与工程组织
+样式组件化： 在 React/Vue 渲染层中，将 ToolCard、PipelineStepper、GpuBadge、TranscriptViewer 封装为通用原子组件。
+无损扩展新积木： 未来新增如“口播降噪”、“封面文案助手”等新流水线时，只需向注册表追加一条包含 name、desc、iconClass、pipelineTags 的配置对象，UI 首页网格即可自动渲染，真正实现“壳与业务解耦”。

@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>创作者工具箱 · 浅色原型</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,500;9..40,600;9..40,700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-page: #e8ecf2;
+      --bg-app: #f7f8fb;
+      --bg-panel: #ffffff;
+      --line: #e2e6ee;
+      --line-strong: #d0d6e2;
+      --text: #1a2233;
+      --muted: #6b7385;
+      --accent: #0d9488;
+      --accent-soft: #e6f7f5;
+      --accent-hover: #0f766e;
+      --warn: #b45309;
+      --warn-soft: #fff7ed;
+      --danger: #dc2626;
+      --shadow: 0 18px 50px rgba(28, 39, 61, 0.1);
+      --side-w: 260px;
+      --side-min: 180px;
+      --side-max: 420px;
+      --title-h: 40px;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      font-family: "Noto Sans SC", "DM Sans", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 480px at 0% 0%, rgba(13, 148, 136, 0.08), transparent 55%),
+        radial-gradient(700px 400px at 100% 0%, rgba(59, 130, 246, 0.06), transparent 50%),
+        var(--bg-page);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .hint {
+      position: fixed;
+      left: 18px;
+      bottom: 14px;
+      max-width: 300px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--muted);
+      z-index: 2;
+    }
+
+    .app {
+      width: min(1200px, 100%);
+      height: min(740px, 92vh);
+      background: var(--bg-app);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: var(--shadow);
+    }
+
+    .titlebar {
+      height: var(--title-h);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      user-select: none;
+    }
+
+    .dots { display: flex; gap: 6px; }
+    .dots span {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #d1d5db;
+    }
+    .dots span:nth-child(1) { background: #ff5f57; }
+    .dots span:nth-child(2) { background: #febc2e; }
+    .dots span:nth-child(3) { background: #28c840; }
+
+    .titlebar .brand {
+      font-family: "DM Sans", sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .titlebar .brand strong { color: var(--text); }
+
+    .shell {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* —— 工具箱侧栏（可拖拽调宽） —— */
+    .sidebar {
+      width: var(--side-w);
+      min-width: var(--side-min);
+      max-width: var(--side-max);
+      flex-shrink: 0;
+      background: #fbfcfe;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      position: relative;
+    }
+
+    .sidebar-resizer {
+      position: absolute;
+      top: 0;
+      right: -3px;
+      width: 6px;
+      height: 100%;
+      cursor: col-resize;
+      z-index: 4;
+    }
+    .sidebar-resizer::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 2px;
+      width: 1px;
+      background: var(--line);
+      transition: background 0.15s, width 0.15s, left 0.15s;
+    }
+    .sidebar-resizer:hover::after,
+    body.is-resizing .sidebar-resizer::after {
+      width: 2px;
+      left: 2px;
+      background: var(--accent);
+    }
+    body.is-resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
+    body.is-resizing iframe,
+    body.is-resizing .main {
+      pointer-events: none;
+    }
+
+    .side-head {
+      padding: 14px 14px 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .nav-scroll {
+      flex: 1;
+      overflow: auto;
+      padding: 0 8px 12px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      padding: 10px 8px 6px;
+      text-transform: uppercase;
+    }
+
+    .nav-item, .tool-item, .sub-item {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .nav-item {
+      padding: 9px 10px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .nav-item:hover, .tool-item:hover, .sub-item:hover {
+      background: #eef2f7;
+    }
+    .nav-item.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .tool-row {
+      border-radius: 8px;
+      margin-bottom: 2px;
+    }
+    .tool-row.active-tool {
+      background: #fff;
+      outline: 1px solid var(--line);
+    }
+
+    .tool-item {
+      padding: 8px 8px 8px 10px;
+      font-size: 13px;
+      font-weight: 600;
+      justify-content: space-between;
+    }
+    .tool-item .left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .tool-item .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tool-item .close {
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .tool-item .close:hover {
+      background: #fee2e2;
+      color: var(--danger);
+    }
+
+    .sub-menu {
+      display: none;
+      padding: 2px 4px 8px 28px;
+    }
+    .tool-row.expanded .sub-menu { display: block; }
+
+    .sub-item {
+      padding: 7px 10px;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .sub-item.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-weight: 600;
+    }
+
+    .empty-open {
+      margin: 4px 6px 0;
+      padding: 12px;
+      border: 1px dashed var(--line-strong);
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      background: #fff;
+    }
+
+    .sidebar-foot {
+      border-top: 1px solid var(--line);
+      padding: 10px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #fff;
+    }
+
+    .pill {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .pill.warn {
+      background: var(--warn-soft);
+      color: var(--warn);
+    }
+
+    /* —— 主区：草图搜索入口 + 布局切换 —— */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: var(--bg-app);
+    }
+
+    .main-toolbar {
+      padding: 18px 24px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .search {
+      width: min(480px, 100%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #f3f5f9;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 10px 14px;
+      transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+    }
+    .search:focus-within {
+      background: #fff;
+      border-color: rgba(13, 148, 136, 0.45);
+      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.12);
+    }
+    .search svg { flex-shrink: 0; color: var(--muted); }
+    .search input {
+      width: 100%;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+    }
+    .search input::placeholder { color: #9aa3b5; }
+
+    .main-head {
+      padding: 16px 24px 0;
+    }
+    .main-head h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .main-head p {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .content {
+      flex: 1;
+      overflow: auto;
+      padding: 16px 24px 28px;
+    }
+
+    /* 铺开（网格，工具箱唯一布局） */
+    .catalog {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    @media (max-width: 980px) {
+      .catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .catalog { grid-template-columns: 1fr; }
+    }
+
+    .tool-card {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: var(--radius);
+      cursor: pointer;
+      color: inherit;
+      font: inherit;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      align-items: flex-start;
+      padding: 16px;
+      min-height: 168px;
+    }
+    .tool-card:hover {
+      transform: translateY(-1px);
+      border-color: rgba(13, 148, 136, 0.35);
+      box-shadow: 0 10px 24px rgba(28, 39, 61, 0.06);
+    }
+
+    .tool-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      flex-shrink: 0;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid rgba(13, 148, 136, 0.15);
+    }
+    .tool-icon.alt1 { background: #eff6ff; color: #2563eb; border-color: rgba(37, 99, 235, 0.15); }
+    .tool-icon.alt2 { background: #f5f3ff; color: #7c3aed; border-color: rgba(124, 58, 237, 0.15); }
+
+    .tool-meta { min-width: 0; flex: 1; width: 100%; }
+    .tool-meta .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .tool-meta h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .tool-meta p {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .tool-card .cta {
+      margin-top: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .work-layout { display: grid; gap: 14px; max-width: 640px; }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .field input, .field textarea {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+    .field textarea { min-height: 120px; resize: vertical; }
+    .field input:focus, .field textarea:focus {
+      border-color: rgba(13, 148, 136, 0.45);
+      box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
+    }
+
+    .path-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .path-row input {
+      flex: 1;
+      min-width: 0;
+    }
+    .env-block {
+      max-width: 640px;
+      display: grid;
+      gap: 16px;
+    }
+    .env-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 16px;
+    }
+    .env-card h3 {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .env-card .note {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      line-height: 1.5;
+    }
+    .env-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+    .env-meta strong { color: var(--text); font-weight: 600; }
+
+    .vram-box {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #f3f5f9;
+      border: 1px solid var(--line);
+    }
+    .vram-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .vram-head span:last-child {
+      color: var(--text);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .vram-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: #e2e6ee;
+      overflow: hidden;
+    }
+    .vram-bar > i {
+      display: block;
+      height: 100%;
+      width: 0;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #14b8a6);
+      transition: width 0.25s ease;
+    }
+
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ghost {
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .result-box, .settings-list {
+      max-width: 560px;
+    }
+    .result-box {
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .settings-list { display: grid; gap: 10px; }
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .settings-row span { color: var(--muted); }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <p class="hint">工具箱固定「铺开」网格；左侧「工具箱」栏可拖右边缘调宽。</p>
+
+  <div class="app" id="app">
+    <div class="titlebar">
+      <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="brand"><strong>创作者工具箱</strong> · 本地工作台</div>
+    </div>
+
+    <div class="shell" id="shell">
+      <aside class="sidebar" id="sidebar" aria-label="工具箱">
+        <div class="side-head" id="sideTitle">工具箱</div>
+        <div class="nav-scroll">
+          <button class="nav-item active" data-fixed="home" type="button">工具箱</button>
+          <button class="nav-item" data-fixed="models" type="button">模型与环境</button>
+          <button class="nav-item" data-fixed="settings" type="button">设置</button>
+
+          <div class="section-label">已打开</div>
+          <div id="openedList"></div>
+          <div class="empty-open" id="openedEmpty">还没有打开的工具。点右侧卡片或搜索回车打开。</div>
+        </div>
+        <div class="sidebar-foot">
+          <span>运行时</span>
+          <span class="pill" id="envPill">检测通过</span>
+        </div>
+        <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整宽度"></div>
+      </aside>
+
+      <main class="main">
+        <div class="main-toolbar" id="homeToolbar">
+          <div class="search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
+            </svg>
+            <input id="toolSearch" type="search" placeholder="搜索入口…" autocomplete="off">
+          </div>
+        </div>
+
+        <div class="main-head">
+          <h1 id="pageTitle">工具箱</h1>
+          <p id="pageDesc" class="hidden"></p>
+        </div>
+        <div class="content" id="pageContent"></div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const TOOLS = [
+      {
+        id: "viral-fetch",
+        name: "爆款素材获取",
+        tag: "需求 1",
+        icon: "▶",
+        iconClass: "",
+        desc: "输入 TikTok / YouTube / Instagram / Facebook 链接，下载视频、抽音、ASR、译中文。",
+        menus: [
+          { id: "run", label: "开始处理" },
+          { id: "jobs", label: "任务记录" },
+          { id: "output", label: "输出文件" },
+        ],
+      },
+      {
+        id: "srt-align",
+        name: "精准 SRT 对齐",
+        tag: "需求 2",
+        icon: "▤",
+        iconClass: "alt1",
+        desc: "文案 + 音频对齐时间轴，合理断句，导出可进剪映的 .srt。",
+        menus: [
+          { id: "align", label: "对齐工作台" },
+          { id: "preview", label: "字幕预览" },
+          { id: "export", label: "导出 SRT" },
+        ],
+      },
+      {
+        id: "batch-translate",
+        name: "文案批量翻译",
+        tag: "扩展示例",
+        icon: "文",
+        iconClass: "alt2",
+        desc: "演示扩展：以后新工具注册进来即可，壳不用改。",
+        menus: [
+          { id: "batch", label: "批量任务" },
+          { id: "glossary", label: "术语表" },
+        ],
+      },
+      {
+        id: "audio-clean",
+        name: "口播降噪",
+        tag: "扩展示例",
+        icon: "♪",
+        iconClass: "",
+        desc: "示意更多工具位：图标、名字、简介三件套。",
+        menus: [{ id: "clean", label: "处理" }],
+      },
+      {
+        id: "cover-gen",
+        name: "封面文案助手",
+        tag: "扩展示例",
+        icon: "✎",
+        iconClass: "alt1",
+        desc: "示意网格「铺开」时的第三列卡片。",
+        menus: [{ id: "cover", label: "生成" }],
+      },
+      {
+        id: "publish-check",
+        name: "发布前检查",
+        tag: "扩展示例",
+        icon: "✓",
+        iconClass: "alt2",
+        desc: "响应式：窄屏自动变成更少列或列表。",
+        menus: [{ id: "check", label: "检查" }],
+      },
+    ];
+
+    let opened = [];
+    let focus = { type: "fixed", id: "home" };
+
+    const $ = (id) => document.getElementById(id);
+    const getTool = (id) => TOOLS.find((t) => t.id === id);
+
+    function openTool(toolId, menuId) {
+      const tool = getTool(toolId);
+      if (!tool) return;
+      let entry = opened.find((o) => o.toolId === toolId);
+      if (!entry) {
+        entry = { toolId, activeMenuId: menuId || tool.menus[0].id };
+        opened.push(entry);
+      } else if (menuId) {
+        entry.activeMenuId = menuId;
+      }
+      focus = { type: "tool", id: toolId };
+      render();
+    }
+
+    function closeTool(toolId, ev) {
+      if (ev) ev.stopPropagation();
+      opened = opened.filter((o) => o.toolId !== toolId);
+      if (focus.type === "tool" && focus.id === toolId) {
+        focus = { type: "fixed", id: "home" };
+      }
+      render();
+    }
+
+    function setFixed(id) {
+      focus = { type: "fixed", id };
+      render();
+    }
+
+    function setToolMenu(toolId, menuId) {
+      const entry = opened.find((o) => o.toolId === toolId);
+      if (!entry) return;
+      entry.activeMenuId = menuId;
+      focus = { type: "tool", id: toolId };
+      render();
+    }
+
+    function renderOpened() {
+      const list = $("openedList");
+      const empty = $("openedEmpty");
+      list.innerHTML = "";
+      empty.classList.toggle("hidden", opened.length > 0);
+
+      opened.forEach((o) => {
+        const tool = getTool(o.toolId);
+        const isFocus = focus.type === "tool" && focus.id === o.toolId;
+        const row = document.createElement("div");
+        row.className = "tool-row" + (isFocus ? " active-tool expanded" : "");
+        row.innerHTML = `
+          <div class="tool-item" data-open="${tool.id}">
+            <div class="left"><span>${tool.icon}</span><span class="name">${tool.name}</span></div>
+            <button class="close" title="关闭" data-close="${tool.id}">×</button>
+          </div>
+          <div class="sub-menu"></div>
+        `;
+        const sub = row.querySelector(".sub-menu");
+        tool.menus.forEach((m) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "sub-item" + (isFocus && o.activeMenuId === m.id ? " active" : "");
+          b.textContent = m.label;
+          b.addEventListener("click", (e) => {
+            e.stopPropagation();
+            setToolMenu(tool.id, m.id);
+          });
+          sub.appendChild(b);
+        });
+        row.querySelector("[data-open]").addEventListener("click", () => openTool(tool.id));
+        row.querySelector("[data-close]").addEventListener("click", (e) => closeTool(tool.id, e));
+        list.appendChild(row);
+      });
+    }
+
+    function renderNavActive() {
+      document.querySelectorAll(".nav-item[data-fixed]").forEach((el) => {
+        const id = el.getAttribute("data-fixed");
+        el.classList.toggle("active", focus.type === "fixed" && focus.id === id);
+      });
+    }
+
+    function renderHome(filter = "") {
+      $("homeToolbar").classList.remove("hidden");
+      const q = filter.trim().toLowerCase();
+      const items = TOOLS.filter(
+        (t) =>
+          !q ||
+          t.name.toLowerCase().includes(q) ||
+          t.tag.toLowerCase().includes(q) ||
+          t.desc.toLowerCase().includes(q)
+      );
+
+      $("pageTitle").textContent = "工具箱";
+      $("pageDesc").textContent = "";
+      $("pageDesc").classList.add("hidden");
+
+      $("pageContent").innerHTML = `<div class="catalog" id="catalog"></div>`;
+      const catalog = $("catalog");
+      if (!items.length) {
+        catalog.innerHTML = `<div class="empty-open">没有匹配「${filter}」的工具</div>`;
+        return;
+      }
+      items.forEach((t) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "tool-card";
+        card.innerHTML = `
+          <div class="tool-icon ${t.iconClass || ""}">${t.icon}</div>
+          <div class="tool-meta">
+            <div class="tag">${t.tag}</div>
+            <h3>${t.name}</h3>
+            <p>${t.desc}</p>
+            <div class="cta">打开工具 →</div>
+          </div>
+        `;
+        card.addEventListener("click", () => openTool(t.id));
+        catalog.appendChild(card);
+      });
+    }
+
+    function renderModels() {
+      $("homeToolbar").classList.add("hidden");
+      $("pageTitle").textContent = "模型与环境";
+      $("pageDesc").textContent = "ASR 可选路径；GPU 自动检测。yt-dlp / ffmpeg 已随软件内置，无需配置。";
+      $("pageDesc").classList.remove("hidden");
+
+      const savedPath = localStorage.getItem("asr-model-path") || "";
+      const gpuOk = true; // 原型示意：正式版由 Electron 主进程探测 CUDA / 显卡名 / 显存
+      const gpuName = "NVIDIA GeForce RTX 5070 Ti";
+      // 显存示意（正式版：nvidia-smi / CUDA API 读 total / used / free）
+      let vramTotal = 16;
+      let vramUsed = 3.2;
+      let vramFree = +(vramTotal - vramUsed).toFixed(1);
+      let vramPct = Math.round((vramUsed / vramTotal) * 100);
+
+      $("pageContent").innerHTML = `
+        <div class="env-block">
+          <div class="env-card">
+            <h3>ASR 模型</h3>
+            <p class="note">选择本机模型目录或文件；进入识别前校验该路径是否可用。</p>
+            <div class="field">
+              <label>模型路径</label>
+              <div class="path-row">
+                <input id="asrPath" type="text" placeholder="例如 D:/models/whisper-large-v3" value="${savedPath.replace(/"/g, "&quot;")}">
+                <button class="btn btn-ghost" type="button" id="asrBrowse">选择…</button>
+                <input id="asrPick" type="file" class="hidden">
+              </div>
+            </div>
+            <div class="actions" style="margin-top:12px">
+              <button class="btn btn-primary" type="button" id="asrSave">保存路径</button>
+              <button class="btn btn-ghost" type="button" id="asrClear">清除</button>
+            </div>
+            <div class="env-meta">
+              <span>状态：<strong id="asrStatus">${savedPath ? "已配置" : "未选择"}</strong></span>
+            </div>
+          </div>
+
+          <div class="env-card">
+            <h3>GPU</h3>
+            <p class="note">启动时自动检测，无需手动配置。展示显卡名称与显存占用。</p>
+            <div class="env-meta">
+              <span>检测结果：<strong id="gpuName">${gpuOk ? gpuName : "未检测到可用 GPU"}</strong></span>
+              <span class="pill ${gpuOk ? "" : "warn"}" id="gpuPill">${gpuOk ? "可用" : "将降级 CPU"}</span>
+            </div>
+            <div class="vram-box" id="vramBox" ${gpuOk ? "" : 'style="display:none"'}>
+              <div class="vram-head">
+                <span>显存</span>
+                <span id="vramText">${vramUsed} / ${vramTotal} GB（剩余 ${vramFree} GB）</span>
+              </div>
+              <div class="vram-bar" aria-hidden="true">
+                <i id="vramFill" style="width:${vramPct}%"></i>
+              </div>
+              <div class="env-meta" style="margin-top:10px">
+                <span>总量：<strong id="vramTotal">${vramTotal} GB</strong></span>
+                <span>已用：<strong id="vramUsed">${vramUsed} GB</strong></span>
+                <span>剩余：<strong id="vramFree">${vramFree} GB</strong></span>
+              </div>
+            </div>
+            <div class="actions" style="margin-top:12px">
+              <button class="btn btn-ghost" type="button" id="gpuRefresh">重新检测</button>
+            </div>
+          </div>
+
+          <p class="note" style="margin:0;color:var(--muted);font-size:12px;line-height:1.5">
+            yt-dlp、ffmpeg 随安装包内置，业务侧直接调用，本页不做配置与检测展示。
+          </p>
+        </div>
+      `;
+
+      const syncAsrPill = () => {
+        const path = $("asrPath").value.trim();
+        if (path) {
+          $("asrStatus").textContent = "已配置";
+          $("envPill").className = "pill";
+          $("envPill").textContent = gpuOk ? "就绪" : "GPU 降级";
+        } else {
+          $("asrStatus").textContent = "未选择";
+          $("envPill").className = "pill warn";
+          $("envPill").textContent = "ASR 未配置";
+        }
+      };
+      syncAsrPill();
+
+      $("asrBrowse").addEventListener("click", () => {
+        // 浏览器原型用 file 选择示意；正式 Electron 用 dialog 选目录/文件
+        $("asrPick").click();
+      });
+      $("asrPick").addEventListener("change", () => {
+        const f = $("asrPick").files && $("asrPick").files[0];
+        if (!f) return;
+        // 浏览器拿不到真实绝对路径，用文件名示意；正式版写入真实路径
+        const fake = `D:/models/${f.name}`;
+        $("asrPath").value = fake;
+        syncAsrPill();
+      });
+      $("asrSave").addEventListener("click", () => {
+        const path = $("asrPath").value.trim();
+        if (path) localStorage.setItem("asr-model-path", path);
+        else localStorage.removeItem("asr-model-path");
+        syncAsrPill();
+      });
+      $("asrClear").addEventListener("click", () => {
+        $("asrPath").value = "";
+        localStorage.removeItem("asr-model-path");
+        syncAsrPill();
+      });
+      $("gpuRefresh").addEventListener("click", () => {
+        // 示意：正式版每次向主进程拉取实时显存
+        vramUsed = +(Math.random() * 6 + 1).toFixed(1);
+        vramFree = +(vramTotal - vramUsed).toFixed(1);
+        vramPct = Math.round((vramUsed / vramTotal) * 100);
+        $("gpuName").textContent = gpuName;
+        $("gpuPill").className = "pill";
+        $("gpuPill").textContent = "可用";
+        $("vramText").textContent = `${vramUsed} / ${vramTotal} GB（剩余 ${vramFree} GB）`;
+        $("vramFill").style.width = vramPct + "%";
+        $("vramTotal").textContent = vramTotal + " GB";
+        $("vramUsed").textContent = vramUsed + " GB";
+        $("vramFree").textContent = vramFree + " GB";
+        $("vramBox").style.display = "";
+        syncAsrPill();
+      });
+    }
+
+    function renderSettings() {
+      $("homeToolbar").classList.add("hidden");
+      $("pageTitle").textContent = "设置";
+      $("pageDesc").textContent = "输出目录、运行时等全局项。";
+      $("pageDesc").classList.remove("hidden");
+      $("pageContent").innerHTML = `
+        <div class="settings-list">
+          <div class="settings-row"><div>输出目录</div><span>D:/Outputs</span></div>
+          <div class="settings-row"><div>包管理</div><span>pnpm</span></div>
+          <div class="settings-row"><div>运行时</div><span>Electron 主进程 / TypeScript</span></div>
+        </div>
+      `;
+    }
+
+    function renderToolWorkspace(toolId) {
+      $("homeToolbar").classList.add("hidden");
+      const tool = getTool(toolId);
+      const entry = opened.find((o) => o.toolId === toolId);
+      const menu = tool.menus.find((m) => m.id === entry.activeMenuId) || tool.menus[0];
+      $("pageTitle").textContent = tool.name;
+      $("pageDesc").textContent = `${tool.tag} · ${menu.label}`;
+      $("pageDesc").classList.remove("hidden");
+
+      if (toolId === "viral-fetch" && menu.id === "run") {
+        $("pageContent").innerHTML = `
+          <div class="work-layout">
+            <div class="field">
+              <label>爆款视频链接</label>
+              <input placeholder="YouTube / TikTok / Instagram / Facebook 链接">
+            </div>
+            <div class="actions">
+              <button class="btn btn-primary" type="button">开始处理</button>
+              <button class="btn btn-ghost" type="button">仅下载</button>
+            </div>
+            <div class="result-box">（示意）进度与文案结果区。左侧「已打开」可切换子菜单。</div>
+          </div>
+        `;
+        return;
+      }
+
+      if (toolId === "srt-align" && menu.id === "align") {
+        $("pageContent").innerHTML = `
+          <div class="work-layout">
+            <div class="field"><label>口播文案</label><textarea placeholder="粘贴已知文案…"></textarea></div>
+            <div class="field"><label>音频文件</label><input placeholder="选择音频路径…"></div>
+            <div class="actions"><button class="btn btn-primary" type="button">对齐并生成 SRT</button></div>
+          </div>
+        `;
+        return;
+      }
+
+      $("pageContent").innerHTML = `<div class="result-box">页面「${menu.label}」占位。</div>`;
+    }
+
+    function renderMain() {
+      $("envPill").className = "pill";
+      $("envPill").textContent = "检测通过";
+      $("sideTitle").textContent =
+        focus.type === "fixed"
+          ? { home: "工具箱", models: "模型与环境", settings: "设置" }[focus.id]
+          : getTool(focus.id)?.name || "工具";
+
+      if (focus.type === "fixed") {
+        if (focus.id === "home") renderHome($("toolSearch").value);
+        else if (focus.id === "models") renderModels();
+        else renderSettings();
+        return;
+      }
+      renderToolWorkspace(focus.id);
+    }
+
+    function render() {
+      renderNavActive();
+      renderOpened();
+      renderMain();
+    }
+
+    document.querySelectorAll(".nav-item[data-fixed]").forEach((el) => {
+      el.addEventListener("click", () => setFixed(el.getAttribute("data-fixed")));
+    });
+
+    /* 工具箱侧栏拖拽调宽 */
+    (function initSidebarResize() {
+      const sidebar = $("sidebar");
+      const handle = $("sidebarResizer");
+      const root = document.documentElement;
+      const min = 180;
+      const max = 420;
+      let startX = 0;
+      let startW = 0;
+
+      const saved = Number(localStorage.getItem("toolbox-side-w") || 0);
+      if (saved >= min && saved <= max) {
+        root.style.setProperty("--side-w", saved + "px");
+        sidebar.style.width = saved + "px";
+      }
+
+      function onMove(e) {
+        const w = Math.min(max, Math.max(min, startW + (e.clientX - startX)));
+        sidebar.style.width = w + "px";
+        root.style.setProperty("--side-w", w + "px");
+      }
+      function onUp() {
+        document.body.classList.remove("is-resizing");
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        const w = Math.round(sidebar.getBoundingClientRect().width);
+        localStorage.setItem("toolbox-side-w", String(w));
+      }
+
+      handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startW = sidebar.getBoundingClientRect().width;
+        document.body.classList.add("is-resizing");
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+      });
+    })();
+
+    $("toolSearch").addEventListener("input", () => {
+      if (!(focus.type === "fixed" && focus.id === "home")) setFixed("home");
+      else renderHome($("toolSearch").value);
+    });
+    $("toolSearch").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const q = $("toolSearch").value.trim().toLowerCase();
+      const hit = TOOLS.find(
+        (t) => t.name.toLowerCase().includes(q) || t.tag.toLowerCase().includes(q)
+      );
+      if (hit) openTool(hit.id);
+    });
+
+    render();
+  </script>
+</body>
+</html>
