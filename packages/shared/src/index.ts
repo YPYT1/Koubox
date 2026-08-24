@@ -1,5 +1,3 @@
-export { createLogger, getLoggerEnv, initLogger, type LogLevel, type Logger } from './logger.js'
-
 export type ToolId = 'viral-materials' | 'precise-srt'
 
 export type ToolManifest = {
@@ -20,8 +18,7 @@ export const tools: ToolManifest[] = [
     artifactTags: ['URL', 'Video', 'Audio', 'Transcript', 'Translation'],
     menus: [
       { id: 'run', label: '开始处理' },
-      { id: 'history', label: '任务记录' },
-      { id: 'outputs', label: '输出文件' }
+      { id: 'history', label: '任务中心' }
     ]
   },
   {
@@ -32,8 +29,7 @@ export const tools: ToolManifest[] = [
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
       { id: 'run', label: '开始对齐' },
-      { id: 'history', label: '任务记录' },
-      { id: 'outputs', label: '输出文件' }
+      { id: 'history', label: '任务中心' }
     ]
   }
 ]

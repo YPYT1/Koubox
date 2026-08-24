@@ -210,7 +210,7 @@ export function App() {
           {focus.kind === 'tool' && focus.menu !== 'run' && (
             <TaskHistoryPage
               kind={focus.toolId === 'precise-srt' ? 'req2' : 'req1'}
-              filesOnly={focus.menu === 'outputs'}
+              outputDirectory={config?.outputDirectory ?? ''}
               onShowToast={showToast}
             />
           )}

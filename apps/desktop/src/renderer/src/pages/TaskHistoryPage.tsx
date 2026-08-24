@@ -5,7 +5,7 @@ import { Button } from '../components/common/Button'
 
 type TaskHistoryPageProps = {
   kind: TaskKind
-  filesOnly?: boolean
+  outputDirectory: string
   onShowToast: (message: string) => void
 }
 
@@ -25,7 +25,7 @@ function isDeletable(task: TaskSnapshot): boolean {
   return task.status !== 'running' && task.status !== 'queued'
 }
 
-export function TaskHistoryPage({ kind, filesOnly = false, onShowToast }: TaskHistoryPageProps) {
+export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHistoryPageProps) {
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
@@ -46,16 +46,9 @@ export function TaskHistoryPage({ kind, filesOnly = false, onShowToast }: TaskHi
     void loadTasks()
   }, [kind])
 
-  const visibleTasks = filesOnly
-    ? tasks.filter((t) => Object.entries(t.artifacts).some(([key, path]) => path && !HIDDEN_ARTIFACT_KEYS.has(key)))
-    : tasks
-
-  const deletableTasks = visibleTasks.filter(isDeletable)
-
-  const title = filesOnly ? '输出文件' : '任务记录'
-  const subtitle = filesOnly
-    ? '仅展示可交付文件（视频 / 音频 / 文案 / SRT），不包含 task.json'
-    : '按平台_日期_序号查看历史任务状态与产物'
+  const deletableTasks = tasks.filter(isDeletable)
+  const title = '任务中心'
+  const subtitle = '按任务 ID 管理状态、产物与保存目录'
 
   const handleCopyPath = (path: string) => {
     void navigator.clipboard.writeText(path)
@@ -90,8 +83,7 @@ export function TaskHistoryPage({ kind, filesOnly = false, onShowToast }: TaskHi
 
   const handleClearAll = async () => {
     if (deletableTasks.length === 0 || clearing) return
-    const label = filesOnly ? '输出记录' : '任务记录'
-    if (!window.confirm(`确定清空 ${deletableTasks.length} 条${label}？已下载的文件不会被删除。`)) return
+    if (!window.confirm(`确定清空 ${deletableTasks.length} 条任务记录？已下载的文件不会被删除。`)) return
     setClearing(true)
     let deleted = 0
     const deletedIds = new Set<string>()
@@ -119,30 +111,42 @@ export function TaskHistoryPage({ kind, filesOnly = false, onShowToast }: TaskHi
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
-        {!loading && deletableTasks.length > 0 && (
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Trash size={14} />}
-            loading={clearing}
-            onClick={() => void handleClearAll()}
-          >
-            清空记录
-          </Button>
-        )}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {outputDirectory && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<FolderOpen size={14} />}
+              onClick={() => void handleOpenDir(outputDirectory)}
+            >
+              打开输出根目录
+            </Button>
+          )}
+          {!loading && deletableTasks.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Trash size={14} />}
+              loading={clearing}
+              onClick={() => void handleClearAll()}
+            >
+              清空记录
+            </Button>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <div className="empty-sessions-hint" style={{ padding: 48 }}>正在读取…</div>
-      ) : visibleTasks.length === 0 ? (
+      ) : tasks.length === 0 ? (
         <div className="panel-box" style={{ alignItems: 'center', textAlign: 'center', padding: '60px 24px' }}>
           <ClipboardText size={28} color="var(--text-tertiary)" />
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginTop: 12 }}>{filesOnly ? '暂无输出文件' : '暂无任务记录'}</h3>
+          <h3 style={{ fontSize: 16, fontWeight: 700, marginTop: 12 }}>暂无任务记录</h3>
           <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>在「开始处理」中运行任务后会出现在这里。</p>
         </div>
       ) : (
         <div className="history-list">
-          {visibleTasks.map((item) => {
+          {tasks.map((item) => {
             const isComplete = item.status === 'complete'
             const isError = item.status === 'error'
             const canDelete = isDeletable(item)
@@ -172,11 +176,9 @@ export function TaskHistoryPage({ kind, filesOnly = false, onShowToast }: TaskHi
                   </div>
                 </header>
 
-                {!filesOnly && (
-                  <p className="history-source" title={item.url}>
-                    来源：{item.url}
-                  </p>
-                )}
+                <p className="history-source" title={item.url}>
+                  来源：{item.url}
+                </p>
 
                 {artifactsList.length > 0 && (
                   <div className="history-files">
