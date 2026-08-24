@@ -61,6 +61,14 @@ export class RuntimeStore {
       config.ytdlpCookieSource = this.defaults.ytdlpCookieSource
     }
     if (typeof config.ytdlpCookiesPath !== 'string') config.ytdlpCookiesPath = this.defaults.ytdlpCookiesPath
+    if (typeof config.ytdlpInstagramCookies !== 'string') {
+      const legacyPath = (parsed as { ytdlpInstagramCookiesPath?: unknown }).ytdlpInstagramCookiesPath
+      if (typeof legacyPath === 'string' && legacyPath.trim() && existsSync(legacyPath.trim())) {
+        config.ytdlpInstagramCookies = readFileSync(legacyPath.trim(), 'utf8')
+      } else {
+        config.ytdlpInstagramCookies = this.defaults.ytdlpInstagramCookies
+      }
+    }
     if (config.ytdlpMaxHeight !== 0 && config.ytdlpMaxHeight !== 1080 && config.ytdlpMaxHeight !== 720 && config.ytdlpMaxHeight !== 480) {
       config.ytdlpMaxHeight = this.defaults.ytdlpMaxHeight
     }

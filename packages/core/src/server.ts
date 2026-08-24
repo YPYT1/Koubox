@@ -23,7 +23,7 @@ type ServerOptions = {
   openPath(targetPath: string): Promise<void>
   openLoginWindow(): Promise<void>
   exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  getLoginCookieStatus(): Promise<import('@koubox/shared').YtdlpCookieStatus>
+  getLoginCookieStatus(instagramCookies: string, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
   exportedCookiesFile: string
 }
 
@@ -94,6 +94,7 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     ytdlpCookiesPath: ytdlpCookieSource === 'file'
       ? asString(body.ytdlpCookiesPath, config.ytdlpCookiesPath)
       : '',
+    ytdlpInstagramCookies: asString(body.ytdlpInstagramCookies, config.ytdlpInstagramCookies),
     ytdlpMaxHeight: asYtdlpMaxHeight(body.ytdlpMaxHeight, config.ytdlpMaxHeight),
     ytdlpExtraArgs: asString(body.ytdlpExtraArgs, config.ytdlpExtraArgs),
     maxConcurrentTasks: Math.max(1, Math.floor(asNumber(body.maxConcurrentTasks, config.maxConcurrentTasks))),
@@ -247,7 +248,7 @@ export async function startLocalApi(options: ServerOptions) {
         }
       }
       if (method === 'GET' && url.pathname === '/browser/cookie-status') {
-        return json(response, 200, await options.getLoginCookieStatus())
+        return json(response, 200, await options.getLoginCookieStatus(config.ytdlpInstagramCookies, config.ytdlpProxy))
       }
       const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)(?:\/(events|translate|cancel|export))?$/)
       if (taskMatch) {

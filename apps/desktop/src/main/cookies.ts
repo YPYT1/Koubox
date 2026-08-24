@@ -1,8 +1,9 @@
-import { session, type Cookie } from 'electron'
+import { BrowserWindow, session, type Cookie, type Session } from 'electron'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import type { YtdlpCookiePlatformId, YtdlpCookiePlatformStatus, YtdlpCookieStatus } from '@koubox/shared'
 
 export const LOGIN_PARTITION = 'persist:koubox-ytdlp-login'
+const INSTAGRAM_PROBE_PARTITION = 'persist:koubox-instagram-probe'
 
 const PLATFORM_RULES: Array<{
   id: YtdlpCookiePlatformId
@@ -47,13 +48,7 @@ export function normalizeProxyRules(proxy: string): string | null {
 }
 
 export async function applyLoginSessionProxy(proxy: string): Promise<void> {
-  const loginSess = loginSession()
-  const proxyRules = normalizeProxyRules(proxy)
-  if (!proxyRules) {
-    await loginSess.setProxy({ mode: 'direct' })
-    return
-  }
-  await loginSess.setProxy({ proxyRules, proxyBypassRules: '<local>' })
+  await applyLoginSessionProxyTo(loginSession(), proxy)
 }
 
 export async function readLoginCookies(): Promise<Cookie[]> {
@@ -84,58 +79,184 @@ function instagramCheckpoint(url: string, html: string): boolean {
 }
 
 function instagramViewerId(html: string): string | undefined {
-  return html.match(/"viewerId"\s*:\s*"(\d+)"/)?.[1] ?? html.match(/"viewerId"\s*:\s*(\d+)/)?.[1]
+  return (
+    html.match(/"viewerId"\s*:\s*"(\d+)"/)?.[1] ??
+    html.match(/"viewerId"\s*:\s*(\d+)/)?.[1] ??
+    html.match(/"viewer"\s*:\s*\{[^}]{0,400}?"id"\s*:\s*"(\d+)"/)?.[1] ??
+    html.match(/"ds_user_id"\s*:\s*"(\d+)"/)?.[1]
+  )
 }
 
-async function instagramHomepageReady(): Promise<{ ok: boolean; detail: string }> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15000)
-  try {
-    const response = await loginSession().fetch('https://www.instagram.com/', {
-      signal: controller.signal,
-      headers: {
-        Accept: 'text/html',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
-      }
+function parseNetscapeInstagramCookies(text: string): Array<{
+  domain: string
+  path: string
+  secure: boolean
+  expiry: number
+  name: string
+  value: string
+}> {
+  const rows: Array<{ domain: string; path: string; secure: boolean; expiry: number; name: string; value: string }> = []
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#HttpOnly_')) line = line.slice('#HttpOnly_'.length)
+    else if (line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    const [domain, , path, secure, expiry, name, ...valueParts] = parts
+    if (!domain || !name) continue
+    if (!/(?:^|\.)instagram\.com$/i.test(domain.replace(/^\./, ''))) continue
+    rows.push({
+      domain,
+      path: path || '/',
+      secure: secure.toUpperCase() === 'TRUE',
+      expiry: Number(expiry) || 0,
+      name,
+      value: valueParts.join('\t').replace(/^"(.*)"$/, '$1')
     })
-    const html = await response.text()
-    if (instagramCheckpoint(response.url, html)) {
-      return { ok: false, detail: 'Instagram 仍在验证或封禁页，未进入个人主页' }
+  }
+  return rows
+}
+
+async function instagramHomepageReadyFromSession(
+  sess: Session,
+  source: 'pasted' | 'builtin'
+): Promise<{ ok: boolean; detail: string }> {
+  const win = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: {
+      session: sess,
+      sandbox: true,
+      contextIsolation: true,
+      backgroundThrottling: false
+    }
+  })
+  const timer = setTimeout(() => {
+    if (!win.isDestroyed()) win.webContents.stop()
+  }, 18000)
+  try {
+    await win.loadURL('https://www.instagram.com/accounts/edit/')
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const url = win.webContents.getURL()
+    const html = (await win.webContents.executeJavaScript('document.documentElement.outerHTML')) as string
+    if (instagramCheckpoint(url, html)) {
+      return {
+        ok: false,
+        detail: source === 'pasted'
+          ? 'Instagram Cookie 已失效（验证页或封禁页），请重新导出后粘贴'
+          : 'Instagram 仍在验证或封禁页，未进入个人主页'
+      }
     }
     const viewerId = instagramViewerId(html)
-    if (!viewerId) {
-      return { ok: false, detail: '未进入 Instagram 个人主页' }
+    const onAccountPage = /instagram\.com\/accounts\//i.test(url) && !/\/accounts\/login/i.test(url)
+    if (!viewerId && !onAccountPage) {
+      return {
+        ok: false,
+        detail: source === 'pasted'
+          ? 'Instagram Cookie 已失效，未能进入个人主页'
+          : '未进入 Instagram 个人主页'
+      }
     }
-    return { ok: true, detail: `已进入 Instagram 个人主页（用户 ${viewerId}）` }
+    return {
+      ok: true,
+      detail: source === 'pasted'
+        ? `粘贴的 Cookie 有效${viewerId ? `（用户 ${viewerId}）` : '，已进入账号页'}`
+        : `已进入 Instagram 个人主页${viewerId ? `（用户 ${viewerId}）` : ''}`
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`无法打开 Instagram 主页确认登录：${message}`)
+    throw new Error(source === 'pasted' ? `无法用 Instagram Cookie 打开主页：${message}` : `无法打开 Instagram 主页确认登录：${message}`)
   } finally {
     clearTimeout(timer)
+    if (!win.isDestroyed()) win.destroy()
   }
 }
 
-async function platformStatuses(cookies: Cookie[]): Promise<YtdlpCookiePlatformStatus[]> {
+async function instagramPastedCookiesReady(text: string, proxy: string): Promise<{ ok: boolean; detail: string }> {
+  const rows = parseNetscapeInstagramCookies(text)
+  const names = new Set(rows.map((row) => row.name))
+  if (!names.has('sessionid') || !names.has('ds_user_id')) {
+    return { ok: false, detail: '粘贴的 Cookie 不完整，缺少 sessionid 或 ds_user_id' }
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const sessionRow = rows.find((row) => row.name === 'sessionid')
+  if (sessionRow && sessionRow.expiry > 0 && sessionRow.expiry < now) {
+    return { ok: false, detail: 'Instagram Cookie 已过期，请用插件重新导出后粘贴' }
+  }
+
+  const probe = session.fromPartition(INSTAGRAM_PROBE_PARTITION)
+  await applyLoginSessionProxyTo(probe, proxy)
+  await probe.clearStorageData({ storages: ['cookies'] })
+  for (const row of rows) {
+    await probe.cookies.set({
+      url: 'https://www.instagram.com/',
+      name: row.name,
+      value: row.value,
+      domain: '.instagram.com',
+      path: row.path,
+      secure: row.secure,
+      expirationDate: row.expiry > 0 ? row.expiry : undefined,
+      httpOnly: row.name === 'sessionid'
+    })
+  }
+  return instagramHomepageReadyFromSession(probe, 'pasted')
+}
+
+async function applyLoginSessionProxyTo(sess: Session, proxy: string): Promise<void> {
+  const proxyRules = normalizeProxyRules(proxy)
+  if (!proxyRules) {
+    await sess.setProxy({ mode: 'direct' })
+    return
+  }
+  await sess.setProxy({ proxyRules, proxyBypassRules: '<local>' })
+}
+
+async function platformStatuses(
+  cookies: Cookie[],
+  instagramCookies: string,
+  proxy: string
+): Promise<YtdlpCookiePlatformStatus[]> {
   const statuses: YtdlpCookiePlatformStatus[] = []
   for (const rule of PLATFORM_RULES) {
     const matched = cookieNamesForPlatform(cookies, rule)
     if (rule.id === 'instagram') {
-      if (!matched.has('sessionid') || !matched.has('ds_user_id')) {
+      try {
+        if (instagramCookies.trim()) {
+          const homepage = await instagramPastedCookiesReady(instagramCookies, proxy)
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            loggedIn: homepage.ok,
+            detail: homepage.detail
+          })
+          continue
+        }
+        if (!matched.has('sessionid') || !matched.has('ds_user_id')) {
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            loggedIn: false,
+            detail: '未进入 Instagram 个人主页（缺少 sessionid / ds_user_id）'
+          })
+          continue
+        }
+        const homepage = await instagramHomepageReadyFromSession(loginSession(), 'builtin')
+        statuses.push({
+          id: rule.id,
+          label: rule.label,
+          loggedIn: homepage.ok,
+          detail: homepage.detail
+        })
+      } catch (error) {
         statuses.push({
           id: rule.id,
           label: rule.label,
           loggedIn: false,
-          detail: '未进入 Instagram 个人主页（缺少 sessionid / ds_user_id）'
+          detail: error instanceof Error ? error.message : String(error)
         })
-        continue
       }
-      const homepage = await instagramHomepageReady()
-      statuses.push({
-        id: rule.id,
-        label: rule.label,
-        loggedIn: homepage.ok,
-        detail: homepage.detail
-      })
       continue
     }
     const loggedIn = matched.size > 0
@@ -168,9 +289,13 @@ export function cookiesToNetscape(cookies: Cookie[]): string {
   return `${lines.join('\n')}\n`
 }
 
-export async function buildLoginCookieStatus(exportedFile?: string): Promise<YtdlpCookieStatus> {
+export async function buildLoginCookieStatus(
+  exportedFile?: string,
+  instagramCookies = '',
+  proxy = ''
+): Promise<YtdlpCookieStatus> {
   const cookies = await readLoginCookies()
-  const platforms = await platformStatuses(cookies)
+  const platforms = await platformStatuses(cookies, instagramCookies, proxy)
   let exported = false
   let exportedAt: string | undefined
   if (exportedFile && existsSync(exportedFile)) {

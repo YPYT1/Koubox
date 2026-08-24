@@ -155,6 +155,8 @@ export function SettingsPage({
   const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
   const cookieCheckDoneTimerRef = useRef<number | null>(null)
   const [cookieStatus, setCookieStatus] = useState<YtdlpCookieStatus | null>(null)
+  const [instagramCookiesOpen, setInstagramCookiesOpen] = useState(() => !config.ytdlpInstagramCookies?.trim())
+  const [savingInstagramCookies, setSavingInstagramCookies] = useState(false)
   const activeGuide = guide ? guides[guide] : null
   const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
   const useBuiltinLogin = cookieSource === 'builtin'
@@ -169,6 +171,8 @@ export function SettingsPage({
     setCheckingCookies(true)
     let success = false
     try {
+      const saved = await window.koubox.put<KouboxConfig>('/config', config)
+      onChange(saved)
       const status = await window.koubox.get<YtdlpCookieStatus>('/browser/cookie-status')
       setCookieStatus(status)
       success = true
@@ -212,6 +216,19 @@ export function SettingsPage({
   ) => {
     const picked = await onChooseFile(title, config[key] || undefined, filters)
     if (picked) onChange({ ...config, [key]: picked })
+  }
+
+  const handleSaveInstagramCookies = async () => {
+    setSavingInstagramCookies(true)
+    try {
+      const saved = await window.koubox.put<KouboxConfig>('/config', config)
+      onChange(saved)
+      onShowToast('Instagram Cookie 已保存，下载 Instagram 时会优先使用。', 'success')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '保存 Instagram Cookie 失败', 'error')
+    } finally {
+      setSavingInstagramCookies(false)
+    }
   }
 
   const handleOpenLoginWindow = async () => {
@@ -374,7 +391,7 @@ export function SettingsPage({
 
           <FormField
             label="登录来源"
-            hint="推荐使用应用内登录窗口。登录完成后点「保存登录状态」，再点「检测登录状态」确认。"
+            hint="YouTube / TikTok / Facebook 看应用内登录。Instagram 若已粘贴 Cookie，检测会用这份 Cookie 打开账号页，过期或失效会直接标出来。"
           >
             <select
               className="input-text"
@@ -479,6 +496,51 @@ export function SettingsPage({
               />
             </FormField>
           )}
+
+          <div className={`instagram-cookie-panel ${instagramCookiesOpen ? 'open' : ''}`}>
+            <button
+              type="button"
+              className="instagram-cookie-toggle"
+              onClick={() => setInstagramCookiesOpen((open) => !open)}
+              aria-expanded={instagramCookiesOpen}
+            >
+              <span>
+                <strong>Instagram Cookie</strong>
+                <small>
+                  {config.ytdlpInstagramCookies.trim()
+                    ? '已粘贴，下载 Instagram 时优先使用'
+                    : '从浏览器插件导出后粘贴到这里'}
+                </small>
+              </span>
+              <CaretDown size={16} weight="bold" className={instagramCookiesOpen ? 'rotated' : ''} />
+            </button>
+            {instagramCookiesOpen && (
+              <div className="instagram-cookie-body">
+                <p className="field-hint">
+                  用插件导出 cookies.txt 后全文粘贴，点保存，再点上面的「检测登录状态」。有效会显示用户 ID；过期或停在验证页会明确提示。
+                </p>
+                <textarea
+                  className="textarea-box instagram-cookie-text"
+                  rows={8}
+                  value={config.ytdlpInstagramCookies}
+                  onChange={(e) => onChange({ ...config, ytdlpInstagramCookies: e.target.value })}
+                  placeholder={'# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\t...'}
+                  spellCheck={false}
+                />
+                <div className="instagram-cookie-actions">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={savingInstagramCookies}
+                    onClick={() => void handleSaveInstagramCookies()}
+                  >
+                    保存 Instagram Cookie
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
 
           <FormField label="清晰度上限" hint="默认最清晰。限制高度会放弃更高分辨率。">
             <select

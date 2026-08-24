@@ -160,8 +160,8 @@ export function RequirementTwoPage({
       {/* 页面顶栏 */}
       <div className="page-header-block">
         <div>
-          <h1>精准 SRT 对齐</h1>
-          <p>导入录音与口播文案，利用 GPU 毫秒级对齐时间轴，一键生成剪映直接导入的专业字幕</p>
+          <h1>精准 SRT 对齐（待完成）</h1>
+          <p>（功能暂未实现）导入录音与口播文案，利用 GPU 毫秒级对齐时间轴，一键生成剪映直接导入的专业字幕</p>
         </div>
       </div>
 

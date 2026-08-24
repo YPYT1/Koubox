@@ -26,6 +26,7 @@ function defaults(modelsDirectory: string): KouboxConfig {
     ytdlpProxy: '',
     ytdlpCookieSource: 'none',
     ytdlpCookiesPath: '',
+    ytdlpInstagramCookies: '',
     ytdlpMaxHeight: 0,
     ytdlpExtraArgs: '',
     maxConcurrentTasks: 1,

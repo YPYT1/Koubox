@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "pnpm --filter @koubox/desktop dev",
     "build": "pnpm --filter @koubox/desktop build",
-    "preview": "pnpm --filter @koubox/desktop preview",
+    "package": "pnpm --filter @koubox/desktop package",
+    "pack:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @koubox/core test"
   },

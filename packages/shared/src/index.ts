@@ -23,8 +23,8 @@ export const tools: ToolManifest[] = [
   },
   {
     id: 'precise-srt',
-    name: '精准 SRT 对齐',
-    description: '导入音频和可选原文，输出可直接导入剪映的标准 SRT。',
+    name: '精准 SRT 对齐（待完成）',
+    description: '（功能暂未实现）导入音频和可选原文，输出可直接导入剪映的标准 SRT。',
     accent: 'blue',
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
@@ -185,6 +185,7 @@ export type KouboxConfig = {
   ytdlpProxy: string
   ytdlpCookieSource: YtdlpCookieSource
   ytdlpCookiesPath: string
+  ytdlpInstagramCookies: string
   ytdlpMaxHeight: YtdlpMaxHeight
   ytdlpExtraArgs: string
   maxConcurrentTasks: number
@@ -234,6 +235,9 @@ export function toUserTaskMessage(raw: string): string {
   }
   if (/尚未保存登录状态/i.test(text)) {
     return text
+  }
+  if (/\[Instagram\]|instagram\.com/i.test(text) && /login required|rate-limit|not available|Please wait|challenge|cookie/i.test(text)) {
+    return 'Instagram 下载失败：登录态无效或未生效。请用浏览器插件重新导出 cookie，粘贴到「全局设置 → Instagram Cookie」后保存，再重试。'
   }
   if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
     return '该视频需要登录后才能下载。请在「全局设置 → 下载（yt-dlp）」打开登录窗口，保存登录状态后再试。'

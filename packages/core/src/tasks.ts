@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve, delimiter } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { detectGpu } from './runtime.js'
 import { alignKnownText } from './align.js'
@@ -67,6 +67,30 @@ function killProcessTree(child: ChildProcess): void {
   if (!child.pid || child.killed) return
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
   else child.kill('SIGTERM')
+}
+
+function ytdlpVideoFormat(maxHeight: number): string {
+  const height = maxHeight > 0 ? `[height<=${maxHeight}]` : ''
+  return `bv*[vcodec^=avc1]${height}+ba/bv*[vcodec^=h264]${height}+ba/bv*${height}+ba/b${height}/best${height}`
+}
+
+function needsChromiumRemux(ffprobeExecutable: string, videoPath: string): boolean {
+  const result = spawnSync(
+    ffprobeExecutable,
+    ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,pix_fmt', '-of', 'csv=p=0', '-i', videoPath],
+    { encoding: 'utf8', windowsHide: true }
+  )
+  if (result.status !== 0) {
+    throw new Error(`ffprobe 失败：${(result.stderr || result.stdout || '').trim()}`)
+  }
+  const line = (result.stdout || '').trim().split(/\r?\n/)[0] ?? ''
+  const [codecRaw, pixRaw] = line.split(',')
+  const codec = (codecRaw ?? '').trim().toLowerCase()
+  const pixFmt = (pixRaw ?? '').trim().toLowerCase()
+  if (!codec) throw new Error(`ffprobe 没有读到视频流：${videoPath}`)
+  const chromiumCodec = codec === 'h264' || codec === 'vp8' || codec === 'vp9'
+  const eightBit420 = pixFmt === 'yuv420p' || pixFmt === 'yuvj420p'
+  return !chromiumCodec || !eightBit420
 }
 
 function splitExtraArgs(value: string): string[] {
@@ -528,7 +552,17 @@ export class TaskManager {
       const proxy = normalizeProxyUrl(config.ytdlpProxy)
       if (proxy) args.push('--proxy', proxy)
     }
-    if (config.ytdlpCookieSource === 'builtin') {
+    const instagramCookies = config.ytdlpInstagramCookies.trim()
+    const useInstagramCookies = detectPlatform(record.task.url) === 'Instagram' && Boolean(instagramCookies)
+    if (useInstagramCookies) {
+      if (!/\bsessionid\b/.test(instagramCookies) || !/\bds_user_id\b/.test(instagramCookies)) {
+        throw new Error('Instagram Cookie 不完整：需要包含 sessionid 和 ds_user_id。请用浏览器插件重新导出后粘贴。')
+      }
+      const instagramCookiesFile = join(dirname(this.options.taskIndexFile), 'instagram-cookies.txt')
+      writeFileSync(instagramCookiesFile, instagramCookies.endsWith('\n') ? instagramCookies : `${instagramCookies}\n`, 'utf8')
+      log.info('Instagram 使用设置中粘贴的 Cookie', { taskId: record.task.taskId, cookies: instagramCookiesFile })
+      args.push('--cookies', instagramCookiesFile)
+    } else if (config.ytdlpCookieSource === 'builtin') {
       const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
       if (!existsSync(exportedCookies)) {
         throw new Error('尚未保存登录状态。请在「全局设置 → 下载（yt-dlp）」打开登录窗口，登录后点击「保存登录状态」。')
@@ -540,11 +574,7 @@ export class TaskManager {
       if (!existsSync(cookiesPath)) throw new Error(`Cookies 文件不存在：${cookiesPath}`)
       args.push('--cookies', cookiesPath)
     }
-    if (config.ytdlpMaxHeight > 0) {
-      args.push('-f', `bv*[height<=${config.ytdlpMaxHeight}]+ba/b[height<=${config.ytdlpMaxHeight}]/best[height<=${config.ytdlpMaxHeight}]`)
-    } else {
-      args.push('-f', 'bv*+ba/b')
-    }
+    args.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
     if (config.ytdlpExtraArgs.trim()) args.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
     args.push(record.task.url)
     await this.runCommand(record, executable, args, (line) => {
@@ -576,6 +606,53 @@ export class TaskManager {
     if (downloaded !== finalPath) {
       if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
       renameSync(downloaded, finalPath)
+    }
+    return this.ensureChromiumPlayable(record, finalPath)
+  }
+
+  private async ensureChromiumPlayable(record: TaskRecord, videoPath: string): Promise<string> {
+    const ffmpeg = this.options.resolveVendor().ffmpegExecutable
+    const ffprobe = join(dirname(ffmpeg), 'ffprobe.exe')
+    if (!existsSync(ffprobe)) throw new Error(`ffprobe 不存在：${ffprobe}`)
+    if (!needsChromiumRemux(ffprobe, videoPath)) return videoPath
+    this.update(record, { percent: 26, message: '正在转码为应用内可预览格式…' })
+    log.info('视频编码 Electron 无法预览，开始转码 H.264', { taskId: record.task.taskId, videoPath })
+    const dir = dirname(videoPath)
+    const stem = basename(videoPath, extname(videoPath))
+    const tempPath = join(dir, `${stem}.playable.mp4`)
+    const finalPath = join(dir, `${stem}.mp4`)
+    await this.runCommand(record, ffmpeg, [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-y',
+      '-i',
+      videoPath,
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a:0?',
+      '-c:v',
+      'libx264',
+      '-pix_fmt',
+      'yuv420p',
+      '-preset',
+      'veryfast',
+      '-crf',
+      '18',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      tempPath
+    ])
+    if (!existsSync(tempPath)) throw new Error('转码已结束，但没有找到可预览视频文件。')
+    if (videoPath !== tempPath && existsSync(videoPath)) unlinkSync(videoPath)
+    if (tempPath !== finalPath) {
+      if (existsSync(finalPath)) unlinkSync(finalPath)
+      renameSync(tempPath, finalPath)
     }
     return finalPath
   }
@@ -646,7 +723,10 @@ export class TaskManager {
         record.processes.delete(child)
         if (record.cancelled) return reject(new Error('任务已取消。'))
         if (code === 0) resolvePromise()
-        else reject(new Error(formatCommandError(stderr, commandLabel ?? basename(command))))
+        else {
+          log.error('外部命令失败', { command, code, stderr: stderr.trim() })
+          reject(new Error(formatCommandError(stderr, commandLabel ?? basename(command))))
+        }
       })
     })
   }
@@ -669,6 +749,10 @@ export class TaskManager {
   private workerEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
     const proxy = normalizeProxyUrl(this.options.getConfig().ytdlpProxy)
     const env: NodeJS.ProcessEnv = { ...process.env, PYTHONUTF8: '1', ...getLoggerEnv(), ...extra }
+    const runtimeSrc = join(this.options.pythonProjectDirectory, 'src')
+    if (existsSync(runtimeSrc)) {
+      env.PYTHONPATH = env.PYTHONPATH ? `${runtimeSrc}${delimiter}${env.PYTHONPATH}` : runtimeSrc
+    }
     for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
       delete env[key]
     }

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { startLocalApi } from '@koubox/core'
 import { initLogger, createLogger } from '@koubox/shared/logger'
@@ -37,6 +37,17 @@ function findPythonProjectDirectory(): string {
 
 function findBundledPythonExecutable(): string | undefined {
   return app.isPackaged ? join(process.resourcesPath, 'python', 'Scripts', 'python.exe') : undefined
+}
+
+function patchBundledPythonHome(): void {
+  if (!app.isPackaged) return
+  const cfgPath = join(process.resourcesPath, 'python', 'pyvenv.cfg')
+  const home = join(process.resourcesPath, 'python-home')
+  if (!existsSync(cfgPath)) throw new Error(`打包环境缺少 Python 配置：${cfgPath}`)
+  if (!existsSync(home)) throw new Error(`打包环境缺少 Python 运行时：${home}`)
+  const cfg = readFileSync(cfgPath, 'utf8')
+  const next = cfg.replace(/^home\s*=\s*.+$/m, `home = ${home}`)
+  if (next !== cfg) writeFileSync(cfgPath, next, 'utf8')
 }
 
 function resolveLoginHtmlPath(): string {
@@ -139,6 +150,7 @@ async function createWindow(): Promise<void> {
   initLogger(projectDirectory)
   const mainLog = createLogger('main')
   mainLog.info('应用启动', { projectDirectory })
+  patchBundledPythonHome()
 
   const userData = app.getPath('userData')
   exportedCookiesFile = join(userData, 'ytdlp-cookies.txt')
@@ -159,6 +171,7 @@ async function createWindow(): Promise<void> {
       ytdlpProxy: '',
       ytdlpCookieSource: 'builtin',
       ytdlpCookiesPath: '',
+      ytdlpInstagramCookies: '',
       ytdlpMaxHeight: 0,
       ytdlpExtraArgs: '',
       maxConcurrentTasks: 1,
@@ -216,7 +229,7 @@ async function createWindow(): Promise<void> {
     },
     openLoginWindow,
     exportLoginCookies: () => exportLoginCookies(exportedCookiesFile),
-    getLoginCookieStatus: () => buildLoginCookieStatus(exportedCookiesFile)
+    getLoginCookieStatus: (instagramCookies, proxy) => buildLoginCookieStatus(exportedCookiesFile, instagramCookies, proxy)
   })
 
   mainWindow = new BrowserWindow({
