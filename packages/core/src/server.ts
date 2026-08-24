@@ -17,6 +17,7 @@ type ServerOptions = {
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
+  pinBundledPaths?: boolean
   selectDirectory(title: string, defaultPath?: string): Promise<string | undefined>
   selectAudioFile(title: string, defaultPath?: string): Promise<string | undefined>
   selectFile(title: string, defaultPath?: string, filters?: FileFilter[]): Promise<string | undefined>
@@ -109,7 +110,7 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
 
 export async function startLocalApi(options: ServerOptions) {
   const apiLog = createLogger('api')
-  const store = new RuntimeStore(options.configFile, options.defaults)
+  const store = new RuntimeStore(options.configFile, options.defaults, Boolean(options.pinBundledPaths))
   const tasks = new TaskManager({
     getConfig: () => store.read(),
     resolveVendor: () => resolveVendorPaths(store.read()),

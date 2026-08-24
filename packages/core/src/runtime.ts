@@ -32,7 +32,25 @@ const ffmpegExpectedFiles = [
 ]
 
 export class RuntimeStore {
-  constructor(private readonly file: string, private readonly defaults: KouboxConfig) {}
+  constructor(
+    private readonly file: string,
+    private readonly defaults: KouboxConfig,
+    private readonly pinBundledPaths = false
+  ) {}
+
+  private applyPinned(config: KouboxConfig): KouboxConfig {
+    if (!this.pinBundledPaths) return config
+    return {
+      ...config,
+      modelsDirectory: this.defaults.modelsDirectory,
+      asrModelDirectory: this.defaults.asrModelDirectory,
+      translationModelDirectory: this.defaults.translationModelDirectory,
+      demucsModelDirectory: this.defaults.demucsModelDirectory,
+      ytdlpDirectory: this.defaults.ytdlpDirectory,
+      ffmpegDirectory: this.defaults.ffmpegDirectory,
+      pythonExecutable: this.defaults.pythonExecutable
+    }
+  }
 
   read(): KouboxConfig {
     if (!existsSync(this.file)) return this.write(this.defaults)
@@ -86,13 +104,16 @@ export class RuntimeStore {
     }
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
-    return usesLegacyAsrModel ? this.write(config) : config
+    const normalized = this.applyPinned(config)
+    if (usesLegacyAsrModel || this.pinBundledPaths) return this.write(normalized)
+    return normalized
   }
 
   write(next: KouboxConfig): KouboxConfig {
+    const pinned = this.applyPinned(next)
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(this.file, JSON.stringify(next, null, 2), 'utf8')
-    return next
+    writeFileSync(this.file, JSON.stringify(pinned, null, 2), 'utf8')
+    return pinned
   }
 }
 

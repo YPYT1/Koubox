@@ -48,6 +48,7 @@
       { "from": "../../png/口播匣icon.png", "to": "icon.png" }
     ],
     "afterPack": "./scripts/after-pack.cjs",
+    "electronDist": "../../node_modules/.pnpm/electron@33.4.11/node_modules/electron/dist",
     "compression": "store",
     "win": { "target": ["dir"] }
   }

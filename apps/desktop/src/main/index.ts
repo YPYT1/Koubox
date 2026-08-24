@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { startLocalApi } from '@koubox/core'
 import { initLogger, createLogger } from '@koubox/shared/logger'
 import { buildLoginCookieStatus, exportLoginCookies, applyLoginSessionProxy, readLoginCookies, cookiesToNetscape } from './cookies'
@@ -9,6 +9,16 @@ let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
 let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
 let exportedCookiesFile = ''
+
+/** 便携包：用户数据与 Cookie 放在 exe 旁 userdata，不共用开发机 AppData。 */
+function usePortableUserData(): void {
+  if (!app.isPackaged) return
+  const portable = join(dirname(process.execPath), 'userdata')
+  mkdirSync(portable, { recursive: true })
+  app.setPath('userData', portable)
+}
+
+usePortableUserData()
 
 function findModelsDirectory(): string {
   return process.env.KOUBOX_MODELS_DIR
@@ -185,6 +195,7 @@ async function createWindow(): Promise<void> {
     projectDirectory,
     pythonProjectDirectory: findPythonProjectDirectory(),
     bundledPythonExecutable: findBundledPythonExecutable(),
+    pinBundledPaths: app.isPackaged,
     exportedCookiesFile,
     selectDirectory: async (title, defaultPath) => {
       const dialogOptions: OpenDialogOptions = {
