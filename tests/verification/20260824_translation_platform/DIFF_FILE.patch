@@ -1,0 +1,326 @@
+diff --git a/apps/desktop/src/renderer/src/pages/RequirementOnePage.tsx b/apps/desktop/src/renderer/src/pages/RequirementOnePage.tsx
+index a1275cf..a82c964 100644
+--- a/apps/desktop/src/renderer/src/pages/RequirementOnePage.tsx
++++ b/apps/desktop/src/renderer/src/pages/RequirementOnePage.tsx
+@@ -256,11 +256,16 @@ export function RequirementOnePage({
+   }
+ 
+   const originalLines = task?.transcript?.segments.map((s) => s.text.trim()).filter(Boolean) ?? []
+-  const translatedLines = (task?.translation ?? '')
++  const translatedLines = task?.translationLines ?? (task?.translation ?? '')
+     .split(/\r?\n/)
+     .map((line) => line.trim())
+     .filter(Boolean)
+   const lineCount = Math.max(originalLines.length, translatedLines.length, 1)
++  const pairedLines = Array.from({ length: lineCount }, (_, index) => ({
++    index,
++    original: originalLines[index] ?? '—',
++    translated: translatedLines[index] ?? '—'
++  }))
+   const isTaskRunning = Boolean(task && !['complete', 'error', 'cancelled'].includes(task.status))
+   const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
+   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
+@@ -593,10 +598,10 @@ export function RequirementOnePage({
+               {originalLines.length === 0 ? (
+                 <div className="viral-slot-empty">识别完成后按「一行一句」展示</div>
+               ) : (
+-                originalLines.map((line, index) => (
++                pairedLines.map(({ index, original }) => (
+                   <div className="viral-line-row" key={`o-${index}`}>
+                     <span className="viral-line-index">{index + 1}</span>
+-                    <span className="viral-line-text">{line}</span>
++                    <span className="viral-line-text">{original}</span>
+                   </div>
+                 ))
+               )}
+@@ -648,10 +653,10 @@ export function RequirementOnePage({
+               {translatedLines.length === 0 ? (
+                 <div className="viral-slot-empty">点击中间翻译后，与原文逐行对应展示</div>
+               ) : (
+-                Array.from({ length: lineCount }, (_, index) => (
++                pairedLines.map(({ index, translated }) => (
+                   <div className="viral-line-row" key={`t-${index}`}>
+                     <span className="viral-line-index">{index + 1}</span>
+-                    <span className="viral-line-text">{translatedLines[index] || '—'}</span>
++                    <span className="viral-line-text">{translated}</span>
+                   </div>
+                 ))
+               )}
+diff --git a/apps/desktop/src/renderer/src/pages/TaskHistoryPage.tsx b/apps/desktop/src/renderer/src/pages/TaskHistoryPage.tsx
+index 6e31de2..3e3b30a 100644
+--- a/apps/desktop/src/renderer/src/pages/TaskHistoryPage.tsx
++++ b/apps/desktop/src/renderer/src/pages/TaskHistoryPage.tsx
+@@ -1,6 +1,6 @@
+ import { useState, useEffect } from 'react'
+ import { ClipboardText, Clock, FileText, FolderOpen, Trash } from '@phosphor-icons/react'
+-import { toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
++import { detectPlatform, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
+ import { Button } from '../components/common/Button'
+ 
+ type TaskHistoryPageProps = {
+@@ -25,6 +25,18 @@ function isDeletable(task: TaskSnapshot): boolean {
+   return task.status !== 'running' && task.status !== 'queued'
+ }
+ 
++type PlatformBadge = { label: string; className: string }
++
++function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
++  if (kind === 'req2') return { label: '本地音频', className: 'platform-local' }
++  const platform = detectPlatform(url)
++  if (platform === 'YouTube') return { label: platform, className: 'platform-youtube' }
++  if (platform === 'TikTok') return { label: platform, className: 'platform-tiktok' }
++  if (platform === 'Instagram') return { label: platform, className: 'platform-instagram' }
++  if (platform === 'Facebook') return { label: platform, className: 'platform-facebook' }
++  return { label: platform === 'Audio' ? '本地音频' : platform, className: 'platform-local' }
++}
++
+ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHistoryPageProps) {
+   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
+   const [loading, setLoading] = useState(true)
+@@ -151,6 +163,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
+             const isError = item.status === 'error'
+             const canDelete = isDeletable(item)
+             const deleting = deletingIds.has(item.taskId)
++            const platform = detectPlatformBadge(item.url, item.kind)
+             const artifactsList = Object.entries(item.artifacts).filter(
+               ([key, path]) => Boolean(path) && !HIDDEN_ARTIFACT_KEYS.has(key)
+             ) as Array<[keyof TaskArtifacts, string]>
+@@ -159,6 +172,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
+               <article className="history-card" key={item.taskId}>
+                 <header className="history-card-head">
+                   <div className="history-card-title">
++                    <span className={`platform-badge ${platform.className}`}>{platform.label}</span>
+                     <span
+                       className="panel-title-badge"
+                       style={{
+diff --git a/apps/desktop/src/renderer/src/styles/app.css b/apps/desktop/src/renderer/src/styles/app.css
+index ba10a99..1bb34fe 100644
+--- a/apps/desktop/src/renderer/src/styles/app.css
++++ b/apps/desktop/src/renderer/src/styles/app.css
+@@ -1957,6 +1957,25 @@ button:disabled {
+   min-width: 0;
+ }
+ 
++.platform-badge {
++  display: inline-flex;
++  align-items: center;
++  height: 22px;
++  padding: 0 8px;
++  border-radius: 999px;
++  font-size: 11px;
++  font-weight: 700;
++  border: 1px solid transparent;
++  white-space: nowrap;
++  flex: 0 0 auto;
++}
++
++.platform-youtube { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
++.platform-tiktok { color: #111827; background: #f3f4f6; border-color: #d1d5db; }
++.platform-instagram { color: #9d174d; background: #fdf2f8; border-color: #f9a8d4; }
++.platform-facebook { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
++.platform-local { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
++
+ .history-card-title strong {
+   font-family: var(--font-mono);
+   font-size: 13px;
+diff --git a/packages/core/src/tasks.ts b/packages/core/src/tasks.ts
+index f1472b3..ed150e6 100644
+--- a/packages/core/src/tasks.ts
++++ b/packages/core/src/tasks.ts
+@@ -14,7 +14,7 @@ import type {
+   Transcript,
+   TranslationTargetLanguage
+ } from '@koubox/shared'
+-import { toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
++import { detectPlatform, toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
+ import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
+ 
+ const log = createLogger('tasks')
+@@ -52,6 +52,7 @@ type WorkerMessage = {
+   language?: string
+   segments?: Transcript['segments']
+   text?: string
++  translatedLines?: string[]
+   correctedLines?: string[]
+   vocalsPath?: string
+ }
+@@ -103,20 +104,6 @@ function formatCommandError(stderr: string, commandName: string): string {
+   return toUserTaskMessage(text)
+ }
+ 
+-function detectPlatform(url: string): string {
+-  try {
+-    const host = new URL(url).hostname.toLowerCase()
+-    if (host.includes('youtu')) return 'Youtube'
+-    if (host.includes('tiktok')) return 'Tiktok'
+-    if (host.includes('instagram')) return 'Instagram'
+-    if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'Twitter'
+-    if (host.includes('facebook') || host.includes('fb.watch')) return 'Facebook'
+-    if (host.includes('bilibili')) return 'Bilibili'
+-    if (host.includes('douyin')) return 'Douyin'
+-  } catch { /* ignore invalid url */ }
+-  return 'Video'
+-}
+-
+ function dateStamp(value = new Date()): string {
+   const y = value.getFullYear()
+   const m = String(value.getMonth() + 1).padStart(2, '0')
+@@ -141,7 +128,9 @@ function nextSequence(prefix: string, outputDirectory: string, existingIds: stri
+ }
+ 
+ function allocateTaskId(kind: 'req1' | 'req2', url: string, outputDirectory: string, existingIds: string[]): string {
+-  const platform = kind === 'req1' ? detectPlatform(url) : 'Audio'
++  const detected = kind === 'req1' ? detectPlatform(url) : 'Audio'
++  // Keep the existing task-id casing for compatibility with saved output folders.
++  const platform = detected === 'YouTube' ? 'Youtube' : detected === 'TikTok' ? 'Tiktok' : detected
+   const prefix = `${platform}_${dateStamp()}_`
+   const seq = nextSequence(prefix, outputDirectory, existingIds)
+   return `${prefix}${String(seq).padStart(3, '0')}`
+@@ -321,12 +310,17 @@ export class TaskManager {
+       }, (message) => {
+         if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
+       })
+-      if (response.type !== 'translation' || !response.text) throw new Error('翻译运行器没有返回译文。')
+-      const translatedLines = response.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+-      if (translatedLines.length !== sourceLines.length) {
++      if (response.type !== 'translation' || !Array.isArray(response.translatedLines)) {
++        throw new Error('翻译运行器没有返回严格逐句译文数组。')
++      }
++      const translatedLines = response.translatedLines.map((line) => String(line).trim())
++      if (translatedLines.length !== sourceLines.length || translatedLines.some((line) => !line)) {
+         throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
+       }
+-      if (response.correctedLines && response.correctedLines.length === sourceLines.length && record.task.transcript) {
++      if (response.correctedLines && response.correctedLines.length !== sourceLines.length) {
++        throw new Error(`日语校正行数与原文不一致：原文 ${sourceLines.length} 行，校正 ${response.correctedLines.length} 行。`)
++      }
++      if (response.correctedLines && record.task.transcript) {
+         let lineIndex = 0
+         const merged = record.task.transcript.segments.map((segment) => {
+           if (!segment.text.trim()) return segment
+@@ -336,7 +330,7 @@ export class TaskManager {
+         })
+         this.writeTranscript(record, { language: record.task.transcript.language, segments: merged })
+       }
+-      this.writeTranslation(record, translatedLines.join('\n'), target)
++      this.writeTranslation(record, translatedLines.join('\n'), target, translatedLines)
+       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '翻译完成' })
+       return this.clone(record.task)
+     } catch (error) {
+@@ -698,10 +692,11 @@ export class TaskManager {
+     })
+   }
+ 
+-  private writeTranslation(record: TaskRecord, text: string, language: TranslationTargetLanguage): void {
++  private writeTranslation(record: TaskRecord, text: string, language: TranslationTargetLanguage, lines?: string[]): void {
+     const textPath = join(record.task.outputDirectory, `${record.task.taskId}_翻译.txt`)
+     writeFileSync(textPath, text, 'utf8')
+     record.task.translation = text
++    record.task.translationLines = lines ?? text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+     record.task.artifacts.translationText = textPath
+     delete record.task.artifacts.translation
+     this.persist(record)
+diff --git a/packages/core/test/platform.test.ts b/packages/core/test/platform.test.ts
+new file mode 100644
+index 0000000..fe8cb46
+--- /dev/null
++++ b/packages/core/test/platform.test.ts
+@@ -0,0 +1,13 @@
++import { describe, expect, it } from 'vitest'
++import { detectPlatform } from '@koubox/shared'
++
++describe('shared platform detection', () => {
++  it.each([
++    ['https://www.youtube.com/watch?v=abc', 'YouTube'],
++    ['https://www.tiktok.com/@creator/video/1', 'TikTok'],
++    ['https://www.instagram.com/reel/abc', 'Instagram'],
++    ['https://www.facebook.com/watch/?v=abc', 'Facebook'],
++  ])('detects %s as %s', (url, expected) => {
++    expect(detectPlatform(url)).toBe(expected)
++  })
++})
+diff --git a/packages/shared/src/index.ts b/packages/shared/src/index.ts
+index 3f9d762..fefe230 100644
+--- a/packages/shared/src/index.ts
++++ b/packages/shared/src/index.ts
+@@ -91,6 +91,22 @@ export type RequirementTwoMode = 'align' | 'asr-only'
+ export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
+ export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
+ 
++export type KouboxPlatform = 'YouTube' | 'TikTok' | 'Instagram' | 'Facebook' | 'Twitter' | 'Bilibili' | 'Douyin' | 'Video' | 'Audio'
++
++export function detectPlatform(url: string): KouboxPlatform {
++  try {
++    const host = new URL(url).hostname.toLowerCase()
++    if (host.includes('youtu')) return 'YouTube'
++    if (host.includes('tiktok')) return 'TikTok'
++    if (host.includes('instagram')) return 'Instagram'
++    if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'Twitter'
++    if (host.includes('facebook') || host.includes('fb.watch')) return 'Facebook'
++    if (host.includes('bilibili')) return 'Bilibili'
++    if (host.includes('douyin')) return 'Douyin'
++  } catch { /* local audio or legacy task */ }
++  return 'Video'
++}
++
+ export type TaskArtifacts = {
+   video?: string
+   sourceAudio?: string
+@@ -123,6 +139,7 @@ export type TaskSnapshot = {
+   language?: string
+   transcript?: Transcript
+   translation?: string
++  translationLines?: string[]
+   artifacts: TaskArtifacts
+   error?: TaskError
+   createdAt: string
+diff --git a/python/src/koubox_runtime/translate.py b/python/src/koubox_runtime/translate.py
+index 19887c4..fee2336 100644
+--- a/python/src/koubox_runtime/translate.py
++++ b/python/src/koubox_runtime/translate.py
+@@ -206,18 +206,20 @@ def run(
+         prev_line = corrected[index - 1] if index > 0 else ""
+         next_line = corrected[index + 1] if index + 1 < total else ""
+         prompt = _build_prompt(prompt_prefix, line, prev_line, next_line, "【译文】")
+-        translated.append(
+-            _generate_one(
+-                model,
+-                tokenizer,
+-                prompt,
+-                temperature,
+-                max_new_tokens,
+-                top_p,
+-                line,
+-                deterministic=False,
+-            )
++        translated_line = _generate_one(
++            model,
++            tokenizer,
++            prompt,
++            temperature,
++            max_new_tokens,
++            top_p,
++            line,
++            deterministic=False,
+         )
++        if not translated_line:
++            fail("TRANSLATION_EMPTY", f"第 {index + 1} 句没有生成有效译文。")
++            return
++        translated.append(translated_line)
+ 
+     del model
+     if torch.cuda.is_available():
+@@ -231,7 +233,12 @@ def run(
+         return
+ 
+     send("progress", stage="translating", percent=95, message="正在整理译文")
+-    payload: dict[str, object] = {"text": "\n".join(translated)}
++    payload: dict[str, object] = {
++        "text": "\n".join(translated),
++        # Keep the sentence boundary explicit. The desktop core must consume
++        # this array by index instead of trying to infer boundaries from text.
++        "translatedLines": translated,
++    }
+     if need_ja_correct:
+         payload["correctedLines"] = corrected
+     send("translation", **payload)

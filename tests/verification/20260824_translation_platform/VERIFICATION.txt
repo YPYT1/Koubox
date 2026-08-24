@@ -1,0 +1,32 @@
+Changed branch/field:
+- Python translation Worker emits translatedLines[] in source order.
+- Core requires the strict array, validates exact source/translation/correction lengths, and stores TaskSnapshot.translationLines.
+- The translation page renders original and translated text from one indexed pairedLines model.
+- Platform detection is shared through @koubox/shared.detectPlatform and rendered as YouTube, TikTok, Instagram, Facebook, or 本地音频 badges.
+
+Artifacts:
+- MODIFIED_FILE copies: this directory/modified__*
+- DIFF_FILE: this directory/DIFF_FILE.patch
+- VERIFICATION: this file
+- ROLLBACK: this directory/ROLLBACK.sh
+
+BASELINE
+Command: git archive HEAD^ into a temporary copy; py_compile; core typecheck; core tests; desktop typecheck
+Result: previous branch baseline checks passed.
+
+MODIFIED
+Command: python/.venv/Scripts/python.exe -m py_compile python/src/koubox_runtime/translate.py
+Result: exit 0
+Command: pnpm --filter @koubox/core typecheck
+Result: exit 0
+Command: pnpm --filter @koubox/core test
+Result: exit 0; 4 test files, 9 tests passed.
+Command: pnpm --filter @koubox/desktop typecheck
+Result: exit 0
+Command: pnpm --filter @koubox/desktop build
+Result: exit 0; electron-vite production build completed.
+
+ROLLBACK
+Command: ROOT_DIR=tests/verification/20260824_translation_platform/rollback-test-copy bash ROLLBACK.sh
+Result: exit 0; all six baseline hashes matched.
+Restored behavior/status: rollback was tested on a copy; the working project remains modified.
