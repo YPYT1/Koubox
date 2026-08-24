@@ -394,7 +394,7 @@ export class TaskManager {
       record.task.artifacts.video = video
       this.persist(record)
       this.update(record, { stage: 'extract-audio', percent: 28, message: '正在提取原音频' })
-      const audio = await this.extractAudio(record, video, join(root, `${task.taskId}.wav`), { sampleRate: 44100, channels: 2 })
+      const audio = await this.extractAudio(record, video, join(root, `${task.taskId}.wav`))
       record.task.artifacts.audio = audio
       this.persist(record)
       const gpu = detectGpu()
@@ -403,10 +403,7 @@ export class TaskManager {
       const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`))
       record.task.artifacts.vocals = vocals
       this.persist(record)
-      const asrAudio = join(root, `${task.taskId}_人声_16k.wav`)
-      await this.extractAudio(record, vocals, asrAudio, { sampleRate: 16000, channels: 1 })
-      await this.performAsr(record, asrAudio, modelPaths.asr, 55)
-      if (existsSync(asrAudio)) unlinkSync(asrAudio)
+      await this.performAsr(record, audio, modelPaths.asr, 55)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别完成' })
     } catch (error) {
       if (record.cancelled) return
@@ -426,7 +423,7 @@ export class TaskManager {
       copyFileSync(task.url, sourceAudio)
       record.task.artifacts.sourceAudio = sourceAudio
       this.update(record, { status: 'running', stage: 'extract-audio', percent: 8, message: '正在转换音频' })
-      const audio = await this.extractAudio(record, sourceAudio, join(root, `${task.taskId}.wav`), { sampleRate: 16000, channels: 1 })
+      const audio = await this.extractAudio(record, sourceAudio, join(root, `${task.taskId}.wav`))
       record.task.artifacts.audio = audio
       this.persist(record)
       const gpu = detectGpu()
@@ -576,28 +573,22 @@ export class TaskManager {
 
   private async extractAudio(
     record: TaskRecord,
-    video: string,
-    audioPath: string,
-    options: { sampleRate: number; channels: number } = { sampleRate: 16000, channels: 1 }
+    inputPath: string,
+    audioPath: string
   ): Promise<string> {
     const executable = this.options.resolveVendor().ffmpegExecutable
     if (!existsSync(executable)) throw new Error(`FFmpeg 不存在：${executable}`)
-    await this.runCommand(record, executable, [
+    const args = [
       '-hide_banner',
       '-loglevel',
       'error',
       '-y',
       '-i',
-      video,
-      '-vn',
-      '-ac',
-      String(options.channels),
-      '-ar',
-      String(options.sampleRate),
-      '-c:a',
-      'pcm_s16le',
-      audioPath
-    ])
+      inputPath,
+      '-vn'
+    ]
+    args.push('-c:a', 'pcm_s24le', audioPath)
+    await this.runCommand(record, executable, args)
     if (!existsSync(audioPath)) throw new Error('FFmpeg 已结束，但没有找到抽取的音频文件。')
     return audioPath
   }

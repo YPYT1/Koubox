@@ -148,7 +148,7 @@ async function createWindow(): Promise<void> {
     defaults: {
       modelsDirectory: findModelsDirectory(),
       outputDirectory: join(app.getPath('documents'), '口播匣输出'),
-      asrModelDirectory: join(findModelsDirectory(), 'whisperlargev3turbo'),
+      asrModelDirectory: join(findModelsDirectory(), 'faster-whisper-large-v3'),
       translationModelDirectory: join(findModelsDirectory(), 'HYMT21.8B'),
       demucsModelDirectory: join(findModelsDirectory(), 'demucs'),
       ytdlpDirectory: join(findVendorDirectory(), 'yt-dlp'),

@@ -84,8 +84,8 @@ export function RequirementTwoPage({
 
   const hasSourceText = Boolean(sourceText.trim())
   const steps = [
-    { stage: 'extract-audio', label: '音频标准化', desc: '转换为 16kHz WAV 统一采样格式' },
-    { stage: 'asr', label: 'Whisper 语音识别', desc: '获取毫秒级时间戳与发音锚点' },
+    { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，生成高精度 WAV 工作副本' },
+    { stage: 'asr', label: 'Faster-Whisper 语音识别', desc: 'Large-v3 直接识别原音频并生成时间锚点' },
     ...(hasSourceText ? [{ stage: 'align', label: '贴合原文案', desc: '将时间戳精准映射并贴合至已知文案' }] : []),
     { stage: 'export-srt', label: '生成剪映标准 SRT', desc: '规范化断句与毫秒级时间轴封装' }
   ]
@@ -200,7 +200,7 @@ export function RequirementTwoPage({
           <FormField
             label="口播原文稿"
             optional="可选"
-            hint="填写后文字 100% 严格以原稿为准，时间轴由音频精准对齐；留空则由 Whisper 纯语音识别转写。"
+            hint="填写后文字 100% 严格以原稿为准，时间轴由音频精准对齐；留空则由 Faster-Whisper Large-v3 纯语音识别转写。"
           >
             <textarea
               className="textarea-box"
@@ -304,7 +304,7 @@ export function RequirementTwoPage({
       {task?.transcript && transcriptText && (
         <div className="results-stack">
           <ResultPanel
-            title={hasSourceText ? '精准对齐文案 (带毫秒时间戳)' : 'Whisper 语音识别字幕'}
+            title={hasSourceText ? '精准对齐文案 (带毫秒时间戳)' : 'Faster-Whisper 语音识别字幕'}
             transcript={task.transcript}
             rawText={transcriptText}
             onCopy={handleCopy}

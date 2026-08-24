@@ -4,10 +4,11 @@ import { spawnSync } from 'node:child_process'
 import type { GpuStatus, KouboxConfig, ModelCheck, RuntimeStatus, VendorToolCheck, YtdlpCookieSource } from '@koubox/shared'
 
 const asrModelFiles = [
-  'README.md', 'added_tokens.json', 'config.json', 'generation_config.json',
-  'merges.txt', 'model.safetensors', 'normalizer.json', 'preprocessor_config.json',
-  'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json', 'vocab.json'
+  'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
 ]
+
+const legacyAsrModelDirectory = 'whisperlargev3turbo'
+const fasterWhisperAsrModelDirectory = 'faster-whisper-large-v3'
 
 const translationModelFiles = [
   'chat_template.jinja', 'config.json', 'configuration.json', 'generation_config.json',
@@ -40,7 +41,10 @@ export class RuntimeStore {
     if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
       config.modelsDirectory = this.defaults.modelsDirectory
     }
-    if (!config.asrModelDirectory) config.asrModelDirectory = join(config.modelsDirectory, 'whisperlargev3turbo')
+    const usesLegacyAsrModel = basename(config.asrModelDirectory).toLowerCase() === legacyAsrModelDirectory
+    if (!config.asrModelDirectory || usesLegacyAsrModel) {
+      config.asrModelDirectory = join(config.modelsDirectory, fasterWhisperAsrModelDirectory)
+    }
     if (!config.translationModelDirectory) config.translationModelDirectory = join(config.modelsDirectory, 'HYMT21.8B')
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
@@ -74,7 +78,7 @@ export class RuntimeStore {
     }
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
-    return config
+    return usesLegacyAsrModel ? this.write(config) : config
   }
 
   write(next: KouboxConfig): KouboxConfig {
@@ -100,14 +104,20 @@ export function detectGpu(): GpuStatus {
   }
 }
 
-function inspectModel(id: string, label: string, directory: string, requiredFiles: string[]): ModelCheck {
+function inspectModel(
+  id: string,
+  label: string,
+  directory: string,
+  requiredFiles: string[],
+  format: ModelCheck['format'] = 'transformers'
+): ModelCheck {
   const missingFiles = requiredFiles.filter((file) => !existsSync(join(directory, file)))
   const configured = existsSync(directory)
   return {
     id,
     label,
     directory,
-    format: 'transformers',
+    format,
     configured,
     ready: configured && missingFiles.length === 0,
     expectedFiles: requiredFiles.length,
@@ -171,7 +181,7 @@ function inspectDemucs(directory: string): ModelCheck {
 
 export function resolveModelPaths(config: KouboxConfig): { asr: string; translation: string; demucs: string } {
   return {
-    asr: config.asrModelDirectory || join(config.modelsDirectory, 'whisperlargev3turbo'),
+    asr: config.asrModelDirectory || join(config.modelsDirectory, fasterWhisperAsrModelDirectory),
     translation: config.translationModelDirectory || join(config.modelsDirectory, 'HYMT21.8B'),
     demucs: config.demucsModelDirectory || join(config.modelsDirectory, 'demucs')
   }
@@ -199,7 +209,7 @@ export function getRuntimeStatus(config: KouboxConfig): RuntimeStatus {
     startedAt: new Date().toISOString(),
     gpu: detectGpu(),
     models: [
-      inspectModel('asr', 'Whisper Large v3 Turbo', modelPaths.asr, asrModelFiles),
+      inspectModel('asr', 'Faster-Whisper Large v3（FP16）', modelPaths.asr, asrModelFiles, 'ctranslate2'),
       inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
       inspectDemucs(modelPaths.demucs)
     ],

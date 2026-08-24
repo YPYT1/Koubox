@@ -29,9 +29,9 @@ type RequirementOnePageProps = {
 
 const STEPS = [
   { stage: 'download', label: '下载视频', desc: '解析链接并拉取视频文件' },
-  { stage: 'extract-audio', label: '提取原音频', desc: '保留含背景音乐的完整音轨' },
+  { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
   { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
-  { stage: 'asr', label: '语音识别', desc: '本地 Whisper 断句与时间轴' },
+  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' },
   { stage: 'translation', label: '翻译', desc: '按目标语种生成译文' }
 ]
 

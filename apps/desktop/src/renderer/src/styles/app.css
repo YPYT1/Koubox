@@ -1385,13 +1385,13 @@ button:disabled {
 }
 
 .step-connector.lit {
-  background: rgba(15, 118, 110, 0.25);
+  background: rgba(202, 138, 4, 0.28);
 }
 
 .step-connector.lit .step-connector-flow {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, transparent, var(--accent-teal), transparent);
+  background: linear-gradient(180deg, transparent, #facc15, #ca8a04, transparent);
   animation: connector-flow 1s linear infinite;
 }
 

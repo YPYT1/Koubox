@@ -49,7 +49,7 @@ export type ModelCheck = {
   id: string
   label: string
   directory: string
-  format: 'transformers'
+  format: 'transformers' | 'ctranslate2'
   ready: boolean
   configured: boolean
   expectedFiles: number

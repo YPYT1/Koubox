@@ -31,6 +31,10 @@ function modelBadge(id: string): string {
   return id
 }
 
+function modelFormatBadge(format: RuntimeStatus['models'][number]['format']): string {
+  return format === 'ctranslate2' ? 'CTranslate2 · FP16' : 'Transformers'
+}
+
 function modelPathKey(id: string): 'asrModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory' {
   if (id === 'asr') return 'asrModelDirectory'
   if (id === 'translation') return 'translationModelDirectory'
@@ -227,6 +231,7 @@ export function ModelsPage({
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <h4>{model.label}</h4>
                 <span className="panel-title-badge">{modelBadge(model.id)}</span>
+                <span className="panel-title-badge">{modelFormatBadge(model.format)}</span>
               </div>
               <p title={model.directory}>{model.directory}</p>
               {model.missingFiles.length > 0 && (
