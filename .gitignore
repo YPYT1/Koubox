@@ -11,6 +11,7 @@ Thumbs.db
 .env.*
 !.env.example
 python/.venv/
+python/**/__pycache__/
 python/wheels/*.whl
 python/asr-smoke.wav
 python/smoke-output/
