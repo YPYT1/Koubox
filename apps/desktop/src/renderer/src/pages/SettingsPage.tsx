@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   FloppyDisk,
   Question,
@@ -152,22 +152,42 @@ export function SettingsPage({
   const [openingLogin, setOpeningLogin] = useState(false)
   const [savingCookies, setSavingCookies] = useState(false)
   const [checkingCookies, setCheckingCookies] = useState(false)
+  const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
+  const cookieCheckDoneTimerRef = useRef<number | null>(null)
   const [cookieStatus, setCookieStatus] = useState<YtdlpCookieStatus | null>(null)
   const activeGuide = guide ? guides[guide] : null
   const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
   const useBuiltinLogin = cookieSource === 'builtin'
 
   const refreshCookieStatus = async () => {
+    const start = performance.now()
+    setCookieCheckCompleted(false)
+    if (cookieCheckDoneTimerRef.current) {
+      window.clearTimeout(cookieCheckDoneTimerRef.current)
+      cookieCheckDoneTimerRef.current = null
+    }
     setCheckingCookies(true)
+    let success = false
     try {
       const status = await window.koubox.get<YtdlpCookieStatus>('/browser/cookie-status')
       setCookieStatus(status)
+      success = true
       return status
     } catch (error) {
+      success = false
+      setCookieCheckCompleted(false)
       onShowToast(error instanceof Error ? error.message : '检测登录状态失败', 'error')
       return null
     } finally {
+      const elapsed = performance.now() - start
+      const minDurationMs = 900
+      if (elapsed < minDurationMs) {
+        await new Promise((resolve) => window.setTimeout(resolve, minDurationMs - elapsed))
+      }
       setCheckingCookies(false)
+      if (success) {
+        cookieCheckDoneTimerRef.current = window.setTimeout(() => setCookieCheckCompleted(false), 1200)
+      }
     }
   }
 
@@ -402,10 +422,14 @@ export function SettingsPage({
                   variant="secondary"
                   size="md"
                   loading={checkingCookies}
-                  icon={<ArrowsClockwise size={16} weight="bold" />}
+                  icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
                   onClick={() => void refreshCookieStatus()}
                 >
-                  检测登录状态
+                  {cookieCheckCompleted
+                    ? '检测完成'
+                    : checkingCookies
+                      ? '检测中…'
+                      : '检测登录状态'}
                 </Button>
               </div>
 
@@ -430,7 +454,7 @@ export function SettingsPage({
                           : <Warning size={15} weight="fill" />}
                         <div>
                           <strong>{platform.label}</strong>
-                          <span>{platform.loggedIn ? '已登录' : '未登录'}</span>
+                          <span>{platform.detail}</span>
                         </div>
                       </div>
                     ))}

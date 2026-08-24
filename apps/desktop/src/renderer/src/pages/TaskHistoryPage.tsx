@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ClipboardText, Clock, FileText, FolderOpen, Trash } from '@phosphor-icons/react'
+import { ClipboardText, Clock, FileText, FolderOpen, Trash, X, Copy, Check } from '@phosphor-icons/react'
 import { detectPlatform, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 
@@ -7,6 +7,14 @@ type TaskHistoryPageProps = {
   kind: TaskKind
   outputDirectory: string
   onShowToast: (message: string) => void
+}
+
+type PreviewType = 'video' | 'audio' | 'text'
+
+type ArtifactPreview = {
+  type: PreviewType
+  title: string
+  path: string
 }
 
 const ARTIFACT_LABEL: Partial<Record<keyof TaskArtifacts, string>> = {
@@ -42,6 +50,11 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
   const [loading, setLoading] = useState(true)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
   const [clearing, setClearing] = useState(false)
+  const [preview, setPreview] = useState<ArtifactPreview | null>(null)
+  const [previewText, setPreviewText] = useState('')
+  const [previewTextLoading, setPreviewTextLoading] = useState(false)
+  const [activeChipKey, setActiveChipKey] = useState<string | null>(null)
+  const [previewCopied, setPreviewCopied] = useState(false)
 
   const loadTasks = () => {
     setLoading(true)
@@ -62,9 +75,52 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
   const title = '任务中心'
   const subtitle = '按任务 ID 管理状态、产物与保存目录'
 
-  const handleCopyPath = (path: string) => {
+  const handleOpenPreview = async (taskId: string, key: keyof TaskArtifacts, path: string) => {
+    const chipKey = `${taskId}:${key}`
+    setActiveChipKey(chipKey)
+    window.setTimeout(() => {
+      setActiveChipKey((current) => (current === chipKey ? null : current))
+    }, 260)
+    const title = ARTIFACT_LABEL[key] ?? key
+    if (key === 'video') {
+      setPreview({ type: 'video', title, path })
+      setPreviewText('')
+      setPreviewTextLoading(false)
+      return
+    }
+    if (key === 'audio' || key === 'sourceAudio' || key === 'vocals') {
+      setPreview({ type: 'audio', title, path })
+      setPreviewText('')
+      setPreviewTextLoading(false)
+      return
+    }
+    if (key === 'transcriptText' || key === 'translationText' || key === 'srt') {
+      setPreview({ type: 'text', title, path })
+      setPreviewText('')
+      setPreviewTextLoading(true)
+      setPreviewCopied(false)
+      try {
+        const response = await fetch(window.koubox.mediaUrl(path))
+        if (!response.ok) throw new Error(`读取失败（${response.status}）`)
+        const text = await response.text()
+        setPreviewText(text)
+      } catch (err) {
+        setPreviewText('')
+        onShowToast(err instanceof Error ? err.message : '无法读取预览内容')
+      } finally {
+        setPreviewTextLoading(false)
+      }
+      return
+    }
     void navigator.clipboard.writeText(path)
     onShowToast('路径已复制')
+  }
+
+  const handleCopyPreviewText = async () => {
+    if (!previewText.trim()) return
+    await navigator.clipboard.writeText(previewText)
+    setPreviewCopied(true)
+    window.setTimeout(() => setPreviewCopied(false), 900)
   }
 
   const handleOpenDir = async (path: string) => {
@@ -200,8 +256,8 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
                       <button
                         type="button"
                         key={key}
-                        className="history-file-chip"
-                        onClick={() => handleCopyPath(filePath)}
+                        className={`history-file-chip ${activeChipKey === `${item.taskId}:${key}` ? 'is-active' : ''}`}
+                        onClick={() => void handleOpenPreview(item.taskId, key, filePath)}
                         title={filePath}
                       >
                         <FileText size={13} />
@@ -246,6 +302,45 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
               </article>
             )
           })}
+        </div>
+      )}
+      {preview && (
+        <div className="history-preview-overlay" onClick={() => setPreview(null)}>
+          <div className="history-preview-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="history-preview-head">
+              <h3>{preview.title}</h3>
+              <div className="history-preview-actions">
+                {preview.type === 'text' && (
+                  <button
+                    type="button"
+                    className={`btn-secondary history-preview-copy ${previewCopied ? 'is-copied' : ''}`}
+                    style={{ height: 30, padding: '0 10px', fontSize: 12 }}
+                    onClick={() => void handleCopyPreviewText()}
+                    disabled={previewTextLoading || !previewText.trim()}
+                  >
+                    {previewCopied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
+                    <span>{previewCopied ? '已复制' : '复制全文'}</span>
+                  </button>
+                )}
+                <button type="button" className="history-preview-close" onClick={() => setPreview(null)} aria-label="关闭预览">
+                  <X size={16} weight="bold" />
+                </button>
+              </div>
+            </div>
+            <div className="history-preview-body">
+              {preview.type === 'video' && (
+                <video className="history-preview-video" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
+              )}
+              {preview.type === 'audio' && (
+                <audio className="history-preview-audio" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
+              )}
+              {preview.type === 'text' && (
+                previewTextLoading
+                  ? <div className="history-preview-loading">正在读取内容…</div>
+                  : <pre className="history-preview-text">{previewText || '内容为空。'}</pre>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

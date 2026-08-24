@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -17,9 +18,18 @@ TARGET_PROMPTS = {
 1. 只输出这一句的译文，单行，不要编号、不要解释、不要合并其它句。
 2. 意思与语气必须准确；批评、强调、诱导等力度不可随意弱化或夸张。
 3. 日语数量单位必须换算正确：1兆円＝1万亿日元；「数兆円」＝「数万亿日元」，绝不可写成「数十万亿」。
-4. 术语：「禁じ手」→「禁忌手段/不愿动用的底牌」；「砦」→「防线」；SMR →「小型模块化反应堆」。
-5. 专有名词按语境意译正确含义，不要硬造无意义音译。
-6. 读起来像国内财经短视频口播，但不要为了“爆款感”改变事实或数量。""",
+4. 财经高频词按下列风格优先翻译（可按上下文微调）：
+   - 「最後の砦」→「最后一道底牌」（语境不合时可译为“最后一道防线”）
+   - 「安堵のため息」→「松了一口气」（禁止直译成“安心叹息”）
+   - 「思考停止/思考が停止」→「思考已经停止」（语气较缓时可译为“陷入思维停滞”）
+   - 「利権」→「既得利益链」（语境不合时可译为“利益链”）
+   - 「流し込む」→「大举注入」（语境不合时可译为“快速灌入”）
+   - 「強制措置」→「强制措施」（新闻快讯标题可译“非常手段”）
+   - 「石油を捨て」→「放下石油路线」（避免生硬“抛弃石油”）
+5. 句子要像中文母语财经口播：短句、有冲击力，避免日式直译腔与书面僵硬表达。
+6. 专有名词按语境意译正确含义，不要硬造无意义音译。
+7. 允许保留“煽动感/警报感/标题党节奏”，但不得篡改事实、数字或主体关系。
+8. 只输出一个最终版本，禁止输出“/”、“或”、“()”里的候选写法。""",
     "zh-Hant": """你是日語財經短視頻字幕譯者。將【當前句】譯為繁體中文。
 
 硬性要求：
@@ -69,6 +79,21 @@ def clean_output(text: str) -> str:
     if len(value) >= 2 and value[0] in "\"'「『" and value[-1] in "\"'」』":
         value = value[1:-1].strip()
     return value.strip().replace("\r\n", "\n").replace("\n", " ").strip()
+
+
+def _normalize_zh_line(text: str, source_line: str) -> str:
+    value = text.strip()
+    if not value:
+        return value
+    # Remove occasional leaked junk token.
+    value = re.sub(r"\bolan\b", "", value, flags=re.IGNORECASE).strip()
+    # Keep only one wording when the model accidentally outputs A/B.
+    value = re.sub(r"([^\s/]{2,})\s*/\s*([^\s/]{2,})", r"\1", value)
+    # Smooth a common headline phrase for Chinese short-video style.
+    if "緊急速報" in source_line and "紧急新闻" in value:
+        value = value.replace("紧急新闻", "紧急快讯")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
 
 
 def _is_japanese_source(source_language: str, lines: list[str]) -> bool:
@@ -216,10 +241,18 @@ def run(
             line,
             deterministic=False,
         )
+        if target_language == "zh-Hans":
+            translated_line = _normalize_zh_line(translated_line, line)
         if not translated_line:
             fail("TRANSLATION_EMPTY", f"第 {index + 1} 句没有生成有效译文。")
             return
         translated.append(translated_line)
+        send(
+            "translation-line",
+            lineIndex=index,
+            totalLines=total,
+            text=translated_line,
+        )
 
     del model
     if torch.cuda.is_available():

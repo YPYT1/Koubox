@@ -145,8 +145,7 @@ export function RequirementTwoPage({
   }
 
   const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text)
-    onShowToast('已复制到剪贴板', 'success')
+    void navigator.clipboard.writeText(text)
   }
 
   const transcriptText = task?.transcript?.segments

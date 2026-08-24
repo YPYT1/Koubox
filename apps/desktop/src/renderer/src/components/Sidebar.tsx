@@ -9,6 +9,7 @@ import {
   Subtitles
 } from '@phosphor-icons/react'
 import type { RuntimeStatus, TaskStatus, ToolId, ToolManifest } from '@koubox/shared'
+import kouboxIcon from '../assets/koubox-icon.png'
 
 type FixedPage = 'home' | 'models' | 'settings'
 type Focus = { kind: 'fixed'; page: FixedPage } | { kind: 'tool'; toolId: ToolId; menu: string }
@@ -124,8 +125,15 @@ export function Sidebar({
   return (
     <aside className="sidebar" ref={sidebarRef}>
       <div className="sidebar-content">
+        <div className="sidebar-brand">
+          <img className="sidebar-brand-icon" src={kouboxIcon} alt="口播匣" />
+          <div className="sidebar-brand-text">
+            <strong>口播匣</strong>
+            <span>本地口播工作台</span>
+          </div>
+        </div>
+
         <div className="sidebar-section">
-          <div className="sidebar-label">工作区</div>
           <button
             type="button"
             className={`nav-item ${focus.kind === 'fixed' && focus.page === 'home' ? 'active' : ''}`}

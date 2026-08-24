@@ -110,7 +110,8 @@
         for (const platform of status.platforms) {
           const badge = document.getElementById(`status-${platform.id}`)
           if (!badge) continue
-          badge.textContent = platform.loggedIn ? '已登录' : '未登录'
+          badge.textContent = platform.loggedIn ? '已登录' : (platform.id === 'instagram' ? '未进入主页' : '未登录')
+          badge.title = platform.detail
           badge.className = `status-badge ${platform.loggedIn ? 'ok' : 'warn'}`
         }
       }

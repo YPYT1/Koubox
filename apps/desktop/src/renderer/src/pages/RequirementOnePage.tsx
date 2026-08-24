@@ -7,9 +7,9 @@ import {
   Waveform,
   Play,
   Pause,
-  ArrowRight,
   ArrowsOut,
-  ArrowsIn
+  ArrowsIn,
+  Check
 } from '@phosphor-icons/react'
 import { toUserTaskMessage, type TaskEvent, type TaskSnapshot, type TranslationTargetLanguage } from '@koubox/shared'
 import { Button } from '../components/common/Button'
@@ -48,8 +48,8 @@ export function RequirementOnePage({
   const [targetLanguage, setTargetLanguage] = useState<TranslationTargetLanguage>(translationTargetLanguage)
   const [task, setTask] = useState<TaskSnapshot | null>(null)
   const [starting, setStarting] = useState(false)
-  const [translating, setTranslating] = useState(false)
   const [textExpanded, setTextExpanded] = useState(false)
+  const [copiedSection, setCopiedSection] = useState<'original' | 'translated' | null>(null)
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [audioPlaying, setAudioPlaying] = useState(false)
   const [vocalsPlaying, setVocalsPlaying] = useState(false)
@@ -145,24 +145,6 @@ export function RequirementOnePage({
     }
   }
 
-  const handleTranslate = async () => {
-    if (!task) return
-    setTranslating(true)
-    try {
-      const updated = await window.koubox.post<TaskSnapshot>(
-        `/tasks/${encodeURIComponent(task.taskId)}/translate`,
-        { targetLanguage }
-      )
-      setTask(updated)
-      onTaskStatus?.(updated.status)
-      onShowToast('翻译完成', 'success')
-    } catch (err) {
-      onShowToast(err instanceof Error ? err.message : '翻译失败', 'error')
-    } finally {
-      setTranslating(false)
-    }
-  }
-
   const handleCancel = async () => {
     if (!task) return
     try {
@@ -177,9 +159,12 @@ export function RequirementOnePage({
     }
   }
 
-  const handleCopy = async (text: string) => {
+  const handleCopy = async (text: string, section: 'original' | 'translated') => {
     await navigator.clipboard.writeText(text)
-    onShowToast('已复制到剪贴板', 'success')
+    setCopiedSection(section)
+    window.setTimeout(() => {
+      setCopiedSection((current) => (current === section ? null : current))
+    }, 900)
   }
 
   const playVideo = async () => {
@@ -315,7 +300,7 @@ export function RequirementOnePage({
               className="input-text"
               value={targetLanguage}
               onChange={(e) => setTargetLanguage(e.target.value as TranslationTargetLanguage)}
-              disabled={isTaskRunning || translating}
+              disabled={isTaskRunning}
             >
               {TARGET_LANGUAGE_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
@@ -581,12 +566,13 @@ export function RequirementOnePage({
                 </button>
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className={`btn-secondary ${copiedSection === 'original' ? 'btn-copy-done' : ''}`}
                   style={{ height: 32 }}
                   disabled={originalLines.length === 0}
-                  onClick={() => void handleCopy(originalLines.join('\n'))}
+                  onClick={() => void handleCopy(originalLines.join('\n'), 'original')}
                 >
-                  <Copy size={14} /> 复制
+                  {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'original' ? '已复制' : '复制'}
                 </button>
               </div>
             </div>
@@ -608,19 +594,6 @@ export function RequirementOnePage({
             </div>
           </div>
 
-          <div className="viral-translate-bridge">
-            <button
-              type="button"
-              className="viral-translate-arrow"
-              onClick={handleTranslate}
-              disabled={!task?.transcript || translating || isTaskRunning}
-              title="翻译"
-            >
-              <span>{translating ? '…' : '翻译'}</span>
-              <ArrowRight size={18} weight="bold" />
-            </button>
-          </div>
-
           <div className="viral-text-card">
             <div className="viral-text-head">
               <h4>翻译文案</h4>
@@ -636,12 +609,13 @@ export function RequirementOnePage({
                 </button>
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className={`btn-secondary ${copiedSection === 'translated' ? 'btn-copy-done' : ''}`}
                   style={{ height: 32 }}
                   disabled={translatedLines.length === 0}
-                  onClick={() => void handleCopy(translatedLines.join('\n'))}
+                  onClick={() => void handleCopy(translatedLines.join('\n'), 'translated')}
                 >
-                  <Copy size={14} /> 复制
+                  {copiedSection === 'translated' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'translated' ? '已复制' : '复制'}
                 </button>
               </div>
             </div>

@@ -52,6 +52,8 @@ type WorkerMessage = {
   language?: string
   segments?: Transcript['segments']
   text?: string
+  lineIndex?: number
+  totalLines?: number
   translatedLines?: string[]
   correctedLines?: string[]
   vocalsPath?: string
@@ -298,39 +300,7 @@ export class TaskManager {
 
     this.update(record, { status: 'running', stage: 'translation', percent: 0, message: '正在加载本地翻译模型' })
     try {
-      const response = await this.runWorker(record, 'translate', {
-        modelDirectory: modelPaths.translation,
-        text: sourceText,
-        lines: sourceLines,
-        sourceLanguage: record.task.language ?? '',
-        targetLanguage: target,
-        temperature: config.translationTemperature,
-        maxNewTokens: config.translationMaxNewTokens,
-        topP: config.translationTopP
-      }, (message) => {
-        if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
-      })
-      if (response.type !== 'translation' || !Array.isArray(response.translatedLines)) {
-        throw new Error('翻译运行器没有返回严格逐句译文数组。')
-      }
-      const translatedLines = response.translatedLines.map((line) => String(line).trim())
-      if (translatedLines.length !== sourceLines.length || translatedLines.some((line) => !line)) {
-        throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
-      }
-      if (response.correctedLines && response.correctedLines.length !== sourceLines.length) {
-        throw new Error(`日语校正行数与原文不一致：原文 ${sourceLines.length} 行，校正 ${response.correctedLines.length} 行。`)
-      }
-      if (response.correctedLines && record.task.transcript) {
-        let lineIndex = 0
-        const merged = record.task.transcript.segments.map((segment) => {
-          if (!segment.text.trim()) return segment
-          const nextText = response.correctedLines![lineIndex]
-          lineIndex += 1
-          return { ...segment, text: nextText }
-        })
-        this.writeTranscript(record, { language: record.task.transcript.language, segments: merged })
-      }
-      this.writeTranslation(record, translatedLines.join('\n'), target, translatedLines)
+      await this.performTranslation(record, modelPaths.translation, target, sourceLines, sourceText)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '翻译完成' })
       return this.clone(record.task)
     } catch (error) {
@@ -398,7 +368,13 @@ export class TaskManager {
       record.task.artifacts.vocals = vocals
       this.persist(record)
       await this.performAsr(record, audio, modelPaths.asr, 55)
-      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别完成' })
+      const target = this.options.getConfig().translationTargetLanguage
+      this.update(record, { stage: 'translation', percent: 84, message: '正在翻译文案' })
+      const sourceLines = (record.task.transcript?.segments ?? []).map((segment) => segment.text.trim()).filter(Boolean)
+      const sourceText = sourceLines.join('\n')
+      if (!sourceText) throw new Error('原文为空，无法翻译。')
+      await this.performTranslation(record, modelPaths.translation, target, sourceLines, sourceText)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别与翻译完成' })
     } catch (error) {
       if (record.cancelled) return
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
@@ -457,6 +433,67 @@ export class TaskManager {
     })
     if (response.type !== 'transcript' || !response.segments) throw new Error('ASR 运行器没有返回带时间戳的原文。')
     this.writeTranscript(record, { language: response.language, segments: response.segments })
+  }
+
+  private async performTranslation(
+    record: TaskRecord,
+    translationModelDirectory: string,
+    target: TranslationTargetLanguage,
+    sourceLines: string[],
+    sourceText: string
+  ): Promise<void> {
+    if (shouldSkipTranslation(record.task.language, target)) {
+      this.writeTranslation(record, sourceText, target, sourceLines)
+      return
+    }
+    const config = this.options.getConfig()
+    const response = await this.runWorker(record, 'translate', {
+      modelDirectory: translationModelDirectory,
+      text: sourceText,
+      lines: sourceLines,
+      sourceLanguage: record.task.language ?? '',
+      targetLanguage: target,
+      temperature: config.translationTemperature,
+      maxNewTokens: config.translationMaxNewTokens,
+      topP: config.translationTopP
+    }, (message) => {
+      if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
+      if (message.type === 'translation-line' && typeof message.lineIndex === 'number' && typeof message.text === 'string') {
+        const currentLines = [...(record.task.translationLines ?? [])]
+        currentLines[message.lineIndex] = message.text.trim()
+        const visibleLines = currentLines.filter((line) => typeof line === 'string' && line.trim().length > 0)
+        this.writeTranslation(record, visibleLines.join('\n'), target, visibleLines)
+        this.update(record, {
+          translation: visibleLines.join('\n'),
+          translationLines: visibleLines,
+          percent: Math.max(1, Math.min(99, message.percent ?? record.task.percent)),
+          message: message.totalLines
+            ? `正在翻译第 ${message.lineIndex + 1}/${message.totalLines} 句`
+            : `正在翻译第 ${message.lineIndex + 1} 句`
+        })
+      }
+    })
+    if (response.type !== 'translation' || !Array.isArray(response.translatedLines)) {
+      throw new Error('翻译运行器没有返回严格逐句译文数组。')
+    }
+    const translatedLines = response.translatedLines.map((line) => String(line).trim())
+    if (translatedLines.length !== sourceLines.length || translatedLines.some((line) => !line)) {
+      throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
+    }
+    if (response.correctedLines && response.correctedLines.length !== sourceLines.length) {
+      throw new Error(`日语校正行数与原文不一致：原文 ${sourceLines.length} 行，校正 ${response.correctedLines.length} 行。`)
+    }
+    if (response.correctedLines && record.task.transcript) {
+      let lineIndex = 0
+      const merged = record.task.transcript.segments.map((segment) => {
+        if (!segment.text.trim()) return segment
+        const nextText = response.correctedLines![lineIndex]
+        lineIndex += 1
+        return { ...segment, text: nextText }
+      })
+      this.writeTranscript(record, { language: record.task.transcript.language, segments: merged })
+    }
+    this.writeTranslation(record, translatedLines.join('\n'), target, translatedLines)
   }
 
   private writeTranscript(record: TaskRecord, transcript: Transcript): void {
