@@ -5,7 +5,8 @@ import react from '@vitejs/plugin-react'
 
 const aliases = {
   '@koubox/core': resolve(__dirname, '../../packages/core/src'),
-  '@koubox/shared': resolve(__dirname, '../../packages/shared/src')
+  '@koubox/shared': resolve(__dirname, '../../packages/shared/src'),
+  '@koubox/shared/logger': resolve(__dirname, '../../packages/shared/src/logger.ts')
 }
 
 export default defineConfig({

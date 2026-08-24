@@ -36,11 +36,13 @@ def main() -> None:
             elif operation == "translate":
                 run_translate(
                     request["modelDirectory"],
-                    request["text"],
+                    request.get("text", ""),
                     target_language=request.get("targetLanguage", "zh-Hans"),
                     temperature=float(request.get("temperature", 0.7)),
                     max_new_tokens=int(request.get("maxNewTokens", 4096)),
                     top_p=float(request.get("topP", 0.8)),
+                    lines=request.get("lines"),
+                    source_language=str(request.get("sourceLanguage") or ""),
                 )
             else:
                 fail("INVALID_OPERATION", f"不支持的本地运行操作：{operation}")

@@ -6,6 +6,7 @@ import {
   FilmStrip,
   Waveform,
   Play,
+  Pause,
   ArrowRight,
   ArrowsOut,
   ArrowsIn
@@ -52,6 +53,9 @@ export function RequirementOnePage({
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [audioPlaying, setAudioPlaying] = useState(false)
   const [vocalsPlaying, setVocalsPlaying] = useState(false)
+  const [audioProgress, setAudioProgress] = useState({ current: 0, duration: 0 })
+  const [vocalsProgress, setVocalsProgress] = useState({ current: 0, duration: 0 })
+  const [videoOrientation, setVideoOrientation] = useState<'portrait' | 'landscape' | 'unknown'>('unknown')
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const vocalsRef = useRef<HTMLAudioElement>(null)
@@ -189,6 +193,14 @@ export function RequirementOnePage({
     }
   }
 
+  const formatAudioTime = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
+    const total = Math.floor(seconds)
+    const m = Math.floor(total / 60)
+    const s = String(total % 60).padStart(2, '0')
+    return `${m}:${s}`
+  }
+
   const playAudio = async () => {
     const el = audioRef.current
     if (!el) return
@@ -213,6 +225,12 @@ export function RequirementOnePage({
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '人声音频无法播放', 'error')
     }
+  }
+
+  const seekAudio = (ratio: number, kind: 'audio' | 'vocals') => {
+    const el = kind === 'audio' ? audioRef.current : vocalsRef.current
+    if (!el || !Number.isFinite(el.duration) || el.duration <= 0) return
+    el.currentTime = Math.max(0, Math.min(1, ratio)) * el.duration
   }
 
   const syncScrollFromOriginal = () => {
@@ -247,6 +265,11 @@ export function RequirementOnePage({
   const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
   const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
+
+  useEffect(() => {
+    setVideoOrientation('unknown')
+    setVideoPlaying(false)
+  }, [videoSrc])
 
   return (
     <div className="page-container viral-page">
@@ -367,205 +390,275 @@ export function RequirementOnePage({
         </section>
       </div>
 
-      <div className="viral-media-grid">
-        <section className="panel-box viral-media-card viral-media-video">
-          <div className="panel-title">
-            <h3><FilmStrip size={16} /> 下载好的视频</h3>
-          </div>
-          {videoSrc ? (
-            <div className="viral-media-frame">
-              <video
-                ref={videoRef}
-                className="viral-media-player"
-                controls
-                preload="metadata"
-                src={videoSrc}
-                onPlay={() => setVideoPlaying(true)}
-                onPause={() => setVideoPlaying(false)}
-                onEnded={() => setVideoPlaying(false)}
-              />
-              {!videoPlaying && (
-                <button type="button" className="viral-media-play" onClick={() => void playVideo()} aria-label="播放视频">
-                  <Play size={28} weight="fill" />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="viral-media-empty">下载完成后可在此预览播放</div>
-          )}
-        </section>
-        <section className="panel-box viral-media-card">
-          <div className="panel-title">
-            <h3><Waveform size={16} /> 原音频（含 BGM）</h3>
-          </div>
-          {audioSrc ? (
-            <div className="viral-audio-frame">
-              <button
-                type="button"
-                className={`viral-audio-play-btn ${audioPlaying ? 'playing' : ''}`}
-                onClick={() => {
-                  if (audioPlaying) {
-                    audioRef.current?.pause()
-                    setAudioPlaying(false)
-                  } else {
-                    void playAudio()
-                  }
-                }}
-                aria-label={audioPlaying ? '暂停原音频' : '播放原音频'}
-              >
-                <Play size={22} weight="fill" />
-              </button>
-              <audio
-                ref={audioRef}
-                className="viral-audio-player"
-                controls
-                preload="metadata"
-                src={audioSrc}
-                onPlay={() => setAudioPlaying(true)}
-                onPause={() => setAudioPlaying(false)}
-                onEnded={() => setAudioPlaying(false)}
-              />
-            </div>
-          ) : (
-            <div className="viral-media-empty">抽音完成后可在此试听原音</div>
-          )}
-        </section>
-        <section className="panel-box viral-media-card">
-          <div className="panel-title">
-            <h3><Waveform size={16} /> 人声（去背景音乐）</h3>
-          </div>
-          {vocalsSrc ? (
-            <div className="viral-audio-frame">
-              <button
-                type="button"
-                className={`viral-audio-play-btn ${vocalsPlaying ? 'playing' : ''}`}
-                onClick={() => {
-                  if (vocalsPlaying) {
-                    vocalsRef.current?.pause()
-                    setVocalsPlaying(false)
-                  } else {
-                    void playVocals()
-                  }
-                }}
-                aria-label={vocalsPlaying ? '暂停人声' : '播放人声'}
-              >
-                <Play size={22} weight="fill" />
-              </button>
-              <audio
-                ref={vocalsRef}
-                className="viral-audio-player"
-                controls
-                preload="metadata"
-                src={vocalsSrc}
-                onPlay={() => setVocalsPlaying(true)}
-                onPause={() => setVocalsPlaying(false)}
-                onEnded={() => setVocalsPlaying(false)}
-              />
-            </div>
-          ) : (
-            <div className="viral-media-empty">人声分离完成后可在此对比试听</div>
-          )}
-        </section>
-      </div>
-
-      <div className={`viral-text-grid ${textExpanded ? 'expanded' : ''}`}>
-        <section className="panel-box viral-text-card">
-          <div className="panel-title">
-            <h3>原始文案</h3>
-            <div className="viral-text-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                onClick={() => setTextExpanded((value) => !value)}
-              >
-                {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-                {textExpanded ? '收起' : '展开'}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                disabled={originalLines.length === 0}
-                onClick={() => void handleCopy(originalLines.join('\n'))}
-              >
-                <Copy size={14} /> 复制
-              </button>
-            </div>
-          </div>
-          <div
-            className="viral-line-list"
-            ref={originalListRef}
-            onScroll={syncScrollFromOriginal}
-          >
-            {originalLines.length === 0 ? (
-              <div className="viral-media-empty">识别完成后按「一行一句」展示</div>
-            ) : (
-              originalLines.map((line, index) => (
-                <div className="viral-line-row" key={`o-${index}`}>
-                  <span className="viral-line-index">{index + 1}</span>
-                  <span className="viral-line-text">{line}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <div className="viral-translate-bridge">
-          <button
-            type="button"
-            className="viral-translate-arrow"
-            onClick={handleTranslate}
-            disabled={!task?.transcript || translating || isTaskRunning}
-            title="翻译"
-          >
-            <span>{translating ? '…' : '翻译'}</span>
-            <ArrowRight size={18} weight="bold" />
-          </button>
+      <section className="panel-box viral-preview-panel">
+        <div className="panel-title">
+          <h3>素材预览</h3>
+          <span className="viral-preview-hint">短视频默认 9:16 竖屏，横屏会自动适配</span>
         </div>
 
-        <section className="panel-box viral-text-card">
-          <div className="panel-title">
-            <h3>翻译文案</h3>
-            <div className="viral-text-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                onClick={() => setTextExpanded((value) => !value)}
-              >
-                {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-                {textExpanded ? '收起' : '展开'}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                disabled={translatedLines.length === 0}
-                onClick={() => void handleCopy(translatedLines.join('\n'))}
-              >
-                <Copy size={14} /> 复制
-              </button>
+        <div className={`viral-preview-grid ${videoOrientation === 'landscape' ? 'is-landscape' : 'is-portrait-layout'}`}>
+          <div className="viral-video-column">
+            <div className="viral-slot-label">
+              <FilmStrip size={15} />
+              <span>视频</span>
             </div>
-          </div>
-          <div
-            className="viral-line-list"
-            ref={translatedListRef}
-            onScroll={syncScrollFromTranslated}
-          >
-            {translatedLines.length === 0 ? (
-              <div className="viral-media-empty">点击中间翻译后，与原文逐行对应展示</div>
+            {videoSrc ? (
+              <div className={`viral-media-frame is-${videoOrientation}`}>
+                <video
+                  ref={videoRef}
+                  className="viral-media-player"
+                  controls
+                  preload="metadata"
+                  src={videoSrc}
+                  onLoadedMetadata={(e) => {
+                    const el = e.currentTarget
+                    setVideoOrientation(el.videoHeight >= el.videoWidth ? 'portrait' : 'landscape')
+                  }}
+                  onPlay={() => setVideoPlaying(true)}
+                  onPause={() => setVideoPlaying(false)}
+                  onEnded={() => setVideoPlaying(false)}
+                />
+                {!videoPlaying && (
+                  <button type="button" className="viral-media-play" onClick={() => void playVideo()} aria-label="播放视频">
+                    <Play size={26} weight="fill" />
+                  </button>
+                )}
+              </div>
             ) : (
-              Array.from({ length: lineCount }, (_, index) => (
-                <div className="viral-line-row" key={`t-${index}`}>
-                  <span className="viral-line-index">{index + 1}</span>
-                  <span className="viral-line-text">{translatedLines[index] || '—'}</span>
-                </div>
-              ))
+              <div className="viral-phone-placeholder">
+                <span>下载完成后在此预览</span>
+                <small>9:16 竖屏</small>
+              </div>
             )}
           </div>
-        </section>
-      </div>
+
+          <div className="viral-audio-column">
+            <div className="viral-audio-slot">
+              <div className="viral-slot-label">
+                <Waveform size={15} />
+                <span>原音频（含 BGM）</span>
+              </div>
+              {audioSrc ? (
+                <div className="viral-audio-frame">
+                  <audio
+                    ref={audioRef}
+                    preload="metadata"
+                    src={audioSrc}
+                    onPlay={() => setAudioPlaying(true)}
+                    onPause={() => setAudioPlaying(false)}
+                    onEnded={() => setAudioPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      setAudioProgress({ current: 0, duration: e.currentTarget.duration || 0 })
+                    }}
+                    onTimeUpdate={(e) => {
+                      setAudioProgress({
+                        current: e.currentTarget.currentTime,
+                        duration: e.currentTarget.duration || 0
+                      })
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={`viral-audio-play-btn ${audioPlaying ? 'playing' : ''}`}
+                    onClick={() => {
+                      if (audioPlaying) {
+                        audioRef.current?.pause()
+                        setAudioPlaying(false)
+                      } else {
+                        void playAudio()
+                      }
+                    }}
+                    aria-label={audioPlaying ? '暂停原音频' : '播放原音频'}
+                  >
+                    {audioPlaying ? <Pause size={20} weight="fill" /> : <Play size={20} weight="fill" />}
+                  </button>
+                  <div className="viral-audio-meta">
+                    <input
+                      type="range"
+                      className="viral-audio-seek"
+                      min={0}
+                      max={1000}
+                      value={audioProgress.duration > 0 ? Math.round((audioProgress.current / audioProgress.duration) * 1000) : 0}
+                      onChange={(e) => seekAudio(Number(e.target.value) / 1000, 'audio')}
+                      aria-label="原音频进度"
+                    />
+                    <div className="viral-audio-time">
+                      <span>{formatAudioTime(audioProgress.current)}</span>
+                      <span>{formatAudioTime(audioProgress.duration)}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="viral-slot-empty">抽音完成后可在此试听原音</div>
+              )}
+            </div>
+
+            <div className="viral-audio-slot">
+              <div className="viral-slot-label">
+                <Waveform size={15} />
+                <span>人声（去背景音乐）</span>
+              </div>
+              {vocalsSrc ? (
+                <div className="viral-audio-frame">
+                  <audio
+                    ref={vocalsRef}
+                    preload="metadata"
+                    src={vocalsSrc}
+                    onPlay={() => setVocalsPlaying(true)}
+                    onPause={() => setVocalsPlaying(false)}
+                    onEnded={() => setVocalsPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      setVocalsProgress({ current: 0, duration: e.currentTarget.duration || 0 })
+                    }}
+                    onTimeUpdate={(e) => {
+                      setVocalsProgress({
+                        current: e.currentTarget.currentTime,
+                        duration: e.currentTarget.duration || 0
+                      })
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={`viral-audio-play-btn ${vocalsPlaying ? 'playing' : ''}`}
+                    onClick={() => {
+                      if (vocalsPlaying) {
+                        vocalsRef.current?.pause()
+                        setVocalsPlaying(false)
+                      } else {
+                        void playVocals()
+                      }
+                    }}
+                    aria-label={vocalsPlaying ? '暂停人声' : '播放人声'}
+                  >
+                    {vocalsPlaying ? <Pause size={20} weight="fill" /> : <Play size={20} weight="fill" />}
+                  </button>
+                  <div className="viral-audio-meta">
+                    <input
+                      type="range"
+                      className="viral-audio-seek"
+                      min={0}
+                      max={1000}
+                      value={vocalsProgress.duration > 0 ? Math.round((vocalsProgress.current / vocalsProgress.duration) * 1000) : 0}
+                      onChange={(e) => seekAudio(Number(e.target.value) / 1000, 'vocals')}
+                      aria-label="人声进度"
+                    />
+                    <div className="viral-audio-time">
+                      <span>{formatAudioTime(vocalsProgress.current)}</span>
+                      <span>{formatAudioTime(vocalsProgress.duration)}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="viral-slot-empty">人声分离完成后可在此对比试听</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={`panel-box viral-text-panel ${textExpanded ? 'expanded' : ''}`}>
+        <div className="panel-title">
+          <h3>文案与翻译</h3>
+        </div>
+        <div className="viral-text-grid">
+          <div className="viral-text-card">
+            <div className="viral-text-head">
+              <h4>原始文案</h4>
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ height: 32 }}
+                  onClick={() => setTextExpanded((value) => !value)}
+                >
+                  {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+                  {textExpanded ? '收起' : '展开'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ height: 32 }}
+                  disabled={originalLines.length === 0}
+                  onClick={() => void handleCopy(originalLines.join('\n'))}
+                >
+                  <Copy size={14} /> 复制
+                </button>
+              </div>
+            </div>
+            <div
+              className="viral-line-list"
+              ref={originalListRef}
+              onScroll={syncScrollFromOriginal}
+            >
+              {originalLines.length === 0 ? (
+                <div className="viral-slot-empty">识别完成后按「一行一句」展示</div>
+              ) : (
+                originalLines.map((line, index) => (
+                  <div className="viral-line-row" key={`o-${index}`}>
+                    <span className="viral-line-index">{index + 1}</span>
+                    <span className="viral-line-text">{line}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="viral-translate-bridge">
+            <button
+              type="button"
+              className="viral-translate-arrow"
+              onClick={handleTranslate}
+              disabled={!task?.transcript || translating || isTaskRunning}
+              title="翻译"
+            >
+              <span>{translating ? '…' : '翻译'}</span>
+              <ArrowRight size={18} weight="bold" />
+            </button>
+          </div>
+
+          <div className="viral-text-card">
+            <div className="viral-text-head">
+              <h4>翻译文案</h4>
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ height: 32 }}
+                  onClick={() => setTextExpanded((value) => !value)}
+                >
+                  {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+                  {textExpanded ? '收起' : '展开'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ height: 32 }}
+                  disabled={translatedLines.length === 0}
+                  onClick={() => void handleCopy(translatedLines.join('\n'))}
+                >
+                  <Copy size={14} /> 复制
+                </button>
+              </div>
+            </div>
+            <div
+              className="viral-line-list"
+              ref={translatedListRef}
+              onScroll={syncScrollFromTranslated}
+            >
+              {translatedLines.length === 0 ? (
+                <div className="viral-slot-empty">点击中间翻译后，与原文逐行对应展示</div>
+              ) : (
+                Array.from({ length: lineCount }, (_, index) => (
+                  <div className="viral-line-row" key={`t-${index}`}>
+                    <span className="viral-line-index">{index + 1}</span>
+                    <span className="viral-line-text">{translatedLines[index] || '—'}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }

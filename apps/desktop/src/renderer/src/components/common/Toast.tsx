@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { X, CheckCircle, WarningCircle, Info } from '@phosphor-icons/react'
 
 export interface ToastMessage {
@@ -12,6 +13,12 @@ export interface ToastProps {
 }
 
 export function Toast({ toast, onClose }: ToastProps) {
+  useEffect(() => {
+    if (!toast) return
+    const timer = window.setTimeout(onClose, 5000)
+    return () => window.clearTimeout(timer)
+  }, [toast?.id])
+
   if (!toast) return null
 
   const icons = {

@@ -37,6 +37,13 @@
   --accent-purple-soft: #f5f3ff;
   --accent-purple-border: #ddd6fe;
 
+  /* 进度/强调暖金（与品牌青绿区分：进度用金，操作仍用青绿） */
+  --accent-gold: #c7953a;
+  --accent-gold-bright: #e4b84a;
+  --accent-gold-deep: #a67c2d;
+  --accent-gold-soft: #fbf6ea;
+  --accent-gold-border: #e8d4a0;
+
   --status-success: #10b981;
   --status-success-soft: #ecfdf5;
   --status-warning: #f59e0b;

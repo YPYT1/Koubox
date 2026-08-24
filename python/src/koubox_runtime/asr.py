@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
+from .log import write as log_write
 from .protocol import fail, send
 
 
@@ -57,13 +58,22 @@ def run(model_directory: str, audio_path: str, language: str = "auto", chunk_len
     )
     audio, sample_rate = read_wav(audio_path)
     send("progress", stage="transcribing", percent=18, message="正在识别音频")
+
+    # 财经短视频：确定性解码 + 关闭上文条件，降低幻觉与关键词循环。
     generate_kwargs: dict[str, object] = {
         "task": "transcribe",
         "condition_on_prev_tokens": False,
+        "do_sample": False,
+        "num_beams": 5,
+        "temperature": 0.0,
     }
     whisper_language = WHISPER_LANGUAGE_MAP.get(language)
     if whisper_language:
         generate_kwargs["language"] = whisper_language
+        log_write("info", "asr", f"强制语种: {whisper_language}")
+    else:
+        log_write("info", "asr", "语种: auto")
+
     result = recognizer(
         {"array": audio, "sampling_rate": sample_rate},
         return_timestamps=True,

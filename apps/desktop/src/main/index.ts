@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDi
 import { existsSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { startLocalApi } from '@koubox/core'
-import { initLogger, createLogger } from '@koubox/shared'
+import { initLogger, createLogger } from '@koubox/shared/logger'
 import { buildLoginCookieStatus, exportLoginCookies, applyLoginSessionProxy, readLoginCookies, cookiesToNetscape } from './cookies'
 
 let mainWindow: BrowserWindow | undefined

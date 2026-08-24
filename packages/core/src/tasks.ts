@@ -14,7 +14,8 @@ import type {
   Transcript,
   TranslationTargetLanguage
 } from '@koubox/shared'
-import { toUserTaskMessage, normalizeProxyUrl, createLogger, getLoggerEnv } from '@koubox/shared'
+import { toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
+import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 
 const log = createLogger('tasks')
 
@@ -51,6 +52,7 @@ type WorkerMessage = {
   language?: string
   segments?: Transcript['segments']
   text?: string
+  correctedLines?: string[]
   vocalsPath?: string
 }
 
@@ -192,6 +194,8 @@ export class TaskManager {
     const outputRoot = resolve(outputDirectory)
     mkdirSync(outputRoot, { recursive: true })
     const id = allocateTaskId('req1', url, outputRoot, [...this.records.keys()])
+    const taskDir = join(outputRoot, id)
+    mkdirSync(taskDir, { recursive: true })
     const task: TaskSnapshot = {
       taskId: id,
       kind: 'req1',
@@ -200,8 +204,8 @@ export class TaskManager {
       percent: 0,
       message: '任务已排队',
       url,
-      outputDirectory: outputRoot,
-      taskDirectory: outputRoot,
+      outputDirectory: taskDir,
+      taskDirectory: taskDir,
       artifacts: {},
       createdAt: now(),
       updatedAt: now()
@@ -217,6 +221,8 @@ export class TaskManager {
     const outputRoot = resolve(outputDirectory)
     mkdirSync(outputRoot, { recursive: true })
     const id = allocateTaskId('req2', audioPath, outputRoot, [...this.records.keys()])
+    const taskDir = join(outputRoot, id)
+    mkdirSync(taskDir, { recursive: true })
     const mode: RequirementTwoMode = sourceText.trim() ? 'align' : 'asr-only'
     const task: TaskSnapshot = {
       taskId: id,
@@ -228,8 +234,8 @@ export class TaskManager {
       message: mode === 'align' ? '精准对齐任务已排队' : '音频识别任务已排队',
       url: resolve(audioPath),
       sourceText: sourceText.trim() || undefined,
-      outputDirectory: outputRoot,
-      taskDirectory: outputRoot,
+      outputDirectory: taskDir,
+      taskDirectory: taskDir,
       artifacts: {},
       createdAt: now(),
       updatedAt: now()
@@ -289,7 +295,8 @@ export class TaskManager {
 
     const config = this.options.getConfig()
     const target = targetLanguage ?? config.translationTargetLanguage
-    const sourceText = record.task.transcript.segments.map((segment) => segment.text.trim()).filter(Boolean).join('\n')
+    const sourceLines = record.task.transcript.segments.map((segment) => segment.text.trim()).filter(Boolean)
+    const sourceText = sourceLines.join('\n')
     if (!sourceText) throw new Error('原文为空，无法翻译。')
     const gpu = detectGpu()
     if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '当前没有可用的 NVIDIA GPU，无法执行翻译。')
@@ -305,6 +312,8 @@ export class TaskManager {
       const response = await this.runWorker(record, 'translate', {
         modelDirectory: modelPaths.translation,
         text: sourceText,
+        lines: sourceLines,
+        sourceLanguage: record.task.language ?? '',
         targetLanguage: target,
         temperature: config.translationTemperature,
         maxNewTokens: config.translationMaxNewTokens,
@@ -313,7 +322,21 @@ export class TaskManager {
         if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
       })
       if (response.type !== 'translation' || !response.text) throw new Error('翻译运行器没有返回译文。')
-      this.writeTranslation(record, response.text, target)
+      const translatedLines = response.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      if (translatedLines.length !== sourceLines.length) {
+        throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
+      }
+      if (response.correctedLines && response.correctedLines.length === sourceLines.length && record.task.transcript) {
+        let lineIndex = 0
+        const merged = record.task.transcript.segments.map((segment) => {
+          if (!segment.text.trim()) return segment
+          const nextText = response.correctedLines![lineIndex]
+          lineIndex += 1
+          return { ...segment, text: nextText }
+        })
+        this.writeTranscript(record, { language: record.task.transcript.language, segments: merged })
+      }
+      this.writeTranslation(record, translatedLines.join('\n'), target)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '翻译完成' })
       return this.clone(record.task)
     } catch (error) {
