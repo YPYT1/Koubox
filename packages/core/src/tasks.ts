@@ -14,7 +14,7 @@ import type {
   Transcript,
   TranslationTargetLanguage
 } from '@koubox/shared'
-import { toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
+import { detectPlatform, toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 
 const log = createLogger('tasks')
@@ -52,6 +52,7 @@ type WorkerMessage = {
   language?: string
   segments?: Transcript['segments']
   text?: string
+  translatedLines?: string[]
   correctedLines?: string[]
   vocalsPath?: string
 }
@@ -103,20 +104,6 @@ function formatCommandError(stderr: string, commandName: string): string {
   return toUserTaskMessage(text)
 }
 
-function detectPlatform(url: string): string {
-  try {
-    const host = new URL(url).hostname.toLowerCase()
-    if (host.includes('youtu')) return 'Youtube'
-    if (host.includes('tiktok')) return 'Tiktok'
-    if (host.includes('instagram')) return 'Instagram'
-    if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'Twitter'
-    if (host.includes('facebook') || host.includes('fb.watch')) return 'Facebook'
-    if (host.includes('bilibili')) return 'Bilibili'
-    if (host.includes('douyin')) return 'Douyin'
-  } catch { /* ignore invalid url */ }
-  return 'Video'
-}
-
 function dateStamp(value = new Date()): string {
   const y = value.getFullYear()
   const m = String(value.getMonth() + 1).padStart(2, '0')
@@ -141,7 +128,9 @@ function nextSequence(prefix: string, outputDirectory: string, existingIds: stri
 }
 
 function allocateTaskId(kind: 'req1' | 'req2', url: string, outputDirectory: string, existingIds: string[]): string {
-  const platform = kind === 'req1' ? detectPlatform(url) : 'Audio'
+  const detected = kind === 'req1' ? detectPlatform(url) : 'Audio'
+  // Keep the existing task-id casing for compatibility with saved output folders.
+  const platform = detected === 'YouTube' ? 'Youtube' : detected === 'TikTok' ? 'Tiktok' : detected
   const prefix = `${platform}_${dateStamp()}_`
   const seq = nextSequence(prefix, outputDirectory, existingIds)
   return `${prefix}${String(seq).padStart(3, '0')}`
@@ -321,12 +310,17 @@ export class TaskManager {
       }, (message) => {
         if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
       })
-      if (response.type !== 'translation' || !response.text) throw new Error('翻译运行器没有返回译文。')
-      const translatedLines = response.text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-      if (translatedLines.length !== sourceLines.length) {
+      if (response.type !== 'translation' || !Array.isArray(response.translatedLines)) {
+        throw new Error('翻译运行器没有返回严格逐句译文数组。')
+      }
+      const translatedLines = response.translatedLines.map((line) => String(line).trim())
+      if (translatedLines.length !== sourceLines.length || translatedLines.some((line) => !line)) {
         throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
       }
-      if (response.correctedLines && response.correctedLines.length === sourceLines.length && record.task.transcript) {
+      if (response.correctedLines && response.correctedLines.length !== sourceLines.length) {
+        throw new Error(`日语校正行数与原文不一致：原文 ${sourceLines.length} 行，校正 ${response.correctedLines.length} 行。`)
+      }
+      if (response.correctedLines && record.task.transcript) {
         let lineIndex = 0
         const merged = record.task.transcript.segments.map((segment) => {
           if (!segment.text.trim()) return segment
@@ -336,7 +330,7 @@ export class TaskManager {
         })
         this.writeTranscript(record, { language: record.task.transcript.language, segments: merged })
       }
-      this.writeTranslation(record, translatedLines.join('\n'), target)
+      this.writeTranslation(record, translatedLines.join('\n'), target, translatedLines)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '翻译完成' })
       return this.clone(record.task)
     } catch (error) {
@@ -698,10 +692,11 @@ export class TaskManager {
     })
   }
 
-  private writeTranslation(record: TaskRecord, text: string, language: TranslationTargetLanguage): void {
+  private writeTranslation(record: TaskRecord, text: string, language: TranslationTargetLanguage, lines?: string[]): void {
     const textPath = join(record.task.outputDirectory, `${record.task.taskId}_翻译.txt`)
     writeFileSync(textPath, text, 'utf8')
     record.task.translation = text
+    record.task.translationLines = lines ?? text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
     record.task.artifacts.translationText = textPath
     delete record.task.artifacts.translation
     this.persist(record)

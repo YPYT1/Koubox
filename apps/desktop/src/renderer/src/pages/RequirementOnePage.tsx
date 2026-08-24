@@ -256,11 +256,16 @@ export function RequirementOnePage({
   }
 
   const originalLines = task?.transcript?.segments.map((s) => s.text.trim()).filter(Boolean) ?? []
-  const translatedLines = (task?.translation ?? '')
+  const translatedLines = task?.translationLines ?? (task?.translation ?? '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
   const lineCount = Math.max(originalLines.length, translatedLines.length, 1)
+  const pairedLines = Array.from({ length: lineCount }, (_, index) => ({
+    index,
+    original: originalLines[index] ?? '—',
+    translated: translatedLines[index] ?? '—'
+  }))
   const isTaskRunning = Boolean(task && !['complete', 'error', 'cancelled'].includes(task.status))
   const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
@@ -593,10 +598,10 @@ export function RequirementOnePage({
               {originalLines.length === 0 ? (
                 <div className="viral-slot-empty">识别完成后按「一行一句」展示</div>
               ) : (
-                originalLines.map((line, index) => (
+                pairedLines.map(({ index, original }) => (
                   <div className="viral-line-row" key={`o-${index}`}>
                     <span className="viral-line-index">{index + 1}</span>
-                    <span className="viral-line-text">{line}</span>
+                    <span className="viral-line-text">{original}</span>
                   </div>
                 ))
               )}
@@ -648,10 +653,10 @@ export function RequirementOnePage({
               {translatedLines.length === 0 ? (
                 <div className="viral-slot-empty">点击中间翻译后，与原文逐行对应展示</div>
               ) : (
-                Array.from({ length: lineCount }, (_, index) => (
+                pairedLines.map(({ index, translated }) => (
                   <div className="viral-line-row" key={`t-${index}`}>
                     <span className="viral-line-index">{index + 1}</span>
-                    <span className="viral-line-text">{translatedLines[index] || '—'}</span>
+                    <span className="viral-line-text">{translated}</span>
                   </div>
                 ))
               )}

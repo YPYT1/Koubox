@@ -206,18 +206,20 @@ def run(
         prev_line = corrected[index - 1] if index > 0 else ""
         next_line = corrected[index + 1] if index + 1 < total else ""
         prompt = _build_prompt(prompt_prefix, line, prev_line, next_line, "【译文】")
-        translated.append(
-            _generate_one(
-                model,
-                tokenizer,
-                prompt,
-                temperature,
-                max_new_tokens,
-                top_p,
-                line,
-                deterministic=False,
-            )
+        translated_line = _generate_one(
+            model,
+            tokenizer,
+            prompt,
+            temperature,
+            max_new_tokens,
+            top_p,
+            line,
+            deterministic=False,
         )
+        if not translated_line:
+            fail("TRANSLATION_EMPTY", f"第 {index + 1} 句没有生成有效译文。")
+            return
+        translated.append(translated_line)
 
     del model
     if torch.cuda.is_available():
@@ -231,7 +233,12 @@ def run(
         return
 
     send("progress", stage="translating", percent=95, message="正在整理译文")
-    payload: dict[str, object] = {"text": "\n".join(translated)}
+    payload: dict[str, object] = {
+        "text": "\n".join(translated),
+        # Keep the sentence boundary explicit. The desktop core must consume
+        # this array by index instead of trying to infer boundaries from text.
+        "translatedLines": translated,
+    }
     if need_ja_correct:
         payload["correctedLines"] = corrected
     send("translation", **payload)

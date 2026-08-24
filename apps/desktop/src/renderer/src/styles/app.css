@@ -1957,6 +1957,25 @@ button:disabled {
   min-width: 0;
 }
 
+.platform-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.platform-youtube { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.platform-tiktok { color: #111827; background: #f3f4f6; border-color: #d1d5db; }
+.platform-instagram { color: #9d174d; background: #fdf2f8; border-color: #f9a8d4; }
+.platform-facebook { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.platform-local { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
+
 .history-card-title strong {
   font-family: var(--font-mono);
   font-size: 13px;

@@ -91,6 +91,22 @@ export type RequirementTwoMode = 'align' | 'asr-only'
 export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
 
+export type KouboxPlatform = 'YouTube' | 'TikTok' | 'Instagram' | 'Facebook' | 'Twitter' | 'Bilibili' | 'Douyin' | 'Video' | 'Audio'
+
+export function detectPlatform(url: string): KouboxPlatform {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    if (host.includes('youtu')) return 'YouTube'
+    if (host.includes('tiktok')) return 'TikTok'
+    if (host.includes('instagram')) return 'Instagram'
+    if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'Twitter'
+    if (host.includes('facebook') || host.includes('fb.watch')) return 'Facebook'
+    if (host.includes('bilibili')) return 'Bilibili'
+    if (host.includes('douyin')) return 'Douyin'
+  } catch { /* local audio or legacy task */ }
+  return 'Video'
+}
+
 export type TaskArtifacts = {
   video?: string
   sourceAudio?: string
@@ -123,6 +139,7 @@ export type TaskSnapshot = {
   language?: string
   transcript?: Transcript
   translation?: string
+  translationLines?: string[]
   artifacts: TaskArtifacts
   error?: TaskError
   createdAt: string

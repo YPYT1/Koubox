@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ClipboardText, Clock, FileText, FolderOpen, Trash } from '@phosphor-icons/react'
-import { toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
+import { detectPlatform, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 
 type TaskHistoryPageProps = {
@@ -23,6 +23,18 @@ const HIDDEN_ARTIFACT_KEYS = new Set(['transcript', 'translation'])
 
 function isDeletable(task: TaskSnapshot): boolean {
   return task.status !== 'running' && task.status !== 'queued'
+}
+
+type PlatformBadge = { label: string; className: string }
+
+function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
+  if (kind === 'req2') return { label: '本地音频', className: 'platform-local' }
+  const platform = detectPlatform(url)
+  if (platform === 'YouTube') return { label: platform, className: 'platform-youtube' }
+  if (platform === 'TikTok') return { label: platform, className: 'platform-tiktok' }
+  if (platform === 'Instagram') return { label: platform, className: 'platform-instagram' }
+  if (platform === 'Facebook') return { label: platform, className: 'platform-facebook' }
+  return { label: platform === 'Audio' ? '本地音频' : platform, className: 'platform-local' }
 }
 
 export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHistoryPageProps) {
@@ -151,6 +163,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
             const isError = item.status === 'error'
             const canDelete = isDeletable(item)
             const deleting = deletingIds.has(item.taskId)
+            const platform = detectPlatformBadge(item.url, item.kind)
             const artifactsList = Object.entries(item.artifacts).filter(
               ([key, path]) => Boolean(path) && !HIDDEN_ARTIFACT_KEYS.has(key)
             ) as Array<[keyof TaskArtifacts, string]>
@@ -159,6 +172,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
               <article className="history-card" key={item.taskId}>
                 <header className="history-card-head">
                   <div className="history-card-title">
+                    <span className={`platform-badge ${platform.className}`}>{platform.label}</span>
                     <span
                       className="panel-title-badge"
                       style={{
