@@ -1,4 +1,4 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 
 const apiUrl = process.argv.find((value) => value.startsWith('--koubox-api='))?.slice('--koubox-api='.length)
 const token = process.argv.find((value) => value.startsWith('--koubox-token='))?.slice('--koubox-token='.length)
@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('koubox', {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
+  del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  mediaUrl: (filePath: string) => {
+    if (!apiUrl || !token) throw new Error('本地服务尚未启动。')
+    return `${apiUrl}/media?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`
+  },
+  openDevTools: () => ipcRenderer.invoke('devtools:toggle') as Promise<boolean>,
   events: <T>(path: string, onEvent: (event: T) => void) => {
     const controller = new AbortController()
     if (!apiUrl || !token) return () => controller.abort()

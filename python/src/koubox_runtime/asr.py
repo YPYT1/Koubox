@@ -10,6 +10,15 @@ from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 from .protocol import fail, send
 
 
+WHISPER_LANGUAGE_MAP = {
+    "zh-Hans": "zh",
+    "zh-Hant": "zh",
+    "en": "en",
+    "ja": "ja",
+    "ko": "ko",
+}
+
+
 def read_wav(path: str) -> tuple[np.ndarray, int]:
     with wave.open(path, "rb") as source:
         if source.getnchannels() != 1 or source.getsampwidth() != 2:
@@ -19,7 +28,7 @@ def read_wav(path: str) -> tuple[np.ndarray, int]:
     return samples.astype(np.float32) / 32768.0, sample_rate
 
 
-def run(model_directory: str, audio_path: str) -> None:
+def run(model_directory: str, audio_path: str, language: str = "auto", chunk_length_s: float = 30) -> None:
     if not torch.cuda.is_available():
         fail("GPU_REQUIRED", "当前没有可用的 NVIDIA GPU，无法执行语音识别。")
         return
@@ -42,16 +51,23 @@ def run(model_directory: str, audio_path: str) -> None:
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        chunk_length_s=30,
+        chunk_length_s=float(chunk_length_s),
         device=0,
         torch_dtype=dtype,
     )
     audio, sample_rate = read_wav(audio_path)
     send("progress", stage="transcribing", percent=18, message="正在识别音频")
+    generate_kwargs: dict[str, object] = {
+        "task": "transcribe",
+        "condition_on_prev_tokens": False,
+    }
+    whisper_language = WHISPER_LANGUAGE_MAP.get(language)
+    if whisper_language:
+        generate_kwargs["language"] = whisper_language
     result = recognizer(
         {"array": audio, "sampling_rate": sample_rate},
         return_timestamps=True,
-        generate_kwargs={"task": "transcribe", "condition_on_prev_tokens": False},
+        generate_kwargs=generate_kwargs,
     )
     segments: list[dict[str, float | str]] = []
     for chunk in result.get("chunks", []):
@@ -63,6 +79,8 @@ def run(model_directory: str, audio_path: str) -> None:
     if not segments and str(result.get("text", "")).strip():
         duration = len(audio) / sample_rate
         segments.append({"text": str(result["text"]).strip(), "start": 0.0, "end": duration})
-    language = getattr(result, "language", None) or result.get("language")
+    detected = getattr(result, "language", None) or result.get("language")
+    if language != "auto":
+        detected = language
     send("progress", stage="transcribing", percent=95, message="正在整理识别结果")
-    send("transcript", language=language or "und", segments=segments)
+    send("transcript", language=detected or "und", segments=segments)

@@ -1,0 +1,113 @@
+/**
+ * Koubox (口播匣) Modern Clean Design Tokens
+ * 质感：Apple 原生桌面工坊 + Linear 极简效能体系
+ */
+
+:root {
+  /* 表面层级体系 (Surface Hierarchy) */
+  --bg-desktop: #f0f2f5;
+  --bg-app: #f8fafc;
+  --bg-window: #ffffff;
+  --bg-sidebar: #fafbfd;
+  --bg-card: #ffffff;
+  --bg-card-subtle: #f8fafc;
+  --bg-card-hover: #fcfdfe;
+  --bg-hover: #f1f4f9;
+  --bg-active: #e8eef6;
+  --bg-input: #ffffff;
+
+  /* 边框体系 (Borders) */
+  --border-subtle: #edf1f7;
+  --border-main: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --border-focus: rgba(15, 118, 110, 0.45);
+
+  /* 主品牌与语义色 (Palette) */
+  --accent-teal: #0f766e;
+  --accent-teal-soft: #ecfdf5;
+  --accent-teal-border: #a7f3d0;
+  --accent-teal-hover: #115e59;
+
+  --accent-blue: #2563eb;
+  --accent-blue-soft: #eff6ff;
+  --accent-blue-border: #bfdbfe;
+  --accent-blue-hover: #1d4ed8;
+
+  --accent-purple: #7c3aed;
+  --accent-purple-soft: #f5f3ff;
+  --accent-purple-border: #ddd6fe;
+
+  --status-success: #10b981;
+  --status-success-soft: #ecfdf5;
+  --status-warning: #f59e0b;
+  --status-warning-soft: #fffbeb;
+  --status-danger: #ef4444;
+  --status-danger-soft: #fef2f2;
+
+  /* 文本层级体系 (Typography) */
+  --text-main: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-tertiary: #94a3b8;
+  --text-inverse: #ffffff;
+
+  /* 字体家族 */
+  --font-sans: "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
+
+  /* 弥散阴影层级 (Diffused Elevation) */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 2px 6px -1px rgba(15, 23, 42, 0.04), 0 1px 3px -1px rgba(15, 23, 42, 0.02);
+  --shadow-card: 0 4px 16px -2px rgba(15, 23, 42, 0.04), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+  --shadow-card-hover: 0 16px 36px -4px rgba(15, 23, 42, 0.08), 0 6px 16px -2px rgba(15, 23, 42, 0.04);
+  --shadow-glow-teal: 0 0 0 1px rgba(15, 118, 110, 0.2), 0 8px 24px -2px rgba(15, 118, 110, 0.18);
+  --shadow-glow-blue: 0 0 0 1px rgba(37, 99, 235, 0.2), 0 8px 24px -2px rgba(37, 99, 235, 0.18);
+  --shadow-dropdown: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px -2px rgba(15, 23, 42, 0.06);
+  --shadow-toast: 0 20px 40px -8px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.05);
+
+  /* 倒角系统 (Radius) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 9999px;
+
+  /* 侧边栏动态参数 */
+  --sidebar-width: 256px;
+  --sidebar-min: 190px;
+  --sidebar-max: 420px;
+
+  /* 过渡曲线与时间 */
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 0.14s;
+  --duration-normal: 0.22s;
+}
+
+/* 暗黑/极夜模式预留（当前浅色优先） */
+@media (prefers-color-scheme: dark) {
+  /* 可按需扩展 */
+}
+
+/* 全局通用重置与无障碍 */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-desktop);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
