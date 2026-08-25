@@ -13,6 +13,9 @@ import {
 } from '@koubox/shared'
 
 const INSTAGRAM_PROBE_PARTITION = 'persist:koubox-instagram-probe'
+const YOUTUBE_PROBE_PARTITION = 'persist:koubox-youtube-probe'
+const TIKTOK_PROBE_PARTITION = 'persist:koubox-tiktok-probe'
+const FACEBOOK_PROBE_PARTITION = 'persist:koubox-facebook-probe'
 
 export function loginPartition(platformId: YtdlpCookiePlatformId): string {
   return `persist:koubox-login-${platformId}`
@@ -191,8 +194,8 @@ async function instagramPastedCookiesReady(text: string, proxy: string): Promise
     return { ok: false, detail: '粘贴的 Cookie 不完整，缺少 sessionid 或 ds_user_id' }
   }
   const now = Math.floor(Date.now() / 1000)
-  const sessionRow = rows.find((row) => row.name === 'sessionid')
-  if (sessionRow && sessionRow.expiry > 0 && sessionRow.expiry < now) {
+  const expiredRow = rows.find((row) => ['sessionid', 'ds_user_id'].includes(row.name) && row.expiry > 0 && row.expiry < now)
+  if (expiredRow) {
     return { ok: false, detail: 'Instagram Cookie 已过期，请用插件重新导出后粘贴' }
   }
 
@@ -212,6 +215,324 @@ async function instagramPastedCookiesReady(text: string, proxy: string): Promise
     })
   }
   return instagramHomepageReadyFromSession(probe, 'pasted')
+}
+
+function youtubeCheckpoint(url: string, html: string): boolean {
+  const location = url.toLowerCase()
+  if (/accounts\.google\.com|\/signin|\/login|\/challenge|\/captcha/.test(location)) return true
+  return /sign in to youtube|登录 YouTube|登录 Google|verify it's you|unusual traffic|captcha/i.test(html)
+}
+
+function youtubeAccountName(html: string): string | undefined {
+  return (
+    html.match(/"accountName"\s*:\s*"([^"\\]+)"/)?.[1] ??
+    html.match(/"channelHandle"\s*:\s*"(@[^"\\]+)"/)?.[1] ??
+    html.match(/"displayName"\s*:\s*"([^"\\]+)"/)?.[1]
+  )
+}
+
+function parseNetscapeYouTubeCookies(text: string): Array<{
+  domain: string
+  path: string
+  secure: boolean
+  expiry: number
+  name: string
+  value: string
+}> {
+  const rows: Array<{ domain: string; path: string; secure: boolean; expiry: number; name: string; value: string }> = []
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#HttpOnly_')) line = line.slice('#HttpOnly_'.length)
+    else if (line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    const [domain, , path, secure, expiry, name, ...valueParts] = parts
+    if (!domain || !name) continue
+    if (!/(?:^|\.)(youtube\.com|google\.com)$/i.test(domain.replace(/^\./, ''))) continue
+    rows.push({
+      domain,
+      path: path || '/',
+      secure: secure.toUpperCase() === 'TRUE',
+      expiry: Number(expiry) || 0,
+      name,
+      value: valueParts.join('\t').replace(/^"(.*)"$/, '$1')
+    })
+  }
+  return rows
+}
+
+async function youtubeHomepageReadyFromSession(sess: Session): Promise<{ ok: boolean; detail: string }> {
+  const win = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: { session: sess, sandbox: true, contextIsolation: true, backgroundThrottling: false }
+  })
+  const timer = setTimeout(() => {
+    if (!win.isDestroyed()) win.webContents.stop()
+  }, 18000)
+  try {
+    await win.loadURL('https://www.youtube.com/account')
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const url = win.webContents.getURL()
+    const html = (await win.webContents.executeJavaScript('document.documentElement.outerHTML')) as string
+    if (youtubeCheckpoint(url, html)) {
+      return { ok: false, detail: 'YouTube Cookie 已失效（登录页或验证页），请重新导出后粘贴' }
+    }
+    const accountName = youtubeAccountName(html)
+    const onAccountPage = /youtube\.com\/account|myaccount\.google\.com/i.test(url)
+    if (!accountName && !onAccountPage) {
+      return { ok: false, detail: 'YouTube Cookie 已失效，未能进入账号页' }
+    }
+    return { ok: true, detail: `粘贴的 Cookie 有效${accountName ? `（用户 ${accountName}）` : '，已进入账号页'}` }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`无法用 YouTube Cookie 打开账号页：${message}`)
+  } finally {
+    clearTimeout(timer)
+    if (!win.isDestroyed()) win.destroy()
+  }
+}
+
+async function youtubePastedCookiesReady(text: string, proxy: string): Promise<{ ok: boolean; detail: string }> {
+  const rows = parseNetscapeYouTubeCookies(text)
+  const names = new Set(rows.map((row) => row.name))
+  const requiredNames = ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID']
+  const missing = requiredNames.filter((name) => !names.has(name))
+  if (missing.length > 0) return { ok: false, detail: `YouTube Cookie 不完整：缺少 ${missing.join(' / ')}。请用浏览器插件重新导出后粘贴。` }
+  const now = Math.floor(Date.now() / 1000)
+  if (rows.some((row) => requiredNames.includes(row.name) && row.expiry > 0 && row.expiry < now)) {
+    return { ok: false, detail: 'YouTube Cookie 已过期，请用插件重新导出后粘贴' }
+  }
+  const probe = session.fromPartition(YOUTUBE_PROBE_PARTITION)
+  await applyLoginSessionProxyTo(probe, proxy)
+  await probe.clearStorageData({ storages: ['cookies'] })
+  for (const row of rows) {
+    const domain = row.domain.replace(/^\./, '').toLowerCase()
+    await probe.cookies.set({
+      url: domain.endsWith('google.com') ? 'https://www.google.com/' : 'https://www.youtube.com/',
+      name: row.name,
+      value: row.value,
+      domain: `.${domain}`,
+      path: row.path,
+      secure: row.secure,
+      expirationDate: row.expiry > 0 ? row.expiry : undefined
+    })
+  }
+  return youtubeHomepageReadyFromSession(probe)
+}
+
+function tiktokCheckpoint(url: string, html: string): boolean {
+  const location = url.toLowerCase()
+  if (/\/login|\/signup|passport|verify|captcha/.test(location)) return true
+  return /请登录|please log in|log in to tiktok|sign up for tiktok|captcha|verification required/i.test(html)
+}
+
+function tiktokAccountName(html: string): string | undefined {
+  return (
+    html.match(/"uniqueId"\s*:\s*"([^"\\]+)"/)?.[1] ??
+    html.match(/"unique_id"\s*:\s*"([^"\\]+)"/)?.[1] ??
+    html.match(/"nickname"\s*:\s*"([^"\\]+)"/)?.[1]
+  )
+}
+
+function parseNetscapeTikTokCookies(text: string): Array<{
+  domain: string
+  path: string
+  secure: boolean
+  expiry: number
+  name: string
+  value: string
+}> {
+  const rows: Array<{ domain: string; path: string; secure: boolean; expiry: number; name: string; value: string }> = []
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#HttpOnly_')) line = line.slice('#HttpOnly_'.length)
+    else if (line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    const [domain, , path, secure, expiry, name, ...valueParts] = parts
+    if (!domain || !name) continue
+    if (!/(?:^|\.)tiktok\.com$/i.test(domain.replace(/^\./, ''))) continue
+    rows.push({
+      domain,
+      path: path || '/',
+      secure: secure.toUpperCase() === 'TRUE',
+      expiry: Number(expiry) || 0,
+      name,
+      value: valueParts.join('\t').replace(/^"(.*)"$/, '$1')
+    })
+  }
+  return rows
+}
+
+async function tiktokHomepageReadyFromSession(sess: Session): Promise<{ ok: boolean; detail: string }> {
+  const win = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: { session: sess, sandbox: true, contextIsolation: true, backgroundThrottling: false }
+  })
+  const timer = setTimeout(() => {
+    if (!win.isDestroyed()) win.webContents.stop()
+  }, 18000)
+  try {
+    await win.loadURL('https://www.tiktok.com/profile')
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const url = win.webContents.getURL()
+    const html = (await win.webContents.executeJavaScript('document.documentElement.outerHTML')) as string
+    if (tiktokCheckpoint(url, html)) {
+      return { ok: false, detail: 'TikTok Cookie 已失效（登录页或验证页），请重新导出后粘贴' }
+    }
+    const accountName = tiktokAccountName(html)
+    const onAccountPage = /tiktok\.com\/profile/i.test(url)
+    if (!accountName && !onAccountPage) {
+      return { ok: false, detail: 'TikTok Cookie 已失效，未能进入账号页' }
+    }
+    return { ok: true, detail: `粘贴的 Cookie 有效${accountName ? `（用户 ${accountName}）` : '，已进入账号页'}` }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`无法用 TikTok Cookie 打开账号页：${message}`)
+  } finally {
+    clearTimeout(timer)
+    if (!win.isDestroyed()) win.destroy()
+  }
+}
+
+async function tiktokPastedCookiesReady(text: string, proxy: string): Promise<{ ok: boolean; detail: string }> {
+  const rows = parseNetscapeTikTokCookies(text)
+  const names = new Set(rows.map((row) => row.name))
+  if (!names.has('sessionid') || !names.has('sid_tt')) {
+    return { ok: false, detail: 'TikTok Cookie 不完整：缺少 sessionid 或 sid_tt。请用浏览器插件重新导出后粘贴。' }
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const sessionRow = rows.find((row) => row.name === 'sessionid')
+  if (sessionRow && sessionRow.expiry > 0 && sessionRow.expiry < now) {
+    return { ok: false, detail: 'TikTok Cookie 已过期，请用插件重新导出后粘贴' }
+  }
+  const probe = session.fromPartition(TIKTOK_PROBE_PARTITION)
+  await applyLoginSessionProxyTo(probe, proxy)
+  await probe.clearStorageData({ storages: ['cookies'] })
+  for (const row of rows) {
+    await probe.cookies.set({
+      url: 'https://www.tiktok.com/',
+      name: row.name,
+      value: row.value,
+      domain: '.tiktok.com',
+      path: row.path,
+      secure: row.secure,
+      expirationDate: row.expiry > 0 ? row.expiry : undefined,
+      httpOnly: row.name === 'sessionid' || row.name === 'sid_tt'
+    })
+  }
+  return tiktokHomepageReadyFromSession(probe)
+}
+
+function facebookCheckpoint(url: string, html: string): boolean {
+  const location = url.toLowerCase()
+  if (/\/login|\/checkpoint|\/recover|\/two_factor|captcha/.test(location)) return true
+  return /log in to facebook|登录 Facebook|please re-enter your password|security check|captcha/i.test(html)
+}
+
+function facebookAccountName(html: string): string | undefined {
+  return (
+    html.match(/"NAME"\s*:\s*"([^"\\]+)"/)?.[1] ??
+    html.match(/"name"\s*:\s*"([^"\\]+)"[^}]{0,200}"is_current_user"\s*:\s*true/)?.[1]
+  )
+}
+
+function parseNetscapeFacebookCookies(text: string): Array<{
+  domain: string
+  path: string
+  secure: boolean
+  expiry: number
+  name: string
+  value: string
+}> {
+  const rows: Array<{ domain: string; path: string; secure: boolean; expiry: number; name: string; value: string }> = []
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#HttpOnly_')) line = line.slice('#HttpOnly_'.length)
+    else if (line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    const [domain, , path, secure, expiry, name, ...valueParts] = parts
+    if (!domain || !name) continue
+    if (!/(?:^|\.)(facebook\.com|fb\.com)$/i.test(domain.replace(/^\./, ''))) continue
+    rows.push({
+      domain,
+      path: path || '/',
+      secure: secure.toUpperCase() === 'TRUE',
+      expiry: Number(expiry) || 0,
+      name,
+      value: valueParts.join('\t').replace(/^"(.*)"$/, '$1')
+    })
+  }
+  return rows
+}
+
+async function facebookHomepageReadyFromSession(sess: Session): Promise<{ ok: boolean; detail: string }> {
+  const win = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: { session: sess, sandbox: true, contextIsolation: true, backgroundThrottling: false }
+  })
+  const timer = setTimeout(() => {
+    if (!win.isDestroyed()) win.webContents.stop()
+  }, 18000)
+  try {
+    await win.loadURL('https://www.facebook.com/me/')
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const url = win.webContents.getURL()
+    const html = (await win.webContents.executeJavaScript('document.documentElement.outerHTML')) as string
+    if (facebookCheckpoint(url, html)) {
+      return { ok: false, detail: 'Facebook Cookie 已失效（登录页或验证页），请重新导出后粘贴' }
+    }
+    const accountName = facebookAccountName(html)
+    const onAccountPage = /facebook\.com\/(me\/|profile\.php)/i.test(url)
+    if (!accountName && !onAccountPage) {
+      return { ok: false, detail: 'Facebook Cookie 已失效，未能进入账号页' }
+    }
+    return { ok: true, detail: `粘贴的 Cookie 有效${accountName ? `（用户 ${accountName}）` : '，已进入账号页'}` }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`无法用 Facebook Cookie 打开账号页：${message}`)
+  } finally {
+    clearTimeout(timer)
+    if (!win.isDestroyed()) win.destroy()
+  }
+}
+
+async function facebookPastedCookiesReady(text: string, proxy: string): Promise<{ ok: boolean; detail: string }> {
+  const rows = parseNetscapeFacebookCookies(text)
+  const names = new Set(rows.map((row) => row.name))
+  if (!names.has('c_user') || !names.has('xs')) {
+    return { ok: false, detail: 'Facebook Cookie 不完整：缺少 c_user 或 xs。请用浏览器插件重新导出后粘贴。' }
+  }
+  const now = Math.floor(Date.now() / 1000)
+  if (rows.some((row) => ['c_user', 'xs'].includes(row.name) && row.expiry > 0 && row.expiry < now)) {
+    return { ok: false, detail: 'Facebook Cookie 已过期，请用插件重新导出后粘贴' }
+  }
+  const probe = session.fromPartition(FACEBOOK_PROBE_PARTITION)
+  await applyLoginSessionProxyTo(probe, proxy)
+  await probe.clearStorageData({ storages: ['cookies'] })
+  for (const row of rows) {
+    const domain = row.domain.replace(/^\./, '').toLowerCase()
+    await probe.cookies.set({
+      url: domain.endsWith('fb.com') ? 'https://www.fb.com/' : 'https://www.facebook.com/',
+      name: row.name,
+      value: row.value,
+      domain: `.${domain}`,
+      path: row.path,
+      secure: row.secure,
+      expirationDate: row.expiry > 0 ? row.expiry : undefined
+    })
+  }
+  return facebookHomepageReadyFromSession(probe)
 }
 
 async function applyLoginSessionProxyTo(sess: Session, proxy: string): Promise<void> {
@@ -248,6 +569,48 @@ async function platformStatuses(
         }
         if (rule.id === 'instagram') {
           const homepage = await instagramPastedCookiesReady(auth.cookies, proxy)
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            mode: auth.mode,
+            loggedIn: homepage.ok,
+            liveVerified: homepage.ok,
+            saved: true,
+            cookieCount: auth.cookies.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length,
+            detail: homepage.detail
+          })
+          continue
+        }
+        if (rule.id === 'youtube') {
+          const homepage = await youtubePastedCookiesReady(auth.cookies, proxy)
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            mode: auth.mode,
+            loggedIn: homepage.ok,
+            liveVerified: homepage.ok,
+            saved: true,
+            cookieCount: auth.cookies.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length,
+            detail: homepage.detail
+          })
+          continue
+        }
+        if (rule.id === 'tiktok') {
+          const homepage = await tiktokPastedCookiesReady(auth.cookies, proxy)
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            mode: auth.mode,
+            loggedIn: homepage.ok,
+            liveVerified: homepage.ok,
+            saved: true,
+            cookieCount: auth.cookies.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length,
+            detail: homepage.detail
+          })
+          continue
+        }
+        if (rule.id === 'facebook') {
+          const homepage = await facebookPastedCookiesReady(auth.cookies, proxy)
           statuses.push({
             id: rule.id,
             label: rule.label,

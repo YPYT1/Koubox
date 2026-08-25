@@ -6,20 +6,33 @@
 #   ... -CleanOnly              只删除旧 release 产物（含 Koubox-*）
 #   ... -SkipPackage            只预检，不真正打包（给你手动打包前验证）
 #   ... -Version 0.2.0          指定发布版本（写入 apps/desktop/package.json，目录名 Koubox-0.2.0）
-#   ... -ProxyPort 7897         代理端口，默认 7897
+#   ... -ProxyPort 7897         打包时临时设置代理（默认留空，不注入代理）
 #   ... -KeepRelease            打包前不删旧产物（默认会删）
+#   ... -SkipModels             不打包 models（增量更新包；用户自备 / 外置模型）
+#
+# 压缩包请用 WinRAR 手动打（推荐「最好」）。脚本只产出目录，不压缩，不生成 .sha256 / COPY。
+# SHA256 对比请自行用 E:\kubox\compare-sha256.cmd（或 scripts\compare-sha256.cmd）。
+#
+# 推荐流程：
+#   1. pnpm pack:portable -- -Version 0.4.0          → 生成 Koubox-0.4.0 目录
+#   2. WinRAR 压缩该目录为 Koubox-0.4.0.rar（最好）
+#   不含 models 的增量包：
+#   pnpm pack:portable:nomodels -- -Version 0.4.0
 #
 # 说明：
 # - 不打包 python/wheels（2.6GB 的 torch.whl）
 # - 不打包 AppData 登录态 / Cookie；便携版用 exe 旁 userdata（空目录）
-# - 打包版强制使用 resources 内的 models / vendor / python
+# - 完整包：resources 含 models / vendor / python / python-home
+# - -SkipModels：不打模型权重，只保留空 resources\models + README
 
 param(
   [string]$Version = '',
-  [int]$ProxyPort = 7897,
+  [int]$ProxyPort = 0,
   [switch]$CleanOnly,
   [switch]$SkipPackage,
-  [switch]$KeepRelease
+  [switch]$KeepRelease,
+  [switch]$VerifyOnly,
+  [switch]$SkipModels
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,6 +79,9 @@ if ($Version.Trim()) {
 $appEnglishName = 'Koubox'
 $appVersion = [string]$desktopPkgJson.version
 Write-Host "打包版本：$appVersion"
+if ($SkipModels) {
+  Write-Host '模式：不含 models（增量更新包）'
+}
 $distFolderName = "$appEnglishName-$appVersion"
 
 $releaseDir = Join-Path $root 'apps\desktop\release'
@@ -118,9 +134,13 @@ function Invoke-Preflight {
   Assert-Path (Join-Path $root 'vendor\yt-dlp\yt-dlp.exe') 'yt-dlp'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffmpeg.exe') 'ffmpeg'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffprobe.exe') 'ffprobe'
-  Assert-Path (Join-Path $root 'models\faster-whisper-large-v3\model.bin') 'Whisper 模型'
-  Assert-Path (Join-Path $root 'models\HYMT21.8B\model.safetensors') '翻译模型'
-  Assert-Path (Join-Path $root 'models\demucs') 'Demucs 模型目录'
+  if (-not $SkipModels) {
+    Assert-Path (Join-Path $root 'models\faster-whisper-large-v3\model.bin') 'Whisper 模型'
+    Assert-Path (Join-Path $root 'models\HYMT21.8B\model.safetensors') '翻译模型'
+    Assert-Path (Join-Path $root 'models\demucs') 'Demucs 模型目录'
+  } else {
+    Write-Host '跳过本机 models 预检（本包不打入 models）。'
+  }
   Assert-Path (Join-Path $root 'python\.venv\Scripts\python.exe') 'Python 虚拟环境'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\torch') '已安装的 torch'
 
@@ -146,11 +166,18 @@ function Invoke-Preflight {
   $electronDist = Join-Path $root 'node_modules\.pnpm\electron@33.4.11\node_modules\electron\dist\electron.exe'
   Assert-Path $electronDist '本地 Electron（避免打包时再下载）'
 
-  $proxy = "http://127.0.0.1:$ProxyPort"
   foreach ($name in @('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy')) {
-    Set-Item -Path "Env:$name" -Value $proxy
+    if ($ProxyPort -gt 0) {
+      Set-Item -Path "Env:$name" -Value "http://127.0.0.1:$ProxyPort"
+    } elseif (Test-Path -LiteralPath "Env:$name") {
+      Remove-Item -LiteralPath "Env:$name"
+    }
   }
-  Write-Host "代理已固定为 $proxy"
+  if ($ProxyPort -gt 0) {
+    Write-Host "代理已设置为 http://127.0.0.1:$ProxyPort"
+  } else {
+    Write-Host '代理：留空（未设置）'
+  }
 
   Write-Host '预检通过。'
 }
@@ -188,13 +215,34 @@ function Invoke-Postflight {
   Assert-Path $exe '口播匣.exe'
   Assert-Path (Join-Path $resources 'vendor\yt-dlp\yt-dlp.exe') '包内 yt-dlp'
   Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffmpeg.exe') '包内 ffmpeg'
-  Assert-Path (Join-Path $resources 'models\faster-whisper-large-v3\model.bin') '包内 Whisper'
-  Assert-Path (Join-Path $resources 'models\HYMT21.8B\model.safetensors') '包内翻译模型'
   Assert-Path (Join-Path $resources 'python\Scripts\python.exe') '包内 Python'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\c10.dll') '包内 torch c10.dll'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\MSVCP140.dll') '包内 VC++ MSVCP140（WinError 126 依赖）'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\VCRUNTIME140.dll') '包内 VC++ VCRUNTIME140'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime') '包内 Python 源码'
+  Assert-Path (Join-Path $resources 'python-home\python.exe') '包内 python-home'
+
+  if ($SkipModels) {
+    $modelsDir = Join-Path $resources 'models'
+    New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $modelsDir 'README.txt') -Encoding UTF8 -Value @(
+      '本包未内置模型（增量更新包）。'
+      ''
+      '请把旧版 Koubox 的 resources\models 整目录拷到这里，或在「模型与环境」里选择外置 models 目录。'
+      '拷贝 / 外置后的 models 下需含：demucs、faster-whisper-large-v3、HYMT21.8B。'
+    )
+    $leaked = @(
+      Get-ChildItem -LiteralPath $modelsDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'README.txt' }
+    )
+    if ($leaked.Count -gt 0) {
+      throw ("校验失败：-SkipModels 包内不应出现模型文件：`n" + ($leaked.FullName -join "`n"))
+    }
+    Write-Host 'models：仅空目录 + README（未打入权重与子目录）。'
+  } else {
+    Assert-Path (Join-Path $resources 'models\faster-whisper-large-v3\model.bin') '包内 Whisper'
+    Assert-Path (Join-Path $resources 'models\HYMT21.8B\model.safetensors') '包内翻译模型'
+  }
 
   Repair-PackedPyvenvHome
 
@@ -239,11 +287,36 @@ function Invoke-Postflight {
   Write-Host ''
   Write-Host '便携目录已生成（解压即用）：'
   Write-Host $distDir
-  Write-Host '双击 口播匣.exe。工具/模型路径会指向 resources\；登录需用户自己完成。'
-  Write-Host "把整个 $distFolderName（含空 userdata）打成 7z/zip 发给用户即可。"
+  if ($SkipModels) {
+    Write-Host '本包不含模型权重。请拷贝旧版 resources\models，或在「模型与环境」选择外置 models。'
+  } else {
+    Write-Host '双击 口播匣.exe。工具/模型路径会指向 resources\；登录需用户自己完成。'
+  }
+  Assert-NoReparsePoints $distDir
+  Write-Host "把整个 $distFolderName 用 WinRAR 打成 $distFolderName.rar（压缩方式：最好）。"
+  Write-Host '复制后用 E:\kubox\compare-sha256.cmd 自行对比 SHA256（脚本不生成校验文件）。'
+}
+
+function Get-ReparsePoints([string] $Root) {
+  return @(Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
+}
+
+function Assert-NoReparsePoints([string] $Root) {
+  $links = Get-ReparsePoints $Root
+  if ($links.Count -gt 0) {
+    $sample = ($links | Select-Object -First 5 | ForEach-Object { $_.FullName }) -join "`n"
+    throw "校验失败：便携目录内仍有 $($links.Count) 个软链接/Junction，压缩或复制后可能变空目录：`n$sample"
+  }
+  Write-Host "软链接检查通过（0 个 ReparsePoint）。"
 }
 
 # ---- main ----
+if ($VerifyOnly) {
+  Write-Host '打包脚本不生成校验文件。请用 E:\kubox\compare-sha256.cmd 自行对比源文件与副本。'
+  exit 0
+}
+
 if ($CleanOnly) {
   Remove-OldRelease
   Write-Host '已清理旧打包产物。'
@@ -262,9 +335,34 @@ if (-not $KeepRelease) {
 }
 
 Write-Host "开始 electron-builder（dir），完成后将目录改名为 $distFolderName ..."
-pnpm --filter @koubox/desktop package
-if ($LASTEXITCODE -ne 0) {
-  throw "electron-builder 失败，退出码 $LASTEXITCODE"
+$desktopPkgBackup = $null
+if ($SkipModels) {
+  $desktopPkgBackup = Get-Content -LiteralPath $desktopPkgPath -Raw
+  if ($desktopPkgBackup -notmatch '"from":\s*"\.\./\.\./models"') {
+    throw '预检失败：apps/desktop/package.json 未找到 models extraResources，无法剥离。'
+  }
+  $patched = [regex]::Replace(
+    $desktopPkgBackup,
+    '\s*\{\s*"from":\s*"\.\./\.\./models"\s*,\s*"to":\s*"models"\s*\}\s*,?',
+    ''
+  )
+  if ($patched -eq $desktopPkgBackup) {
+    throw '未能从 package.json 去掉 models extraResources。'
+  }
+  [System.IO.File]::WriteAllText($desktopPkgPath, $patched)
+  Write-Host '已临时从 electron-builder 配置中移除 models。'
+}
+
+try {
+  pnpm --filter @koubox/desktop package
+  if ($LASTEXITCODE -ne 0) {
+    throw "electron-builder 失败，退出码 $LASTEXITCODE"
+  }
+} finally {
+  if ($null -ne $desktopPkgBackup) {
+    [System.IO.File]::WriteAllText($desktopPkgPath, $desktopPkgBackup)
+    Write-Host '已恢复 apps/desktop/package.json。'
+  }
 }
 
 if (-not (Test-Path -LiteralPath $builderUnpacked)) {

@@ -57,15 +57,18 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(existsSync(runtimeFile)).toBe(true)
   })
 
-  it('pins bundled vendor and model paths when packaging lock is enabled', () => {
+  it('pins bundled vendor paths but keeps user model directories when packaging lock is enabled', () => {
     const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-pin-'))
     temporaryRoots.push(root)
     const bundled = join(root, 'bundled')
     const stale = join(root, 'stale-dev-paths')
     const runtimeFile = join(root, 'runtime.json')
     const bundledDefaults = defaults(bundled)
+    const userModels = join(stale, 'external-models')
     writeFileSync(runtimeFile, JSON.stringify({
       ...defaults(stale),
+      modelsDirectory: userModels,
+      asrModelDirectory: join(userModels, 'faster-whisper-large-v3'),
       ytdlpDirectory: join(stale, 'yt-dlp'),
       ffmpegDirectory: join(stale, 'ffmpeg'),
       ytdlpPlatformAuth: {
@@ -77,10 +80,11 @@ describe('Faster-Whisper ASR configuration', () => {
 
     const config = new RuntimeStore(runtimeFile, bundledDefaults, true).read()
 
-    expect(config.modelsDirectory).toBe(bundled)
+    expect(config.modelsDirectory).toBe(userModels)
+    expect(config.asrModelDirectory).toBe(join(userModels, 'faster-whisper-large-v3'))
     expect(config.ytdlpDirectory).toBe(bundledDefaults.ytdlpDirectory)
     expect(config.ffmpegDirectory).toBe(bundledDefaults.ffmpegDirectory)
-    expect(config.asrModelDirectory).toBe(bundledDefaults.asrModelDirectory)
+    expect(config.pythonExecutable).toBe(bundledDefaults.pythonExecutable)
     expect(config.ytdlpPlatformAuth.instagram.cookies).toBe('sessionid=should-stay')
     expect(config.debugMode).toBe(true)
   })

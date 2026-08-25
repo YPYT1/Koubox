@@ -41,12 +41,9 @@ export class RuntimeStore {
 
   private applyPinned(config: KouboxConfig): KouboxConfig {
     if (!this.pinBundledPaths) return config
+    // 只锁定工具链路径；模型目录允许用户改到外置 models（增量更新包不含 models）
     return {
       ...config,
-      modelsDirectory: this.defaults.modelsDirectory,
-      asrModelDirectory: this.defaults.asrModelDirectory,
-      translationModelDirectory: this.defaults.translationModelDirectory,
-      demucsModelDirectory: this.defaults.demucsModelDirectory,
       ytdlpDirectory: this.defaults.ytdlpDirectory,
       ffmpegDirectory: this.defaults.ffmpegDirectory,
       pythonExecutable: this.defaults.pythonExecutable
