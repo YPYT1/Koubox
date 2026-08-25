@@ -3,6 +3,7 @@ import { MagnifyingGlass } from '@phosphor-icons/react'
 import type { ToolManifest } from '@koubox/shared'
 import viralMaterialsIcon from '../../../../../../png/爆款素材获取.png'
 import preciseSrtIcon from '../../../../../../png/精准 SRT 对齐.png'
+import videoDownloaderIcon from '../../../../../../png/downloder.png'
 
 type HomePageProps = {
   tools: ToolManifest[]
@@ -13,7 +14,8 @@ type HomePageProps = {
 
 const toolImages: Record<string, string> = {
   'viral-materials': viralMaterialsIcon,
-  'precise-srt': preciseSrtIcon
+  'precise-srt': preciseSrtIcon,
+  'video-downloader': videoDownloaderIcon
 }
 
 const chipClassByTag: Record<string, string> = {

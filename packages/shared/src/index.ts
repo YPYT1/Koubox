@@ -1,4 +1,4 @@
-export type ToolId = 'viral-materials' | 'precise-srt'
+export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader'
 
 export type ToolManifest = {
   id: ToolId
@@ -29,6 +29,17 @@ export const tools: ToolManifest[] = [
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
       { id: 'run', label: '开始对齐' },
+      { id: 'history', label: '任务中心' }
+    ]
+  },
+  {
+    id: 'video-downloader',
+    name: '视频下载',
+    description: '粘贴 YouTube / Facebook / Instagram / TikTok 公开链接，下载视频到本地。',
+    accent: 'teal',
+    artifactTags: ['URL', 'Video'],
+    menus: [
+      { id: 'run', label: '开始下载' },
       { id: 'history', label: '任务中心' }
     ]
   }

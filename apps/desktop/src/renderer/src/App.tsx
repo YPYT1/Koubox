@@ -7,6 +7,7 @@ import { ModelsPage } from './pages/ModelsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { RequirementOnePage } from './pages/RequirementOnePage'
 import { RequirementTwoPage } from './pages/RequirementTwoPage'
+import { VideoDownloaderPage } from './pages/VideoDownloaderPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
 
 type FixedPage = 'home' | 'models' | 'settings'
@@ -207,7 +208,28 @@ export function App() {
             />
           )}
 
-          {focus.kind === 'tool' && focus.menu !== 'run' && (
+          {opened.includes('video-downloader') && keepAlivePane(
+            focus.kind === 'tool' && focus.toolId === 'video-downloader' && focus.menu === 'run',
+            <VideoDownloaderPage
+              defaultOutputDirectory={config?.outputDirectory ?? ''}
+              onChooseDirectory={handleChooseDirectory}
+              onShowToast={showToast}
+            />
+          )}
+
+          {focus.kind === 'tool' && focus.menu !== 'run' && focus.toolId === 'video-downloader' && (
+            <div className="page-container">
+              <div className="page-header-block">
+                <h1>任务中心</h1>
+                <p>视频下载任务记录将在此显示</p>
+              </div>
+              <section className="panel-box">
+                <div className="empty-sessions-hint">暂无下载任务记录</div>
+              </section>
+            </div>
+          )}
+
+          {focus.kind === 'tool' && focus.menu !== 'run' && focus.toolId !== 'video-downloader' && (
             <TaskHistoryPage
               kind={focus.toolId === 'precise-srt' ? 'req2' : 'req1'}
               outputDirectory={config?.outputDirectory ?? ''}

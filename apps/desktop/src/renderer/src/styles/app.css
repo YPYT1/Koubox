@@ -1686,6 +1686,53 @@ button:disabled {
   gap: 16px;
 }
 
+.downloader-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 14px;
+}
+
+.downloader-platform-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-main);
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.downloader-platform-chip.is-active {
+  color: var(--accent-teal);
+  background: var(--accent-teal-soft);
+  border-color: var(--accent-teal-border);
+}
+
+.downloader-platform-chip.is-muted {
+  opacity: 0.45;
+}
+
+.downloader-platform-warn {
+  margin: -6px 0 14px;
+  font-size: 12.5px;
+  color: #b45309;
+}
+
+.downloader-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.downloader-preview-empty {
+  width: min(100%, 280px);
+}
+
 .viral-page > .page-header-block {
   margin-bottom: 0;
 }

@@ -66,8 +66,8 @@ const HEIGHT_OPTIONS: Array<{ value: YtdlpMaxHeight; label: string }> = [
 ]
 
 const COOKIE_SOURCE_OPTIONS: Array<{ value: YtdlpCookieSource; label: string }> = [
-  { value: 'builtin', label: '按平台配置（应用内 / 粘贴）' },
-  { value: 'none', label: '不使用登录态' },
+  { value: 'none', label: '公开解析（默认，无需账号）' },
+  { value: 'builtin', label: '公开解析失败后按平台登录兜底' },
   { value: 'file', label: '统一 Cookies 文件（高级）' }
 ]
 
@@ -279,7 +279,7 @@ export function SettingsPage({
     try {
       const nextConfig: KouboxConfig = {
         ...config,
-        ytdlpCookieSource: 'builtin',
+        ytdlpCookieSource: 'none',
         ytdlpCookiesPath: ''
       }
       onChange(nextConfig)
@@ -433,8 +433,8 @@ export function SettingsPage({
           </FormField>
 
           <FormField
-            label="登录策略"
-            hint="选「按平台配置」时，每个平台可单独选应用内登录或粘贴 Cookie。例如 YouTube 用应用内，Instagram 用粘贴。"
+            label="下载策略"
+            hint="默认先用公开页面、公开接口和匿名浏览器解析，不需要账号。只有你主动配置登录态时，公开解析全部失败后才会使用 Cookie 兜底。"
           >
             <select
               className="input-text"

@@ -26,6 +26,7 @@ type ServerOptions = {
   exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
   getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
   exportedCookiesFile: string
+  resolveBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -139,7 +140,8 @@ export async function startLocalApi(options: ServerOptions) {
     projectDirectory: options.projectDirectory,
     pythonProjectDirectory: options.pythonProjectDirectory,
     bundledPythonExecutable: options.bundledPythonExecutable,
-    taskIndexFile: join(dirname(options.configFile), 'tasks.json')
+    taskIndexFile: join(dirname(options.configFile), 'tasks.json'),
+    resolveBrowserMedia: options.resolveBrowserMedia
   })
   tasks.restore(store.read().outputDirectory)
   const token = randomBytes(24).toString('hex')

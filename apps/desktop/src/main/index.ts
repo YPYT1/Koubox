@@ -1,7 +1,8 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, session, shell, type OpenDialogOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { startLocalApi } from '@koubox/core'
+import { normalizeProxyUrl } from '@koubox/shared'
 import { initLogger, createLogger } from '@koubox/shared/logger'
 import { buildLoginCookieStatus, exportLoginCookies, applyLoginSessionProxy, readLoginCookies, cookiesToNetscape } from './cookies'
 
@@ -47,6 +48,76 @@ function findPythonProjectDirectory(): string {
 
 function findBundledPythonExecutable(): string | undefined {
   return app.isPackaged ? join(process.resourcesPath, 'python', 'Scripts', 'python.exe') : undefined
+}
+
+async function resolveBrowserMedia(url: string, proxy: string) {
+  const partition = `koubox-public-media-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const isolatedSession = session.fromPartition(partition, { cache: false })
+  const normalizedProxy = normalizeProxyUrl(proxy)
+  if (normalizedProxy) await isolatedSession.setProxy({ proxyRules: normalizedProxy })
+  const window = new BrowserWindow({
+    show: false,
+    width: 960,
+    height: 720,
+    webPreferences: {
+      partition,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  })
+  window.webContents.setAudioMuted(true)
+  const videoId = new URL(url).pathname.match(/\/video\/(\d+)/)?.[1]
+  const mediaRequests: string[] = []
+  isolatedSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
+    if (
+      /\/aweme\/v1\/play\//i.test(details.url)
+      || /\/video\/tos\//i.test(details.url)
+      || /mime_type=video/i.test(details.url)
+    ) {
+      mediaRequests.push(details.url)
+    }
+    callback({})
+  })
+  try {
+    await window.loadURL(url, { userAgent: isolatedSession.getUserAgent() })
+    const deadline = Date.now() + 25_000
+    while (Date.now() < deadline) {
+      const networkUrl = mediaRequests.find((candidate) => videoId && candidate.includes(`item_id=${videoId}`))
+        ?? mediaRequests[0]
+      if (networkUrl) {
+        const cookies = await isolatedSession.cookies.get({ url: networkUrl })
+        return {
+          source: 'browser' as const,
+          videoUrl: networkUrl,
+          referer: url,
+          userAgent: isolatedSession.getUserAgent(),
+          cookieHeader: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+        }
+      }
+      const videoUrl = await window.webContents.executeJavaScript(`
+        Array.from(document.querySelectorAll('video'))
+          .map((video) => video.currentSrc || video.src)
+          .find((src) => /^https?:\\/\\//i.test(src || '')) || ''
+      `, true) as string
+      if (videoUrl) {
+        const cookies = await isolatedSession.cookies.get({ url: videoUrl })
+        return {
+          source: 'browser' as const,
+          videoUrl,
+          referer: url,
+          userAgent: isolatedSession.getUserAgent(),
+          cookieHeader: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+        }
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500))
+    }
+    throw new Error('匿名浏览器已打开页面，但没有观察到公开视频流。')
+  } finally {
+    isolatedSession.webRequest.onBeforeRequest(null)
+    if (!window.isDestroyed()) window.destroy()
+  }
 }
 
 function patchBundledPythonHome(): void {
@@ -184,7 +255,7 @@ async function createWindow(): Promise<void> {
       asrLanguage: 'auto',
       openOutputOnComplete: false,
       ytdlpProxy: '',
-      ytdlpCookieSource: 'builtin',
+      ytdlpCookieSource: 'none',
       ytdlpCookiesPath: '',
       ytdlpPlatformAuth: {
         youtube: { mode: 'builtin', cookies: '' },
@@ -207,6 +278,7 @@ async function createWindow(): Promise<void> {
     bundledPythonExecutable: findBundledPythonExecutable(),
     pinBundledPaths: app.isPackaged,
     exportedCookiesFile,
+    resolveBrowserMedia,
     selectDirectory: async (title, defaultPath) => {
       const dialogOptions: OpenDialogOptions = {
         title,

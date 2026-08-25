@@ -4,6 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { detectGpu } from './runtime.js'
 import { alignKnownText } from './align.js'
 import { transcriptToSrt } from './srt.js'
+import { resolvePublicMedia, type PublicMediaResolution } from './public-video.js'
 import type {
   KouboxConfig,
   RequirementTwoMode,
@@ -19,7 +20,6 @@ import {
   detectPlatform,
   pastedCookieNamesFromNetscape,
   PLATFORM_COOKIE_RULES,
-  platformAuthMissingMessage,
   toUserTaskMessage,
   normalizeProxyUrl,
   platformAuthIdFromUrlPlatform
@@ -35,6 +35,7 @@ type TaskManagerOptions = {
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
   taskIndexFile: string
+  resolveBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
 }
 
 type ModelPaths = { asr: string; translation: string }
@@ -546,7 +547,7 @@ export class TaskManager {
     if (!existsSync(vendor.ffmpegExecutable)) throw new Error(`ffmpeg 不存在：${vendor.ffmpegExecutable}`)
     const config = this.options.getConfig()
     const tempStem = `_dl_${fileStem}`
-    const args = [
+    const baseArgs = [
       '--newline',
       '--no-playlist',
       '--no-warnings',
@@ -559,54 +560,12 @@ export class TaskManager {
     ]
     if (config.ytdlpProxy.trim()) {
       const proxy = normalizeProxyUrl(config.ytdlpProxy)
-      if (proxy) args.push('--proxy', proxy)
+      if (proxy) baseArgs.push('--proxy', proxy)
     }
     const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
-    const platformAuth = platformId ? config.ytdlpPlatformAuth[platformId] : undefined
-    if (config.ytdlpCookieSource === 'none') {
-      // no cookies
-    } else if (config.ytdlpCookieSource === 'file') {
-      const cookiesPath = config.ytdlpCookiesPath.trim()
-      if (!cookiesPath) throw new Error('登录来源为 Cookies 文件，但未选择文件。请在「全局设置 → 下载（yt-dlp）」中选择 cookies.txt。')
-      if (!existsSync(cookiesPath)) throw new Error(`Cookies 文件不存在：${cookiesPath}`)
-      args.push('--cookies', cookiesPath)
-    } else if (config.ytdlpCookieSource === 'builtin') {
-      if (platformId && platformAuth?.mode === 'paste') {
-        const pasted = platformAuth.cookies.trim()
-        if (!pasted) {
-          throw new Error(platformAuthMissingMessage(platformId, 'paste', 'empty-paste'))
-        }
-        assertPastedPlatformCookies(platformId, pasted)
-        const cookiesFile = join(dirname(this.options.taskIndexFile), `${platformId}-cookies.txt`)
-        writeFileSync(cookiesFile, pasted.endsWith('\n') ? pasted : `${pasted}\n`, 'utf8')
-        log.info('下载使用粘贴的平台 Cookie', { taskId: record.task.taskId, platform: platformId, cookies: cookiesFile })
-        args.push('--cookies', cookiesFile)
-      } else {
-        const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
-        if (!existsSync(exportedCookies)) {
-          if (platformId) {
-            throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'no-builtin-export'))
-          }
-          throw new Error('尚未保存登录状态。请到「全局设置 → 平台登录」打开登录窗口，登录后点击「保存应用内登录」。')
-        }
-        if (platformId) {
-          const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
-          if (rule) {
-            const exportedText = readFileSync(exportedCookies, 'utf8')
-            const names = pastedCookieNamesFromNetscape(exportedText, rule.domainTest)
-            const missing = rule.requiredNames.filter((name) => !names.has(name))
-            if (missing.length > 0) {
-              throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'builtin-incomplete'))
-            }
-          }
-        }
-        args.push('--cookies', exportedCookies)
-      }
-    }
-    args.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
-    if (config.ytdlpExtraArgs.trim()) args.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
-    args.push(record.task.url)
-    await this.runCommand(record, executable, args, (line) => {
+    baseArgs.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
+    if (config.ytdlpExtraArgs.trim()) baseArgs.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
+    const onYtdlpLine = (line: string) => {
       const percent = line.match(/(\d+(?:\.\d+)?)%/)
       if (percent) {
         this.update(record, {
@@ -626,7 +585,93 @@ export class TaskManager {
       if (/\[download\]\s+Destination:/i.test(line)) {
         this.update(record, { percent: 8, message: '开始下载视频文件…' })
       }
-    }, 'yt-dlp')
+    }
+
+    let publicFailure: unknown
+    try {
+      await this.runCommand(record, executable, [...baseArgs, record.task.url], onYtdlpLine, 'yt-dlp')
+      return this.ensureChromiumPlayable(record, this.finalizeYtdlpDownload(directory, tempStem, fileStem))
+    } catch (error) {
+      publicFailure = error
+      this.cleanupDownloadTemps(directory, tempStem)
+      log.info('公开 yt-dlp 路径失败，开始页面/API 回退', {
+        taskId: record.task.taskId,
+        platform: detectPlatform(record.task.url),
+        error: errorMessage(error)
+      })
+    }
+
+    let resolverFailure: unknown
+    try {
+      this.update(record, { percent: 4, message: '正在通过公开页面解析视频…' })
+      const platform = detectPlatform(record.task.url)
+      const resolved = platform === 'TikTok' && this.options.resolveBrowserMedia
+        ? await this.options.resolveBrowserMedia(record.task.url, config.ytdlpProxy)
+        : await resolvePublicMedia(record.task.url, platform, config.ytdlpProxy, config.ytdlpMaxHeight)
+      return await this.downloadResolvedPublicMedia(record, directory, fileStem, resolved)
+    } catch (error) {
+      resolverFailure = error
+      log.info('公开页面/API 回退失败', { taskId: record.task.taskId, error: errorMessage(error) })
+    }
+
+    const authenticatedArgs = [...baseArgs]
+    if (this.appendAvailableCookies(authenticatedArgs, platformId)) {
+      this.update(record, { percent: 4, message: '公开解析失败，正在尝试已配置的登录状态…' })
+      await this.runCommand(record, executable, [...authenticatedArgs, record.task.url], onYtdlpLine, 'yt-dlp')
+      return this.ensureChromiumPlayable(record, this.finalizeYtdlpDownload(directory, tempStem, fileStem))
+    }
+
+    throw new Error(
+      `公开视频下载失败。yt-dlp：${errorMessage(publicFailure)}；公开解析：${errorMessage(resolverFailure)}`
+    )
+  }
+
+  private appendAvailableCookies(args: string[], platformId: ReturnType<typeof platformAuthIdFromUrlPlatform>): boolean {
+    const config = this.options.getConfig()
+    if (config.ytdlpCookieSource === 'none') return false
+    if (config.ytdlpCookieSource === 'file') {
+      const cookiesPath = config.ytdlpCookiesPath.trim()
+      if (!cookiesPath || !existsSync(cookiesPath)) return false
+      args.push('--cookies', cookiesPath)
+      return true
+    }
+    if (config.ytdlpCookieSource !== 'builtin') return false
+    const platformAuth = platformId ? config.ytdlpPlatformAuth[platformId] : undefined
+    if (platformId && platformAuth?.mode === 'paste') {
+      const pasted = platformAuth.cookies.trim()
+      if (!pasted) return false
+      try {
+        assertPastedPlatformCookies(platformId, pasted)
+      } catch {
+        return false
+      }
+      const cookiesFile = join(dirname(this.options.taskIndexFile), `${platformId}-cookies.txt`)
+      writeFileSync(cookiesFile, pasted.endsWith('\n') ? pasted : `${pasted}\n`, 'utf8')
+      args.push('--cookies', cookiesFile)
+      return true
+    }
+    const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
+    if (!existsSync(exportedCookies)) return false
+    if (platformId) {
+      const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
+      if (rule) {
+        const names = pastedCookieNamesFromNetscape(readFileSync(exportedCookies, 'utf8'), rule.domainTest)
+        if (rule.requiredNames.some((name) => !names.has(name))) return false
+      }
+    }
+    args.push('--cookies', exportedCookies)
+    return true
+  }
+
+  private cleanupDownloadTemps(directory: string, tempStem: string): void {
+    for (const name of readdirSync(directory)) {
+      if (!name.startsWith(`${tempStem}.`) && !name.startsWith(`${tempStem}_`)) continue
+      const path = join(directory, name)
+      if (existsSync(path)) unlinkSync(path)
+    }
+  }
+
+  private finalizeYtdlpDownload(directory: string, tempStem: string, fileStem: string): string {
     const file = readdirSync(directory).find((name) => !name.endsWith('.part') && !name.endsWith('.ytdl') && name.startsWith(`${tempStem}.`))
     if (!file) throw new Error('yt-dlp 已结束，但没有找到下载的视频文件。')
     const downloaded = join(directory, file)
@@ -636,6 +681,37 @@ export class TaskManager {
       if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
       renameSync(downloaded, finalPath)
     }
+    return finalPath
+  }
+
+  private async downloadResolvedPublicMedia(
+    record: TaskRecord,
+    directory: string,
+    fileStem: string,
+    resolved: PublicMediaResolution
+  ): Promise<string> {
+    const ffmpeg = this.options.resolveVendor().ffmpegExecutable
+    const proxy = normalizeProxyUrl(this.options.getConfig().ytdlpProxy)
+    const tempPath = join(directory, `_dl_${fileStem}.public.mp4`)
+    const finalPath = join(directory, `${fileStem}.mp4`)
+    const args = ['-hide_banner', '-loglevel', 'warning', '-y']
+    const addInput = (url: string) => {
+      if (proxy) args.push('-http_proxy', proxy)
+      args.push('-user_agent', resolved.userAgent, '-referer', resolved.referer)
+      if (resolved.cookieHeader) args.push('-headers', `Cookie: ${resolved.cookieHeader}\r\n`)
+      args.push('-i', url)
+    }
+    addInput(resolved.videoUrl)
+    if (resolved.audioUrl) addInput(resolved.audioUrl)
+    args.push('-map', '0:v:0')
+    if (resolved.audioUrl) args.push('-map', '1:a:0')
+    else args.push('-map', '0:a:0?')
+    args.push('-c', 'copy', '-movflags', '+faststart', tempPath)
+    this.update(record, { percent: 8, message: `已解析公开媒体流（${resolved.source}），正在下载…` })
+    await this.runCommand(record, ffmpeg, args, undefined, '公开媒体下载')
+    if (!existsSync(tempPath)) throw new Error('公开媒体流已处理，但没有生成视频文件。')
+    if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
+    renameSync(tempPath, finalPath)
     return this.ensureChromiumPlayable(record, finalPath)
   }
 
