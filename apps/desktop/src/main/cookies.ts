@@ -1,41 +1,16 @@
 import { BrowserWindow, session, type Cookie, type Session } from 'electron'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
-import type { YtdlpCookiePlatformId, YtdlpCookiePlatformStatus, YtdlpCookieStatus } from '@koubox/shared'
+import {
+  pastedPlatformCookiesReady,
+  PLATFORM_COOKIE_RULES,
+  type PlatformAuthConfig,
+  type YtdlpCookiePlatformStatus,
+  type YtdlpCookieStatus
+} from '@koubox/shared'
 
 export const LOGIN_PARTITION = 'persist:koubox-ytdlp-login'
 const INSTAGRAM_PROBE_PARTITION = 'persist:koubox-instagram-probe'
 
-const PLATFORM_RULES: Array<{
-  id: YtdlpCookiePlatformId
-  label: string
-  domains: RegExp
-  names: string[]
-}> = [
-  {
-    id: 'youtube',
-    label: 'YouTube',
-    domains: /(?:^|\.)(youtube\.com|google\.com)$/i,
-    names: ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID', '__Secure-1PSID', '__Secure-3PSID', 'LOGIN_INFO']
-  },
-  {
-    id: 'tiktok',
-    label: 'TikTok',
-    domains: /(?:^|\.)tiktok\.com$/i,
-    names: ['sessionid', 'sid_tt', 'sid_guard', 'ttwid']
-  },
-  {
-    id: 'instagram',
-    label: 'Instagram',
-    domains: /(?:^|\.)instagram\.com$/i,
-    names: ['sessionid', 'ds_user_id']
-  },
-  {
-    id: 'facebook',
-    label: 'Facebook',
-    domains: /(?:^|\.)(facebook\.com|fb\.com)$/i,
-    names: ['c_user', 'xs']
-  }
-]
 
 export function loginSession() {
   return session.fromPartition(LOGIN_PARTITION)
@@ -59,12 +34,12 @@ function cookieDomain(cookie: Cookie): string {
   return (cookie.domain ?? '').replace(/^\./, '').toLowerCase()
 }
 
-function cookieNamesForPlatform(cookies: Cookie[], rule: (typeof PLATFORM_RULES)[number]): Set<string> {
+function cookieNamesForPlatform(cookies: Cookie[], rule: (typeof PLATFORM_COOKIE_RULES)[number]): Set<string> {
   const names = new Set<string>()
   for (const cookie of cookies) {
     if (!cookie.name || !cookie.value) continue
-    if (!rule.domains.test(cookieDomain(cookie))) continue
-    if (!rule.names.includes(cookie.name)) continue
+    if (!rule.domainTest.test(cookieDomain(cookie))) continue
+    if (!rule.requiredNames.includes(cookie.name)) continue
     names.add(cookie.name)
   }
   return names
@@ -215,16 +190,26 @@ async function applyLoginSessionProxyTo(sess: Session, proxy: string): Promise<v
 
 async function platformStatuses(
   cookies: Cookie[],
-  instagramCookies: string,
+  platformAuth: PlatformAuthConfig,
   proxy: string
 ): Promise<YtdlpCookiePlatformStatus[]> {
   const statuses: YtdlpCookiePlatformStatus[] = []
-  for (const rule of PLATFORM_RULES) {
+  for (const rule of PLATFORM_COOKIE_RULES) {
+    const auth = platformAuth[rule.id]
     const matched = cookieNamesForPlatform(cookies, rule)
-    if (rule.id === 'instagram') {
+    if (auth.mode === 'paste') {
       try {
-        if (instagramCookies.trim()) {
-          const homepage = await instagramPastedCookiesReady(instagramCookies, proxy)
+        if (!auth.cookies.trim()) {
+          statuses.push({
+            id: rule.id,
+            label: rule.label,
+            loggedIn: false,
+            detail: '已选粘贴 Cookie，但尚未粘贴内容'
+          })
+          continue
+        }
+        if (rule.id === 'instagram') {
+          const homepage = await instagramPastedCookiesReady(auth.cookies, proxy)
           statuses.push({
             id: rule.id,
             label: rule.label,
@@ -233,12 +218,32 @@ async function platformStatuses(
           })
           continue
         }
+        const ready = pastedPlatformCookiesReady(rule.id, auth.cookies)
+        statuses.push({
+          id: rule.id,
+          label: rule.label,
+          loggedIn: ready.ok,
+          detail: ready.detail
+        })
+      } catch (error) {
+        statuses.push({
+          id: rule.id,
+          label: rule.label,
+          loggedIn: false,
+          detail: error instanceof Error ? error.message : String(error)
+        })
+      }
+      continue
+    }
+
+    if (rule.id === 'instagram') {
+      try {
         if (!matched.has('sessionid') || !matched.has('ds_user_id')) {
           statuses.push({
             id: rule.id,
             label: rule.label,
             loggedIn: false,
-            detail: '未进入 Instagram 个人主页（缺少 sessionid / ds_user_id）'
+            detail: '应用内登录未检测到 sessionid / ds_user_id'
           })
           continue
         }
@@ -259,12 +264,13 @@ async function platformStatuses(
       }
       continue
     }
+
     const loggedIn = matched.size > 0
     statuses.push({
       id: rule.id,
       label: rule.label,
       loggedIn,
-      detail: loggedIn ? `已检测到 ${matched.size} 个登录 cookie` : '未检测到登录 cookie'
+      detail: loggedIn ? `应用内已检测到 ${matched.size} 个登录 cookie` : '应用内未检测到登录 cookie'
     })
   }
   return statuses
@@ -291,11 +297,16 @@ export function cookiesToNetscape(cookies: Cookie[]): string {
 
 export async function buildLoginCookieStatus(
   exportedFile?: string,
-  instagramCookies = '',
+  platformAuth: PlatformAuthConfig = {
+    youtube: { mode: 'builtin', cookies: '' },
+    tiktok: { mode: 'builtin', cookies: '' },
+    instagram: { mode: 'paste', cookies: '' },
+    facebook: { mode: 'builtin', cookies: '' }
+  },
   proxy = ''
 ): Promise<YtdlpCookieStatus> {
   const cookies = await readLoginCookies()
-  const platforms = await platformStatuses(cookies, instagramCookies, proxy)
+  const platforms = await platformStatuses(cookies, platformAuth, proxy)
   let exported = false
   let exportedAt: string | undefined
   if (exportedFile && existsSync(exportedFile)) {

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KouboxConfig } from '@koubox/shared'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { RuntimeStore } from '../src/runtime.js'
 
 const temporaryRoots: string[] = []
@@ -26,7 +27,7 @@ function defaults(modelsDirectory: string): KouboxConfig {
     ytdlpProxy: '',
     ytdlpCookieSource: 'none',
     ytdlpCookiesPath: '',
-    ytdlpInstagramCookies: '',
+    ytdlpPlatformAuth: defaultPlatformAuth(),
     ytdlpMaxHeight: 0,
     ytdlpExtraArgs: '',
     maxConcurrentTasks: 1,
@@ -67,7 +68,10 @@ describe('Faster-Whisper ASR configuration', () => {
       ...defaults(stale),
       ytdlpDirectory: join(stale, 'yt-dlp'),
       ffmpegDirectory: join(stale, 'ffmpeg'),
-      ytdlpInstagramCookies: 'sessionid=should-stay',
+      ytdlpPlatformAuth: {
+        ...defaultPlatformAuth(),
+        instagram: { mode: 'paste', cookies: 'sessionid=should-stay' }
+      },
       debugMode: true
     }), 'utf8')
 
@@ -77,7 +81,22 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.ytdlpDirectory).toBe(bundledDefaults.ytdlpDirectory)
     expect(config.ffmpegDirectory).toBe(bundledDefaults.ffmpegDirectory)
     expect(config.asrModelDirectory).toBe(bundledDefaults.asrModelDirectory)
-    expect(config.ytdlpInstagramCookies).toBe('sessionid=should-stay')
+    expect(config.ytdlpPlatformAuth.instagram.cookies).toBe('sessionid=should-stay')
     expect(config.debugMode).toBe(true)
+  })
+
+  it('migrates legacy ytdlpInstagramCookies into platform auth', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-ig-'))
+    temporaryRoots.push(root)
+    const modelsDirectory = join(root, 'models')
+    const runtimeFile = join(root, 'runtime.json')
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...defaults(modelsDirectory),
+      ytdlpInstagramCookies: 'sessionid=legacy\tds_user_id=1'
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, defaults(modelsDirectory)).read()
+    expect(config.ytdlpPlatformAuth.instagram.cookies).toContain('sessionid=legacy')
+    expect(config.ytdlpPlatformAuth.instagram.mode).toBe('paste')
   })
 })

@@ -1,9 +1,11 @@
 # 口播匣便携包打包脚本
 # 用法：
 #   pnpm pack:portable
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1
-#   ... -CleanOnly              只删除旧 release/win-unpacked
+#   pnpm pack:portable -- -Version 0.2.0
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -Version 0.2.0
+#   ... -CleanOnly              只删除旧 release 产物（含 Koubox-*）
 #   ... -SkipPackage            只预检，不真正打包（给你手动打包前验证）
+#   ... -Version 0.2.0          指定发布版本（写入 apps/desktop/package.json，目录名 Koubox-0.2.0）
 #   ... -ProxyPort 7897         代理端口，默认 7897
 #   ... -KeepRelease            打包前不删旧产物（默认会删）
 #
@@ -13,6 +15,7 @@
 # - 打包版强制使用 resources 内的 models / vendor / python
 
 param(
+  [string]$Version = '',
   [int]$ProxyPort = 7897,
   [switch]$CleanOnly,
   [switch]$SkipPackage,
@@ -23,10 +26,53 @@ $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $root
 
+$desktopPkgPath = Join-Path $root 'apps\desktop\package.json'
+$rootPkgPath = Join-Path $root 'package.json'
+
+function Assert-Semver([string] $Value) {
+  if ($Value -notmatch '^\d+\.\d+\.\d+([-.+][0-9A-Za-z.-]+)?$') {
+    throw "版本号格式无效：$Value（示例：0.2.0、1.0.0-beta.1）"
+  }
+}
+
+function Set-JsonVersion([string] $FilePath, [string] $NewVersion) {
+  $text = Get-Content -LiteralPath $FilePath -Raw
+  if ($text -notmatch '"version"\s*:') {
+    throw "无法在 $FilePath 找到 version 字段"
+  }
+  $next = [regex]::Replace($text, '("version"\s*:\s*")[^"]+(")', "`${1}$NewVersion`${2}", 1)
+  if ($next -eq $text) {
+    throw "未能更新 $FilePath 的版本号"
+  }
+  [System.IO.File]::WriteAllText($FilePath, $next)
+}
+
+$desktopPkgJson = Get-Content -LiteralPath $desktopPkgPath -Raw | ConvertFrom-Json
+if ($Version.Trim()) {
+  $Version = $Version.Trim()
+  Assert-Semver $Version
+  if ([string]$desktopPkgJson.version -ne $Version) {
+    Write-Host "写入版本 $Version -> apps/desktop/package.json"
+    Set-JsonVersion $desktopPkgPath $Version
+    $rootJson = Get-Content -LiteralPath $rootPkgPath -Raw | ConvertFrom-Json
+    if ([string]$rootJson.version -ne $Version) {
+      Write-Host "写入版本 $Version -> package.json"
+      Set-JsonVersion $rootPkgPath $Version
+    }
+    $desktopPkgJson = Get-Content -LiteralPath $desktopPkgPath -Raw | ConvertFrom-Json
+  }
+}
+
+$appEnglishName = 'Koubox'
+$appVersion = [string]$desktopPkgJson.version
+Write-Host "打包版本：$appVersion"
+$distFolderName = "$appEnglishName-$appVersion"
+
 $releaseDir = Join-Path $root 'apps\desktop\release'
-$unpacked = Join-Path $releaseDir 'win-unpacked'
-$exe = Join-Path $unpacked '口播匣.exe'
-$resources = Join-Path $unpacked 'resources'
+$builderUnpacked = Join-Path $releaseDir 'win-unpacked'
+$distDir = Join-Path $releaseDir $distFolderName
+$exe = Join-Path $distDir '口播匣.exe'
+$resources = Join-Path $distDir 'resources'
 
 function Assert-Path([string] $Path, [string] $Label) {
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -109,6 +155,34 @@ function Invoke-Preflight {
   Write-Host '预检通过。'
 }
 
+function Repair-PackedPyvenvHome {
+  # afterPack 写入的是 win-unpacked 绝对路径；目录改名为 Koubox-x.y.z 后必须改写，
+  # 否则 uv 的 Scripts\python.exe 会报 No Python at '...win-unpacked\...\python-home'。
+  # 应用启动时 patchBundledPythonHome 还会再写一次（用户移动文件夹后仍可用）。
+  $cfgPath = Join-Path $resources 'python\pyvenv.cfg'
+  $pyHome = Join-Path $resources 'python-home'
+  $pyHomeExe = Join-Path $pyHome 'python.exe'
+  Assert-Path $cfgPath '包内 pyvenv.cfg'
+  Assert-Path $pyHomeExe '包内 CPython home\python.exe'
+
+  $homeItem = Get-Item -LiteralPath $pyHome -Force
+  if ($homeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "校验失败：resources\python-home 仍是软链接/Junction（目标：$($homeItem.Target)）。便携包必须是实体文件，请检查 after-pack 是否解引用复制。"
+  }
+
+  $homeFileCount = @(Get-ChildItem -LiteralPath $pyHome -Recurse -File -ErrorAction SilentlyContinue).Count
+  if ($homeFileCount -lt 100) {
+    throw "校验失败：resources\python-home 文件过少（$homeFileCount），CPython 未完整打进包。"
+  }
+  Write-Host "python-home 文件数：$homeFileCount（实体目录，非软链接）"
+  $cfg = Get-Content -LiteralPath $cfgPath -Raw
+  $next = [regex]::Replace($cfg, '(?m)^home\s*=\s*.+$', "home = $pyHome")
+  if ($next -ne $cfg) {
+    [System.IO.File]::WriteAllText($cfgPath, $next)
+    Write-Host "已改写 pyvenv.cfg home -> $pyHome"
+  }
+}
+
 function Invoke-Postflight {
   Write-Host '== 打包结果校验 =='
   Assert-Path $exe '口播匣.exe'
@@ -117,14 +191,17 @@ function Invoke-Postflight {
   Assert-Path (Join-Path $resources 'models\faster-whisper-large-v3\model.bin') '包内 Whisper'
   Assert-Path (Join-Path $resources 'models\HYMT21.8B\model.safetensors') '包内翻译模型'
   Assert-Path (Join-Path $resources 'python\Scripts\python.exe') '包内 Python'
-  Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch') '包内 torch'
-  Assert-Path (Join-Path $resources 'python-home\python.exe') '包内 CPython home'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\c10.dll') '包内 torch c10.dll'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\MSVCP140.dll') '包内 VC++ MSVCP140（WinError 126 依赖）'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\VCRUNTIME140.dll') '包内 VC++ VCRUNTIME140'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime') '包内 Python 源码'
+
+  Repair-PackedPyvenvHome
 
   $forbidden = @(
     (Join-Path $resources 'python\wheels'),
-    (Join-Path $unpacked 'userdata\runtime.json'),
-    (Join-Path $unpacked 'userdata\ytdlp-cookies.txt'),
+    (Join-Path $distDir 'userdata\runtime.json'),
+    (Join-Path $distDir 'userdata\ytdlp-cookies.txt'),
     (Join-Path $resources 'ytdlp-cookies.txt'),
     (Join-Path $resources 'runtime.json')
   )
@@ -140,7 +217,7 @@ function Invoke-Postflight {
   }
 
   # 空 userdata：用户首次启动才生成配置与登录态，不把开发机 Cookie 打进去
-  $userdata = Join-Path $unpacked 'userdata'
+  $userdata = Join-Path $distDir 'userdata'
   New-Item -ItemType Directory -Path $userdata -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $userdata 'README.txt') -Encoding UTF8 -Value @(
     '此目录存放便携版用户配置与登录 Cookie。'
@@ -149,7 +226,9 @@ function Invoke-Postflight {
   )
 
   $packedPython = Join-Path $resources 'python\Scripts\python.exe'
+  $torchLib = Join-Path $resources 'python\Lib\site-packages\torch\lib'
   $env:PYTHONPATH = Join-Path $resources 'python\src'
+  $env:Path = "$torchLib;$env:Path"
   $importOut = & $packedPython -c "import torch, koubox_runtime; print(torch.__version__); print('runtime-ok')"
   $importText = ($importOut | Out-String)
   Write-Host $importText.Trim()
@@ -159,9 +238,9 @@ function Invoke-Postflight {
 
   Write-Host ''
   Write-Host '便携目录已生成（解压即用）：'
-  Write-Host $unpacked
+  Write-Host $distDir
   Write-Host '双击 口播匣.exe。工具/模型路径会指向 resources\；登录需用户自己完成。'
-  Write-Host '把整个 win-unpacked（含空 userdata）打成 7z/zip 发给用户即可。'
+  Write-Host "把整个 $distFolderName（含空 userdata）打成 7z/zip 发给用户即可。"
 }
 
 # ---- main ----
@@ -182,10 +261,19 @@ if (-not $KeepRelease) {
   Remove-OldRelease
 }
 
-Write-Host '开始 electron-builder（dir，解压即用）...'
+Write-Host "开始 electron-builder（dir），完成后将目录改名为 $distFolderName ..."
 pnpm --filter @koubox/desktop package
 if ($LASTEXITCODE -ne 0) {
   throw "electron-builder 失败，退出码 $LASTEXITCODE"
 }
+
+if (-not (Test-Path -LiteralPath $builderUnpacked)) {
+  throw "打包后找不到 $builderUnpacked"
+}
+if (Test-Path -LiteralPath $distDir) {
+  Remove-Item -LiteralPath $distDir -Recurse -Force
+}
+Rename-Item -LiteralPath $builderUnpacked -NewName $distFolderName
+Write-Host "产物目录：$distDir"
 
 Invoke-Postflight

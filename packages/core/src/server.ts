@@ -3,8 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, KouboxConfig, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
-import { tools } from '@koubox/shared'
+import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
+import { defaultPlatformAuth, tools } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
@@ -24,7 +24,7 @@ type ServerOptions = {
   openPath(targetPath: string): Promise<void>
   openLoginWindow(): Promise<void>
   exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  getLoginCookieStatus(instagramCookies: string, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
+  getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
   exportedCookiesFile: string
 }
 
@@ -77,6 +77,28 @@ function asYtdlpCookieSource(value: unknown, fallback: YtdlpCookieSource): Ytdlp
   return fallback
 }
 
+function asPlatformAuth(value: unknown, fallback: PlatformAuthConfig): PlatformAuthConfig {
+  const next = defaultPlatformAuth()
+  const ids = ['youtube', 'tiktok', 'instagram', 'facebook'] as const
+  for (const id of ids) {
+    next[id] = {
+      mode: fallback[id]?.mode ?? next[id].mode,
+      cookies: typeof fallback[id]?.cookies === 'string' ? fallback[id].cookies : ''
+    }
+  }
+  if (!value || typeof value !== 'object') return next
+  const record = value as Record<string, { mode?: unknown; cookies?: unknown }>
+  for (const id of ids) {
+    const entry = record[id]
+    if (!entry || typeof entry !== 'object') continue
+    next[id] = {
+      mode: entry.mode === 'paste' || entry.mode === 'builtin' ? entry.mode : next[id].mode,
+      cookies: typeof entry.cookies === 'string' ? entry.cookies : next[id].cookies
+    }
+  }
+  return next
+}
+
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
   const ytdlpCookieSource = asYtdlpCookieSource(body.ytdlpCookieSource, config.ytdlpCookieSource)
   return {
@@ -95,7 +117,7 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     ytdlpCookiesPath: ytdlpCookieSource === 'file'
       ? asString(body.ytdlpCookiesPath, config.ytdlpCookiesPath)
       : '',
-    ytdlpInstagramCookies: asString(body.ytdlpInstagramCookies, config.ytdlpInstagramCookies),
+    ytdlpPlatformAuth: asPlatformAuth(body.ytdlpPlatformAuth, config.ytdlpPlatformAuth),
     ytdlpMaxHeight: asYtdlpMaxHeight(body.ytdlpMaxHeight, config.ytdlpMaxHeight),
     ytdlpExtraArgs: asString(body.ytdlpExtraArgs, config.ytdlpExtraArgs),
     maxConcurrentTasks: Math.max(1, Math.floor(asNumber(body.maxConcurrentTasks, config.maxConcurrentTasks))),
@@ -249,7 +271,7 @@ export async function startLocalApi(options: ServerOptions) {
         }
       }
       if (method === 'GET' && url.pathname === '/browser/cookie-status') {
-        return json(response, 200, await options.getLoginCookieStatus(config.ytdlpInstagramCookies, config.ytdlpProxy))
+        return json(response, 200, await options.getLoginCookieStatus(config.ytdlpPlatformAuth, config.ytdlpProxy))
       }
       const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)(?:\/(events|translate|cancel|export))?$/)
       if (taskMatch) {

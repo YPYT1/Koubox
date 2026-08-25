@@ -156,6 +156,137 @@ export type AsrLanguage = 'auto' | TranslationTargetLanguage
 export type YtdlpMaxHeight = 0 | 1080 | 720 | 480
 export type YtdlpCookieSource = 'builtin' | 'none' | 'file'
 export type YtdlpCookiePlatformId = 'youtube' | 'tiktok' | 'instagram' | 'facebook'
+export type PlatformAuthMode = 'builtin' | 'paste'
+
+export type PlatformAuthEntry = {
+  mode: PlatformAuthMode
+  cookies: string
+}
+
+export type PlatformAuthConfig = Record<YtdlpCookiePlatformId, PlatformAuthEntry>
+
+export function defaultPlatformAuth(): PlatformAuthConfig {
+  return {
+    youtube: { mode: 'builtin', cookies: '' },
+    tiktok: { mode: 'builtin', cookies: '' },
+    instagram: { mode: 'paste', cookies: '' },
+    facebook: { mode: 'builtin', cookies: '' }
+  }
+}
+
+export function platformAuthIdFromUrlPlatform(platform: KouboxPlatform): YtdlpCookiePlatformId | undefined {
+  if (platform === 'YouTube') return 'youtube'
+  if (platform === 'TikTok') return 'tiktok'
+  if (platform === 'Instagram') return 'instagram'
+  if (platform === 'Facebook') return 'facebook'
+  return undefined
+}
+
+export type PlatformCookieRule = {
+  id: YtdlpCookiePlatformId
+  label: string
+  domainTest: RegExp
+  requiredNames: string[]
+}
+
+export const PLATFORM_COOKIE_RULES: PlatformCookieRule[] = [
+  {
+    id: 'youtube',
+    label: 'YouTube',
+    domainTest: /(?:^|\.)(youtube\.com|google\.com)$/i,
+    requiredNames: ['SID', 'HSID', 'SSID', 'APISID', 'SAPISID']
+  },
+  {
+    id: 'tiktok',
+    label: 'TikTok',
+    domainTest: /(?:^|\.)tiktok\.com$/i,
+    requiredNames: ['sessionid', 'sid_tt']
+  },
+  {
+    id: 'instagram',
+    label: 'Instagram',
+    domainTest: /(?:^|\.)instagram\.com$/i,
+    requiredNames: ['sessionid', 'ds_user_id']
+  },
+  {
+    id: 'facebook',
+    label: 'Facebook',
+    domainTest: /(?:^|\.)(facebook\.com|fb\.com)$/i,
+    requiredNames: ['c_user', 'xs']
+  }
+]
+
+export function pastedCookieNamesFromNetscape(text: string, domainTest: RegExp): Set<string> {
+  const names = new Set<string>()
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim()
+    if (!line) continue
+    if (line.startsWith('#HttpOnly_')) line = line.slice('#HttpOnly_'.length)
+    else if (line.startsWith('#')) continue
+    const parts = line.split('\t')
+    if (parts.length < 7) continue
+    const domain = (parts[0] ?? '').replace(/^\./, '')
+    const name = parts[5]
+    if (!domain || !name) continue
+    if (!domainTest.test(domain)) continue
+    names.add(name)
+  }
+  return names
+}
+
+export function assertPastedPlatformCookies(platformId: YtdlpCookiePlatformId, text: string): void {
+  const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
+  if (!rule) throw new Error(`未知平台：${platformId}`)
+  const names = pastedCookieNamesFromNetscape(text, rule.domainTest)
+  const missing = rule.requiredNames.filter((name) => !names.has(name))
+  if (missing.length > 0) {
+    throw new Error(`${rule.label} Cookie 不完整：缺少 ${missing.join(' / ')}。请用浏览器插件重新导出后粘贴。`)
+  }
+}
+
+export function pastedPlatformCookiesReady(platformId: YtdlpCookiePlatformId, text: string): { ok: boolean; detail: string } {
+  try {
+    assertPastedPlatformCookies(platformId, text)
+    const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)!
+    return { ok: true, detail: `粘贴的 Cookie 含 ${rule.requiredNames.length} 个关键字段` }
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export function platformLabel(platformId: YtdlpCookiePlatformId): string {
+  return PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)?.label ?? platformId
+}
+
+/** 从错误原文或 URL 里识别需要登录提示的平台 */
+export function detectAuthPlatformFromText(text: string): YtdlpCookiePlatformId | undefined {
+  if (/instagram\.com|\[instagram\]/i.test(text)) return 'instagram'
+  if (/tiktok\.com|\[tiktok\]/i.test(text)) return 'tiktok'
+  if (/facebook\.com|fb\.watch|\[facebook\]/i.test(text)) return 'facebook'
+  if (/youtube\.com|youtu\.be|\[youtube\]/i.test(text)) return 'youtube'
+  return undefined
+}
+
+export function platformAuthMissingMessage(
+  platformId: YtdlpCookiePlatformId,
+  mode: PlatformAuthMode,
+  reason: 'empty-paste' | 'no-builtin-export' | 'builtin-incomplete' | 'login-required'
+): string {
+  const label = platformLabel(platformId)
+  if (mode === 'paste' || reason === 'empty-paste') {
+    if (reason === 'empty-paste') {
+      return `${label} 已选「粘贴 Cookie」，但尚未粘贴内容。请到「全局设置 → 平台登录」展开 ${label}，粘贴后保存。`
+    }
+    return `${label} 登录态无效或 Cookie 未生效。请用插件重新导出 ${label} Cookie，粘贴到「全局设置 → 平台登录」后保存，再重试。`
+  }
+  if (reason === 'no-builtin-export') {
+    return `${label} 当前为「应用内登录」，但尚未保存登录状态。请到「全局设置 → 平台登录」打开登录窗口，登录 ${label} 后点击「保存应用内登录」。`
+  }
+  if (reason === 'builtin-incomplete') {
+    return `${label} 当前为「应用内登录」，但已保存的登录里缺少 ${label} Cookie。请打开登录窗口登录 ${label}，再点「保存应用内登录」。`
+  }
+  return `${label} 需要有效登录才能下载。请到「全局设置 → 平台登录」为 ${label} 配置「应用内登录」或「粘贴 Cookie」后重试。`
+}
 
 export type YtdlpCookiePlatformStatus = {
   id: YtdlpCookiePlatformId
@@ -185,7 +316,8 @@ export type KouboxConfig = {
   ytdlpProxy: string
   ytdlpCookieSource: YtdlpCookieSource
   ytdlpCookiesPath: string
-  ytdlpInstagramCookies: string
+  /** 各平台独立：应用内登录 / 粘贴 Cookie */
+  ytdlpPlatformAuth: PlatformAuthConfig
   ytdlpMaxHeight: YtdlpMaxHeight
   ytdlpExtraArgs: string
   maxConcurrentTasks: number
@@ -231,16 +363,23 @@ export function toUserTaskMessage(raw: string): string {
     }
   }
   if (/Could not copy (Chrome|Edge) cookie|Failed to decrypt|Failed to load cookies|cookie database is locked|being used by/i.test(text)) {
-    return '读不到系统浏览器登录状态。请在「全局设置 → 下载（yt-dlp）」使用应用内登录，打开登录窗口完成登录后点「保存登录状态」。'
+    return '读不到系统浏览器登录状态。请在「全局设置 → 平台登录」使用应用内登录，打开登录窗口完成登录后点「保存应用内登录」。'
+  }
+  if (/已选「粘贴 Cookie」|当前为「应用内登录」|平台登录/i.test(text) && /请到「全局设置/i.test(text)) {
+    return text
   }
   if (/尚未保存登录状态/i.test(text)) {
     return text
   }
+  const authPlatform = detectAuthPlatformFromText(text)
   if (/\[Instagram\]|instagram\.com/i.test(text) && /login required|rate-limit|not available|Please wait|challenge|cookie/i.test(text)) {
-    return 'Instagram 下载失败：登录态无效或未生效。请用浏览器插件重新导出 cookie，粘贴到「全局设置 → Instagram Cookie」后保存，再重试。'
+    return platformAuthMissingMessage('instagram', 'paste', 'login-required')
   }
   if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
-    return '该视频需要登录后才能下载。请在「全局设置 → 下载（yt-dlp）」打开登录窗口，保存登录状态后再试。'
+    if (authPlatform) {
+      return platformAuthMissingMessage(authPlatform, 'builtin', 'login-required')
+    }
+    return '该视频需要登录后才能下载。请到「全局设置 → 平台登录」为对应平台配置登录后再试。'
   }
   if (/age-restricted|confirm your age/i.test(text)) {
     return '该视频有年龄限制。请使用已登录且符合年龄要求的账号，并检查下载设置中的登录来源。'

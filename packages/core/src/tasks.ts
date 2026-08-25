@@ -14,7 +14,16 @@ import type {
   Transcript,
   TranslationTargetLanguage
 } from '@koubox/shared'
-import { detectPlatform, toUserTaskMessage, normalizeProxyUrl } from '@koubox/shared'
+import {
+  assertPastedPlatformCookies,
+  detectPlatform,
+  pastedCookieNamesFromNetscape,
+  PLATFORM_COOKIE_RULES,
+  platformAuthMissingMessage,
+  toUserTaskMessage,
+  normalizeProxyUrl,
+  platformAuthIdFromUrlPlatform
+} from '@koubox/shared'
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 
 const log = createLogger('tasks')
@@ -387,7 +396,7 @@ export class TaskManager {
       this.persist(record)
       const gpu = detectGpu()
       if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '视频和音频已保存，但当前没有可用的 NVIDIA GPU，无法执行人声分离与语音识别。')
-      this.update(record, { stage: 'separate-vocals', percent: 36, message: '正在分离人声（去除背景音乐）' })
+      this.update(record, { stage: 'separate-vocals', percent: 36, message: '正在分离人声（加载模型 / 去除背景音乐）' })
       const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`))
       record.task.artifacts.vocals = vocals
       this.persist(record)
@@ -552,27 +561,47 @@ export class TaskManager {
       const proxy = normalizeProxyUrl(config.ytdlpProxy)
       if (proxy) args.push('--proxy', proxy)
     }
-    const instagramCookies = config.ytdlpInstagramCookies.trim()
-    const useInstagramCookies = detectPlatform(record.task.url) === 'Instagram' && Boolean(instagramCookies)
-    if (useInstagramCookies) {
-      if (!/\bsessionid\b/.test(instagramCookies) || !/\bds_user_id\b/.test(instagramCookies)) {
-        throw new Error('Instagram Cookie 不完整：需要包含 sessionid 和 ds_user_id。请用浏览器插件重新导出后粘贴。')
-      }
-      const instagramCookiesFile = join(dirname(this.options.taskIndexFile), 'instagram-cookies.txt')
-      writeFileSync(instagramCookiesFile, instagramCookies.endsWith('\n') ? instagramCookies : `${instagramCookies}\n`, 'utf8')
-      log.info('Instagram 使用设置中粘贴的 Cookie', { taskId: record.task.taskId, cookies: instagramCookiesFile })
-      args.push('--cookies', instagramCookiesFile)
-    } else if (config.ytdlpCookieSource === 'builtin') {
-      const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
-      if (!existsSync(exportedCookies)) {
-        throw new Error('尚未保存登录状态。请在「全局设置 → 下载（yt-dlp）」打开登录窗口，登录后点击「保存登录状态」。')
-      }
-      args.push('--cookies', exportedCookies)
+    const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
+    const platformAuth = platformId ? config.ytdlpPlatformAuth[platformId] : undefined
+    if (config.ytdlpCookieSource === 'none') {
+      // no cookies
     } else if (config.ytdlpCookieSource === 'file') {
       const cookiesPath = config.ytdlpCookiesPath.trim()
       if (!cookiesPath) throw new Error('登录来源为 Cookies 文件，但未选择文件。请在「全局设置 → 下载（yt-dlp）」中选择 cookies.txt。')
       if (!existsSync(cookiesPath)) throw new Error(`Cookies 文件不存在：${cookiesPath}`)
       args.push('--cookies', cookiesPath)
+    } else if (config.ytdlpCookieSource === 'builtin') {
+      if (platformId && platformAuth?.mode === 'paste') {
+        const pasted = platformAuth.cookies.trim()
+        if (!pasted) {
+          throw new Error(platformAuthMissingMessage(platformId, 'paste', 'empty-paste'))
+        }
+        assertPastedPlatformCookies(platformId, pasted)
+        const cookiesFile = join(dirname(this.options.taskIndexFile), `${platformId}-cookies.txt`)
+        writeFileSync(cookiesFile, pasted.endsWith('\n') ? pasted : `${pasted}\n`, 'utf8')
+        log.info('下载使用粘贴的平台 Cookie', { taskId: record.task.taskId, platform: platformId, cookies: cookiesFile })
+        args.push('--cookies', cookiesFile)
+      } else {
+        const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
+        if (!existsSync(exportedCookies)) {
+          if (platformId) {
+            throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'no-builtin-export'))
+          }
+          throw new Error('尚未保存登录状态。请到「全局设置 → 平台登录」打开登录窗口，登录后点击「保存应用内登录」。')
+        }
+        if (platformId) {
+          const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
+          if (rule) {
+            const exportedText = readFileSync(exportedCookies, 'utf8')
+            const names = pastedCookieNamesFromNetscape(exportedText, rule.domainTest)
+            const missing = rule.requiredNames.filter((name) => !names.has(name))
+            if (missing.length > 0) {
+              throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'builtin-incomplete'))
+            }
+          }
+        }
+        args.push('--cookies', exportedCookies)
+      }
     }
     args.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
     if (config.ytdlpExtraArgs.trim()) args.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
@@ -752,6 +781,10 @@ export class TaskManager {
     const runtimeSrc = join(this.options.pythonProjectDirectory, 'src')
     if (existsSync(runtimeSrc)) {
       env.PYTHONPATH = env.PYTHONPATH ? `${runtimeSrc}${delimiter}${env.PYTHONPATH}` : runtimeSrc
+    }
+    const torchLib = join(this.options.pythonProjectDirectory, 'Lib', 'site-packages', 'torch', 'lib')
+    if (existsSync(torchLib)) {
+      env.PATH = env.PATH ? `${torchLib}${delimiter}${env.PATH}` : torchLib
     }
     for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
       delete env[key]

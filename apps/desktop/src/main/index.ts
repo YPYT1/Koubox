@@ -53,8 +53,13 @@ function patchBundledPythonHome(): void {
   if (!app.isPackaged) return
   const cfgPath = join(process.resourcesPath, 'python', 'pyvenv.cfg')
   const home = join(process.resourcesPath, 'python-home')
+  const homePython = join(home, 'python.exe')
   if (!existsSync(cfgPath)) throw new Error(`打包环境缺少 Python 配置：${cfgPath}`)
-  if (!existsSync(home)) throw new Error(`打包环境缺少 Python 运行时：${home}`)
+  if (!existsSync(homePython)) {
+    throw new Error(
+      `打包环境缺少 Python 运行时：${homePython}。若你是把安装目录从其他盘复制/移动到当前位置，请重新完整复制整个 Koubox 文件夹（确保 resources\\python-home 内有数千个文件），或重新解压发布包。`
+    )
+  }
   const cfg = readFileSync(cfgPath, 'utf8')
   const next = cfg.replace(/^home\s*=\s*.+$/m, `home = ${home}`)
   if (next !== cfg) writeFileSync(cfgPath, next, 'utf8')
@@ -181,7 +186,12 @@ async function createWindow(): Promise<void> {
       ytdlpProxy: '',
       ytdlpCookieSource: 'builtin',
       ytdlpCookiesPath: '',
-      ytdlpInstagramCookies: '',
+      ytdlpPlatformAuth: {
+        youtube: { mode: 'builtin', cookies: '' },
+        tiktok: { mode: 'builtin', cookies: '' },
+        instagram: { mode: 'paste', cookies: '' },
+        facebook: { mode: 'builtin', cookies: '' }
+      },
       ytdlpMaxHeight: 0,
       ytdlpExtraArgs: '',
       maxConcurrentTasks: 1,
@@ -240,7 +250,7 @@ async function createWindow(): Promise<void> {
     },
     openLoginWindow,
     exportLoginCookies: () => exportLoginCookies(exportedCookiesFile),
-    getLoginCookieStatus: (instagramCookies, proxy) => buildLoginCookieStatus(exportedCookiesFile, instagramCookies, proxy)
+    getLoginCookieStatus: (platformAuth, proxy) => buildLoginCookieStatus(exportedCookiesFile, platformAuth, proxy)
   })
 
   mainWindow = new BrowserWindow({

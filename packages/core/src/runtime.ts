@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import type { GpuStatus, KouboxConfig, ModelCheck, RuntimeStatus, VendorToolCheck, YtdlpCookieSource } from '@koubox/shared'
+import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId, YtdlpCookieSource } from '@koubox/shared'
+import { defaultPlatformAuth } from '@koubox/shared'
 
 const asrModelFiles = [
   'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
@@ -79,14 +80,11 @@ export class RuntimeStore {
       config.ytdlpCookieSource = this.defaults.ytdlpCookieSource
     }
     if (typeof config.ytdlpCookiesPath !== 'string') config.ytdlpCookiesPath = this.defaults.ytdlpCookiesPath
-    if (typeof config.ytdlpInstagramCookies !== 'string') {
-      const legacyPath = (parsed as { ytdlpInstagramCookiesPath?: unknown }).ytdlpInstagramCookiesPath
-      if (typeof legacyPath === 'string' && legacyPath.trim() && existsSync(legacyPath.trim())) {
-        config.ytdlpInstagramCookies = readFileSync(legacyPath.trim(), 'utf8')
-      } else {
-        config.ytdlpInstagramCookies = this.defaults.ytdlpInstagramCookies
-      }
-    }
+    config.ytdlpPlatformAuth = normalizePlatformAuth(
+      (parsed as { ytdlpPlatformAuth?: unknown }).ytdlpPlatformAuth,
+      this.defaults.ytdlpPlatformAuth,
+      (parsed as { ytdlpInstagramCookies?: unknown }).ytdlpInstagramCookies
+    )
     if (config.ytdlpMaxHeight !== 0 && config.ytdlpMaxHeight !== 1080 && config.ytdlpMaxHeight !== 720 && config.ytdlpMaxHeight !== 480) {
       config.ytdlpMaxHeight = this.defaults.ytdlpMaxHeight
     }
@@ -228,6 +226,43 @@ export function resolveVendorPaths(config: KouboxConfig): {
     ytdlpExecutable: join(config.ytdlpDirectory, 'yt-dlp.exe'),
     ffmpegExecutable: join(config.ffmpegDirectory, 'ffmpeg.exe')
   }
+}
+
+function asAuthMode(value: unknown, fallback: PlatformAuthMode): PlatformAuthMode {
+  return value === 'paste' || value === 'builtin' ? value : fallback
+}
+
+function normalizePlatformAuth(
+  raw: unknown,
+  defaults: PlatformAuthConfig,
+  legacyInstagramCookies: unknown
+): PlatformAuthConfig {
+  const next = defaultPlatformAuth()
+  const ids: YtdlpCookiePlatformId[] = ['youtube', 'tiktok', 'instagram', 'facebook']
+  for (const id of ids) {
+    next[id] = {
+      mode: defaults[id]?.mode ?? next[id].mode,
+      cookies: typeof defaults[id]?.cookies === 'string' ? defaults[id].cookies : ''
+    }
+  }
+  if (raw && typeof raw === 'object') {
+    const record = raw as Record<string, { mode?: unknown; cookies?: unknown }>
+    for (const id of ids) {
+      const entry = record[id]
+      if (!entry || typeof entry !== 'object') continue
+      next[id] = {
+        mode: asAuthMode(entry.mode, next[id].mode),
+        cookies: typeof entry.cookies === 'string' ? entry.cookies : next[id].cookies
+      }
+    }
+  }
+  if (!next.instagram.cookies.trim()) {
+    if (typeof legacyInstagramCookies === 'string' && legacyInstagramCookies.trim()) {
+      next.instagram.cookies = legacyInstagramCookies
+      next.instagram.mode = 'paste'
+    }
+  }
+  return next
 }
 
 export function getRuntimeStatus(config: KouboxConfig): RuntimeStatus {

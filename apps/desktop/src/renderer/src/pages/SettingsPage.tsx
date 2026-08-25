@@ -14,13 +14,16 @@ import {
 import type {
   AsrLanguage,
   KouboxConfig,
+  PlatformAuthMode,
   RuntimeStatus,
   TranslationTargetLanguage,
   VendorToolCheck,
+  YtdlpCookiePlatformId,
   YtdlpCookieSource,
   YtdlpCookieStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 
@@ -63,9 +66,20 @@ const HEIGHT_OPTIONS: Array<{ value: YtdlpMaxHeight; label: string }> = [
 ]
 
 const COOKIE_SOURCE_OPTIONS: Array<{ value: YtdlpCookieSource; label: string }> = [
-  { value: 'builtin', label: '应用内登录（推荐）' },
+  { value: 'builtin', label: '按平台配置（应用内 / 粘贴）' },
   { value: 'none', label: '不使用登录态' },
-  { value: 'file', label: 'Cookies 文件（高级）' }
+  { value: 'file', label: '统一 Cookies 文件（高级）' }
+]
+
+const PLATFORM_AUTH_OPTIONS: Array<{
+  id: YtdlpCookiePlatformId
+  label: string
+  requiredHint: string
+}> = [
+  { id: 'youtube', label: 'YouTube', requiredHint: 'SID / HSID / SSID / APISID / SAPISID' },
+  { id: 'tiktok', label: 'TikTok', requiredHint: 'sessionid / sid_tt' },
+  { id: 'instagram', label: 'Instagram', requiredHint: 'sessionid / ds_user_id' },
+  { id: 'facebook', label: 'Facebook', requiredHint: 'c_user / xs' }
 ]
 
 function normalizeCookieSource(source: YtdlpCookieSource | 'chrome' | 'edge'): YtdlpCookieSource {
@@ -155,11 +169,39 @@ export function SettingsPage({
   const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
   const cookieCheckDoneTimerRef = useRef<number | null>(null)
   const [cookieStatus, setCookieStatus] = useState<YtdlpCookieStatus | null>(null)
-  const [instagramCookiesOpen, setInstagramCookiesOpen] = useState(() => !config.ytdlpInstagramCookies?.trim())
-  const [savingInstagramCookies, setSavingInstagramCookies] = useState(false)
+  const [platformPanelOpen, setPlatformPanelOpen] = useState<Record<YtdlpCookiePlatformId, boolean>>({
+    youtube: false,
+    tiktok: false,
+    instagram: false,
+    facebook: false
+  })
+
+  const togglePlatformPanel = (id: YtdlpCookiePlatformId) => {
+    setPlatformPanelOpen((prev) => {
+      const opening = !prev[id]
+      if (!opening) return { ...prev, [id]: false }
+      return { youtube: false, tiktok: false, instagram: false, facebook: false, [id]: true }
+    })
+  }
+  const [savingPlatformAuth, setSavingPlatformAuth] = useState(false)
   const activeGuide = guide ? guides[guide] : null
   const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
-  const useBuiltinLogin = cookieSource === 'builtin'
+  const platformAuth = config.ytdlpPlatformAuth ?? defaultPlatformAuth()
+  const usePlatformAuth = cookieSource === 'builtin'
+  const anyBuiltinPlatform = PLATFORM_AUTH_OPTIONS.some((item) => platformAuth[item.id].mode === 'builtin')
+
+  const patchPlatformAuth = (id: YtdlpCookiePlatformId, patch: { mode?: PlatformAuthMode; cookies?: string }) => {
+    onChange({
+      ...config,
+      ytdlpPlatformAuth: {
+        ...platformAuth,
+        [id]: {
+          ...platformAuth[id],
+          ...patch
+        }
+      }
+    })
+  }
 
   const refreshCookieStatus = async () => {
     const start = performance.now()
@@ -196,12 +238,12 @@ export function SettingsPage({
   }
 
   useEffect(() => {
-    if (!useBuiltinLogin) {
+    if (!usePlatformAuth) {
       setCookieStatus(null)
       return
     }
     void refreshCookieStatus()
-  }, [useBuiltinLogin])
+  }, [usePlatformAuth])
 
   const handleSelectPath = async (key: keyof KouboxConfig, title: string) => {
     const current = config[key]
@@ -218,16 +260,17 @@ export function SettingsPage({
     if (picked) onChange({ ...config, [key]: picked })
   }
 
-  const handleSaveInstagramCookies = async () => {
-    setSavingInstagramCookies(true)
+  const handleSavePlatformAuth = async () => {
+    setSavingPlatformAuth(true)
     try {
       const saved = await window.koubox.put<KouboxConfig>('/config', config)
       onChange(saved)
-      onShowToast('Instagram Cookie 已保存，下载 Instagram 时会优先使用。', 'success')
+      onShowToast('平台登录配置已保存。', 'success')
+      if (usePlatformAuth) await refreshCookieStatus()
     } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '保存 Instagram Cookie 失败', 'error')
+      onShowToast(error instanceof Error ? error.message : '保存平台登录配置失败', 'error')
     } finally {
-      setSavingInstagramCookies(false)
+      setSavingPlatformAuth(false)
     }
   }
 
@@ -390,8 +433,8 @@ export function SettingsPage({
           </FormField>
 
           <FormField
-            label="登录来源"
-            hint="YouTube / TikTok / Facebook 看应用内登录。Instagram 若已粘贴 Cookie，检测会用这份 Cookie 打开账号页，过期或失效会直接标出来。"
+            label="登录策略"
+            hint="选「按平台配置」时，每个平台可单独选应用内登录或粘贴 Cookie。例如 YouTube 用应用内，Instagram 用粘贴。"
           >
             <select
               className="input-text"
@@ -411,53 +454,74 @@ export function SettingsPage({
             </select>
           </FormField>
 
-          {useBuiltinLogin && (
+          {usePlatformAuth && (
             <>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={openingLogin}
-                  icon={<Globe size={16} weight="bold" />}
-                  onClick={() => void handleOpenLoginWindow()}
-                >
-                  打开登录窗口
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={savingCookies}
-                  icon={<FloppyDiskBack size={16} weight="bold" />}
-                  onClick={() => void handleSaveLoginCookies()}
-                >
-                  保存登录状态
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={checkingCookies}
-                  icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-                  onClick={() => void refreshCookieStatus()}
-                >
-                  {cookieCheckCompleted
-                    ? '检测完成'
-                    : checkingCookies
-                      ? '检测中…'
-                      : '检测登录状态'}
-                </Button>
-              </div>
+              {anyBuiltinPlatform && (
+                <div className="platform-auth-toolbar">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={openingLogin}
+                    icon={<Globe size={16} weight="bold" />}
+                    onClick={() => void handleOpenLoginWindow()}
+                  >
+                    打开登录窗口
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={savingCookies}
+                    icon={<FloppyDiskBack size={16} weight="bold" />}
+                    onClick={() => void handleSaveLoginCookies()}
+                  >
+                    保存应用内登录
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={checkingCookies}
+                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
+                    onClick={() => void refreshCookieStatus()}
+                  >
+                    {cookieCheckCompleted
+                      ? '检测完成'
+                      : checkingCookies
+                        ? '检测中…'
+                        : '检测登录状态'}
+                  </Button>
+                </div>
+              )}
+
+              {!anyBuiltinPlatform && (
+                <div className="platform-auth-toolbar">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="md"
+                    loading={checkingCookies}
+                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
+                    onClick={() => void refreshCookieStatus()}
+                  >
+                    {cookieCheckCompleted
+                      ? '检测完成'
+                      : checkingCookies
+                        ? '检测中…'
+                        : '检测粘贴 Cookie'}
+                  </Button>
+                </div>
+              )}
 
               {cookieStatus && (
                 <div className="cookie-status-panel">
                   <div className="cookie-status-head">
                     <span>
-                      已读取 {cookieStatus.cookieCount} 个 cookie
+                      应用内会话 {cookieStatus.cookieCount} 个 cookie
                       {cookieStatus.exported && cookieStatus.exportedAt
-                        ? ` · 已保存 ${new Date(cookieStatus.exportedAt).toLocaleString()}`
-                        : ' · 尚未保存'}
+                        ? ` · 已导出 ${new Date(cookieStatus.exportedAt).toLocaleString()}`
+                        : ''}
                     </span>
                   </div>
                   <div className="cookie-status-grid">
@@ -478,11 +542,96 @@ export function SettingsPage({
                   </div>
                 </div>
               )}
+
+              <div className="platform-auth-list">
+                {PLATFORM_AUTH_OPTIONS.map((platform) => {
+                  const entry = platformAuth[platform.id]
+                  const open = platformPanelOpen[platform.id]
+                  const status = cookieStatus?.platforms.find((item) => item.id === platform.id)
+                  return (
+                    <div key={platform.id} className={`platform-auth-panel ${open ? 'open' : ''}`}>
+                      <button
+                        type="button"
+                        className="platform-auth-toggle"
+                        onClick={() => togglePlatformPanel(platform.id)}
+                        aria-expanded={open}
+                      >
+                        <span>
+                          <strong>{platform.label}</strong>
+                          <small>
+                            {entry.mode === 'paste'
+                              ? (entry.cookies.trim() ? '粘贴 Cookie · 已填写' : '粘贴 Cookie · 待粘贴')
+                              : '应用内登录'}
+                            {status ? ` · ${status.loggedIn ? '就绪' : '未就绪'}` : ''}
+                          </small>
+                        </span>
+                        <CaretDown size={16} weight="bold" className={open ? 'rotated' : ''} />
+                      </button>
+                      {open && (
+                        <div className="platform-auth-body">
+                          <div className="platform-auth-modes" role="radiogroup" aria-label={`${platform.label} 登录方式`}>
+                            <label className={`platform-auth-mode ${entry.mode === 'builtin' ? 'active' : ''}`}>
+                              <input
+                                type="radio"
+                                name={`auth-mode-${platform.id}`}
+                                checked={entry.mode === 'builtin'}
+                                onChange={() => patchPlatformAuth(platform.id, { mode: 'builtin' })}
+                              />
+                              <span>应用内登录</span>
+                            </label>
+                            <label className={`platform-auth-mode ${entry.mode === 'paste' ? 'active' : ''}`}>
+                              <input
+                                type="radio"
+                                name={`auth-mode-${platform.id}`}
+                                checked={entry.mode === 'paste'}
+                                onChange={() => patchPlatformAuth(platform.id, { mode: 'paste' })}
+                              />
+                              <span>粘贴 Cookie</span>
+                            </label>
+                          </div>
+                          {entry.mode === 'paste' ? (
+                            <>
+                              <p className="field-hint">
+                                用「口播匣 Cookie 导出」插件导出 {platform.label} 后全文粘贴。需含：{platform.requiredHint}
+                              </p>
+                              <textarea
+                                className="textarea-box platform-auth-text"
+                                rows={7}
+                                value={entry.cookies}
+                                onChange={(e) => patchPlatformAuth(platform.id, { cookies: e.target.value })}
+                                placeholder={'# Netscape HTTP Cookie File\n...'}
+                                spellCheck={false}
+                              />
+                            </>
+                          ) : (
+                            <p className="field-hint">
+                              下载 {platform.label} 时使用应用内登录窗口保存的会话。点上方「打开登录窗口」完成登录并保存。
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="platform-auth-save">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  loading={savingPlatformAuth}
+                  icon={<FloppyDiskBack size={16} weight="bold" />}
+                  onClick={() => void handleSavePlatformAuth()}
+                >
+                  保存平台登录配置
+                </Button>
+              </div>
             </>
           )}
 
           {cookieSource === 'file' && (
-            <FormField label="Cookies 文件" hint="Netscape cookies.txt。">
+            <FormField label="Cookies 文件" hint="Netscape cookies.txt，所有平台共用这一份。">
               <PathPicker
                 value={config.ytdlpCookiesPath}
                 onChange={(val) => onChange({ ...config, ytdlpCookiesPath: val })}
@@ -496,51 +645,6 @@ export function SettingsPage({
               />
             </FormField>
           )}
-
-          <div className={`instagram-cookie-panel ${instagramCookiesOpen ? 'open' : ''}`}>
-            <button
-              type="button"
-              className="instagram-cookie-toggle"
-              onClick={() => setInstagramCookiesOpen((open) => !open)}
-              aria-expanded={instagramCookiesOpen}
-            >
-              <span>
-                <strong>Instagram Cookie</strong>
-                <small>
-                  {config.ytdlpInstagramCookies.trim()
-                    ? '已粘贴，下载 Instagram 时优先使用'
-                    : '从浏览器插件导出后粘贴到这里'}
-                </small>
-              </span>
-              <CaretDown size={16} weight="bold" className={instagramCookiesOpen ? 'rotated' : ''} />
-            </button>
-            {instagramCookiesOpen && (
-              <div className="instagram-cookie-body">
-                <p className="field-hint">
-                  用插件导出 cookies.txt 后全文粘贴，点保存，再点上面的「检测登录状态」。有效会显示用户 ID；过期或停在验证页会明确提示。
-                </p>
-                <textarea
-                  className="textarea-box instagram-cookie-text"
-                  rows={8}
-                  value={config.ytdlpInstagramCookies}
-                  onChange={(e) => onChange({ ...config, ytdlpInstagramCookies: e.target.value })}
-                  placeholder={'# Netscape HTTP Cookie File\n.instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\t...'}
-                  spellCheck={false}
-                />
-                <div className="instagram-cookie-actions">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={savingInstagramCookies}
-                    onClick={() => void handleSaveInstagramCookies()}
-                  >
-                    保存 Instagram Cookie
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
 
           <FormField label="清晰度上限" hint="默认最清晰。限制高度会放弃更高分辨率。">
             <select

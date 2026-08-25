@@ -10,6 +10,12 @@ from .log import write as log_write
 from .protocol import fail, send
 
 DEMUCS_MODEL_NAME = "htdemucs"
+DEMUCS_CHECKPOINT_NAME = "955717e8-8726e21a.th"
+
+
+def _htdemucs_weights_ready(models_root: Path) -> bool:
+    checkpoint = models_root / "hub" / "checkpoints" / DEMUCS_CHECKPOINT_NAME
+    return checkpoint.is_file() and checkpoint.stat().st_size > 0
 
 
 def _load_wav(path: str) -> tuple[torch.Tensor, int]:
@@ -41,7 +47,14 @@ def run(input_path: str, vocals_path: str, models_directory: str, model_name: st
     os.environ["TORCH_HOME"] = str(models_root)
     torch.hub.set_dir(str(models_root / "hub"))
 
-    send("progress", percent=8, message="正在加载 htdemucs（首次自动下载到 models/demucs，约 80–320MB）")
+    if _htdemucs_weights_ready(models_root):
+        send("progress", percent=8, message="正在加载本地 htdemucs 模型到 GPU…")
+    else:
+        send(
+            "progress",
+            percent=8,
+            message="本地尚无 htdemucs 权重，正在下载到 models/demucs（约 80MB，仅首次）…",
+        )
 
     try:
         from demucs.apply import apply_model
@@ -56,7 +69,7 @@ def run(input_path: str, vocals_path: str, models_directory: str, model_name: st
     model.to(device)
     model.eval()
 
-    send("progress", percent=25, message="正在读取音频并准备分离")
+    send("progress", percent=25, message="模型已就绪，正在读取音频并准备分离…")
     log_write("info", "separate", "读取音频", {"inputPath": input_path})
     wav, sample_rate = _load_wav(input_path)
     wav = convert_audio(wav, sample_rate, model.samplerate, model.audio_channels)
