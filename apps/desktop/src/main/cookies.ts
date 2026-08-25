@@ -1,19 +1,25 @@
 import { BrowserWindow, session, type Cookie, type Session } from 'electron'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
+  filterNetscapeCookiesForPlatform,
   pastedPlatformCookiesReady,
   PLATFORM_COOKIE_RULES,
+  platformBuiltinCookiesFilename,
   type PlatformAuthConfig,
+  type YtdlpCookiePlatformId,
   type YtdlpCookiePlatformStatus,
   type YtdlpCookieStatus
 } from '@koubox/shared'
 
-export const LOGIN_PARTITION = 'persist:koubox-ytdlp-login'
 const INSTAGRAM_PROBE_PARTITION = 'persist:koubox-instagram-probe'
 
+export function loginPartition(platformId: YtdlpCookiePlatformId): string {
+  return `persist:koubox-login-${platformId}`
+}
 
-export function loginSession() {
-  return session.fromPartition(LOGIN_PARTITION)
+export function loginSession(platformId: YtdlpCookiePlatformId) {
+  return session.fromPartition(loginPartition(platformId))
 }
 
 export function normalizeProxyRules(proxy: string): string | null {
@@ -22,12 +28,41 @@ export function normalizeProxyRules(proxy: string): string | null {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
 }
 
-export async function applyLoginSessionProxy(proxy: string): Promise<void> {
-  await applyLoginSessionProxyTo(loginSession(), proxy)
+export async function applyLoginSessionProxy(platformId: YtdlpCookiePlatformId, proxy: string): Promise<void> {
+  await applyLoginSessionProxyTo(loginSession(platformId), proxy)
 }
 
-export async function readLoginCookies(): Promise<Cookie[]> {
-  return loginSession().cookies.get({})
+export async function readLoginCookies(platformId: YtdlpCookiePlatformId): Promise<Cookie[]> {
+  return loginSession(platformId).cookies.get({})
+}
+
+export function platformBuiltinCookiePath(cookieDirectory: string, platformId: YtdlpCookiePlatformId): string {
+  return join(cookieDirectory, platformBuiltinCookiesFilename(platformId))
+}
+
+function platformRule(platformId: YtdlpCookiePlatformId) {
+  const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
+  if (!rule) throw new Error(`未知平台：${platformId}`)
+  return rule
+}
+
+function cookiesForPlatform(cookies: Cookie[], platformId: YtdlpCookiePlatformId): Cookie[] {
+  const rule = platformRule(platformId)
+  return cookies.filter((cookie) => Boolean(cookie.name && cookie.value && rule.domainTest.test(cookieDomain(cookie))))
+}
+
+export function migrateLegacyLoginCookies(cookieDirectory: string): void {
+  const legacyFile = join(cookieDirectory, 'ytdlp-cookies.txt')
+  if (!existsSync(legacyFile)) return
+  const legacyText = readFileSync(legacyFile, 'utf8')
+  for (const rule of PLATFORM_COOKIE_RULES) {
+    const target = platformBuiltinCookiePath(cookieDirectory, rule.id)
+    if (existsSync(target)) continue
+    const filtered = filterNetscapeCookiesForPlatform(legacyText, rule.id)
+    if (filtered.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length > 0) {
+      writeFileSync(target, filtered, 'utf8')
+    }
+  }
 }
 
 function cookieDomain(cookie: Cookie): string {
@@ -189,21 +224,24 @@ async function applyLoginSessionProxyTo(sess: Session, proxy: string): Promise<v
 }
 
 async function platformStatuses(
-  cookies: Cookie[],
+  cookieDirectory: string,
   platformAuth: PlatformAuthConfig,
   proxy: string
 ): Promise<YtdlpCookiePlatformStatus[]> {
   const statuses: YtdlpCookiePlatformStatus[] = []
   for (const rule of PLATFORM_COOKIE_RULES) {
     const auth = platformAuth[rule.id]
-    const matched = cookieNamesForPlatform(cookies, rule)
     if (auth.mode === 'paste') {
       try {
         if (!auth.cookies.trim()) {
           statuses.push({
             id: rule.id,
             label: rule.label,
+            mode: auth.mode,
             loggedIn: false,
+            liveVerified: false,
+            saved: false,
+            cookieCount: 0,
             detail: '已选粘贴 Cookie，但尚未粘贴内容'
           })
           continue
@@ -213,7 +251,11 @@ async function platformStatuses(
           statuses.push({
             id: rule.id,
             label: rule.label,
+            mode: auth.mode,
             loggedIn: homepage.ok,
+            liveVerified: homepage.ok,
+            saved: true,
+            cookieCount: auth.cookies.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length,
             detail: homepage.detail
           })
           continue
@@ -222,55 +264,50 @@ async function platformStatuses(
         statuses.push({
           id: rule.id,
           label: rule.label,
+          mode: auth.mode,
           loggedIn: ready.ok,
+          liveVerified: false,
+          saved: true,
+          cookieCount: auth.cookies.split(/\r?\n/).filter((line) => line && !line.startsWith('#')).length,
           detail: ready.detail
         })
       } catch (error) {
         statuses.push({
           id: rule.id,
           label: rule.label,
+          mode: auth.mode,
           loggedIn: false,
+          liveVerified: false,
+          saved: Boolean(auth.cookies.trim()),
+          cookieCount: 0,
           detail: error instanceof Error ? error.message : String(error)
         })
       }
       continue
     }
 
-    if (rule.id === 'instagram') {
-      try {
-        if (!matched.has('sessionid') || !matched.has('ds_user_id')) {
-          statuses.push({
-            id: rule.id,
-            label: rule.label,
-            loggedIn: false,
-            detail: '应用内登录未检测到 sessionid / ds_user_id'
-          })
-          continue
-        }
-        const homepage = await instagramHomepageReadyFromSession(loginSession(), 'builtin')
-        statuses.push({
-          id: rule.id,
-          label: rule.label,
-          loggedIn: homepage.ok,
-          detail: homepage.detail
-        })
-      } catch (error) {
-        statuses.push({
-          id: rule.id,
-          label: rule.label,
-          loggedIn: false,
-          detail: error instanceof Error ? error.message : String(error)
-        })
-      }
-      continue
-    }
-
-    const loggedIn = matched.size > 0
+    const liveCookies = cookiesForPlatform(await readLoginCookies(rule.id), rule.id)
+    const exportedFile = platformBuiltinCookiePath(cookieDirectory, rule.id)
+    const saved = existsSync(exportedFile)
+    const exportedText = saved ? readFileSync(exportedFile, 'utf8') : ''
+    const exportedNames = pastedPlatformCookiesReady(rule.id, exportedText)
+    const loggedIn = saved && exportedNames.ok
     statuses.push({
       id: rule.id,
       label: rule.label,
+      mode: auth.mode,
       loggedIn,
-      detail: loggedIn ? `应用内已检测到 ${matched.size} 个登录 cookie` : '应用内未检测到登录 cookie'
+      liveVerified: false,
+      saved,
+      savedAt: saved ? statSync(exportedFile).mtime.toISOString() : undefined,
+      cookieCount: liveCookies.length,
+      detail: loggedIn
+        ? `应用内 Cookie 已单独保存且格式完整（${liveCookies.length} 个当前会话 Cookie）；实际任务链接尚未验证`
+        : liveCookies.length > 0
+          ? '已检测到应用内会话，请点击“保存应用内登录”'
+          : saved
+            ? exportedNames.detail
+            : '尚未保存该平台的应用内登录'
     })
   }
   return statuses
@@ -282,11 +319,13 @@ export function cookiesToNetscape(cookies: Cookie[]): string {
     '# https://curl.haxx.se/rfc/cookie_spec.html',
     '# This file was generated by Koubox'
   ]
+  const now = Date.now() / 1000
   for (const cookie of cookies) {
-    if (!cookie.name || cookie.value === undefined) continue
+    if (!cookie.name || !cookie.value || /[\t\r\n]/.test(cookie.value)) continue
+    if (cookie.expirationDate && cookie.expirationDate <= now) continue
     const domain = cookie.domain ?? ''
     if (!domain) continue
-    const flag = domain.startsWith('.') ? 'TRUE' : 'FALSE'
+    const flag = cookie.hostOnly ? 'FALSE' : 'TRUE'
     const path = cookie.path ?? '/'
     const secure = cookie.secure ? 'TRUE' : 'FALSE'
     const expiry = cookie.expirationDate ? Math.floor(cookie.expirationDate) : 0
@@ -296,7 +335,7 @@ export function cookiesToNetscape(cookies: Cookie[]): string {
 }
 
 export async function buildLoginCookieStatus(
-  exportedFile?: string,
+  cookieDirectory: string,
   platformAuth: PlatformAuthConfig = {
     youtube: { mode: 'builtin', cookies: '' },
     tiktok: { mode: 'builtin', cookies: '' },
@@ -305,25 +344,30 @@ export async function buildLoginCookieStatus(
   },
   proxy = ''
 ): Promise<YtdlpCookieStatus> {
-  const cookies = await readLoginCookies()
-  const platforms = await platformStatuses(cookies, platformAuth, proxy)
-  let exported = false
-  let exportedAt: string | undefined
-  if (exportedFile && existsSync(exportedFile)) {
-    exported = true
-    exportedAt = statSync(exportedFile).mtime.toISOString()
-  }
+  const platforms = await platformStatuses(cookieDirectory, platformAuth, proxy)
+  const exportedPlatforms = platforms.filter((item) => item.saved)
+  const exportedAt = exportedPlatforms.map((item) => item.savedAt).filter(Boolean).sort().at(-1)
   return {
-    exported,
+    exported: exportedPlatforms.length > 0,
     exportedAt,
-    cookieCount: cookies.length,
+    cookieCount: platforms.reduce((total, item) => total + item.cookieCount, 0),
     platforms
   }
 }
 
-export async function exportLoginCookies(exportedFile: string): Promise<YtdlpCookieStatus> {
-  const cookies = await readLoginCookies()
-  if (cookies.length === 0) throw new Error('登录窗口中没有任何 cookie。请先打开登录窗口并完成登录。')
-  writeFileSync(exportedFile, cookiesToNetscape(cookies), 'utf8')
-  return buildLoginCookieStatus(exportedFile)
+export async function exportLoginCookies(
+  cookieDirectory: string,
+  platformId: YtdlpCookiePlatformId,
+  platformAuth: PlatformAuthConfig,
+  proxy = ''
+): Promise<YtdlpCookieStatus> {
+  const rule = platformRule(platformId)
+  const cookies = cookiesForPlatform(await readLoginCookies(platformId), platformId)
+  const names = cookieNamesForPlatform(cookies, rule)
+  const missing = rule.requiredNames.filter((name) => !names.has(name))
+  if (missing.length > 0) {
+    throw new Error(`${rule.label} 应用内登录不完整：缺少 ${missing.join(' / ')}。请先在登录窗口完成登录。`)
+  }
+  writeFileSync(platformBuiltinCookiePath(cookieDirectory, platformId), cookiesToNetscape(cookies), 'utf8')
+  return buildLoginCookieStatus(cookieDirectory, platformAuth, proxy)
 }

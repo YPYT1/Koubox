@@ -3,8 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
-import { defaultPlatformAuth, tools } from '@koubox/shared'
+import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
+import { defaultPlatformAuth, isYtdlpCookiePlatformId, tools } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
@@ -22,10 +22,9 @@ type ServerOptions = {
   selectAudioFile(title: string, defaultPath?: string): Promise<string | undefined>
   selectFile(title: string, defaultPath?: string, filters?: FileFilter[]): Promise<string | undefined>
   openPath(targetPath: string): Promise<void>
-  openLoginWindow(): Promise<void>
-  exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
+  openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
+  exportLoginCookies(platformId: YtdlpCookiePlatformId, platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
   getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  exportedCookiesFile: string
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -257,7 +256,12 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/browser/open-login') {
         try {
-          await options.openLoginWindow()
+          const body = await readJson(request)
+          const platformId = body.platformId
+          if (!isYtdlpCookiePlatformId(platformId)) {
+            return json(response, 400, { error: '请选择要登录的平台。' })
+          }
+          await options.openLoginWindow(platformId)
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -265,7 +269,12 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/browser/export-cookies') {
         try {
-          return json(response, 200, await options.exportLoginCookies())
+          const body = await readJson(request)
+          const platformId = body.platformId
+          if (!isYtdlpCookiePlatformId(platformId)) {
+            return json(response, 400, { error: '请选择要保存的平台。' })
+          }
+          return json(response, 200, await options.exportLoginCookies(platformId, config.ytdlpPlatformAuth, config.ytdlpProxy))
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
         }

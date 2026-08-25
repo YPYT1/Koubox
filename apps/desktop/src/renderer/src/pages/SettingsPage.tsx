@@ -163,8 +163,7 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const [guide, setGuide] = useState<GuideKind | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [openingLogin, setOpeningLogin] = useState(false)
-  const [savingCookies, setSavingCookies] = useState(false)
+  const [platformAction, setPlatformAction] = useState<string | null>(null)
   const [checkingCookies, setCheckingCookies] = useState(false)
   const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
   const cookieCheckDoneTimerRef = useRef<number | null>(null)
@@ -183,12 +182,10 @@ export function SettingsPage({
       return { youtube: false, tiktok: false, instagram: false, facebook: false, [id]: true }
     })
   }
-  const [savingPlatformAuth, setSavingPlatformAuth] = useState(false)
   const activeGuide = guide ? guides[guide] : null
   const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
   const platformAuth = config.ytdlpPlatformAuth ?? defaultPlatformAuth()
   const usePlatformAuth = cookieSource === 'builtin'
-  const anyBuiltinPlatform = PLATFORM_AUTH_OPTIONS.some((item) => platformAuth[item.id].mode === 'builtin')
 
   const patchPlatformAuth = (id: YtdlpCookiePlatformId, patch: { mode?: PlatformAuthMode; cookies?: string }) => {
     onChange({
@@ -260,22 +257,23 @@ export function SettingsPage({
     if (picked) onChange({ ...config, [key]: picked })
   }
 
-  const handleSavePlatformAuth = async () => {
-    setSavingPlatformAuth(true)
+  const handleSavePlatformAuth = async (platformId: YtdlpCookiePlatformId) => {
+    setPlatformAction(`${platformId}:config`)
     try {
       const saved = await window.koubox.put<KouboxConfig>('/config', config)
       onChange(saved)
-      onShowToast('平台登录配置已保存。', 'success')
+      const platform = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)!
+      onShowToast(`${platform.label} 登录方式和 Cookie 已单独保存。`, 'success')
       if (usePlatformAuth) await refreshCookieStatus()
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '保存平台登录配置失败', 'error')
     } finally {
-      setSavingPlatformAuth(false)
+      setPlatformAction(null)
     }
   }
 
-  const handleOpenLoginWindow = async () => {
-    setOpeningLogin(true)
+  const handleOpenLoginWindow = async (platformId: YtdlpCookiePlatformId) => {
+    setPlatformAction(`${platformId}:open`)
     try {
       const nextConfig: KouboxConfig = {
         ...config,
@@ -285,25 +283,29 @@ export function SettingsPage({
       onChange(nextConfig)
       const saved = await window.koubox.put<KouboxConfig>('/config', nextConfig)
       onChange(saved)
-      await window.koubox.post<{ ok: boolean }>('/browser/open-login')
-      onShowToast('已打开登录窗口。请依次登录各平台，完成后点「保存登录状态」。', 'success')
+      await window.koubox.post<{ ok: boolean }>('/browser/open-login', { platformId })
+      const platform = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)!
+      onShowToast(`已打开 ${platform.label} 独立登录窗口。登录完成后点击该平台的“保存应用内登录”。`, 'success')
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '打开登录窗口失败', 'error')
     } finally {
-      setOpeningLogin(false)
+      setPlatformAction(null)
     }
   }
 
-  const handleSaveLoginCookies = async () => {
-    setSavingCookies(true)
+  const handleSaveLoginCookies = async (platformId: YtdlpCookiePlatformId) => {
+    setPlatformAction(`${platformId}:builtin`)
     try {
-      const status = await window.koubox.post<YtdlpCookieStatus>('/browser/export-cookies')
+      const saved = await window.koubox.put<KouboxConfig>('/config', config)
+      onChange(saved)
+      const status = await window.koubox.post<YtdlpCookieStatus>('/browser/export-cookies', { platformId })
       setCookieStatus(status)
-      onShowToast('登录状态已保存，可直接开始下载。', 'success')
+      const platform = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)!
+      onShowToast(`${platform.label} 应用内登录已单独保存。`, 'success')
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '保存登录状态失败', 'error')
     } finally {
-      setSavingCookies(false)
+      setPlatformAction(null)
     }
   }
 
@@ -456,69 +458,25 @@ export function SettingsPage({
 
           {usePlatformAuth && (
             <>
-              {anyBuiltinPlatform && (
-                <div className="platform-auth-toolbar">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={openingLogin}
-                    icon={<Globe size={16} weight="bold" />}
-                    onClick={() => void handleOpenLoginWindow()}
-                  >
-                    打开登录窗口
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={savingCookies}
-                    icon={<FloppyDiskBack size={16} weight="bold" />}
-                    onClick={() => void handleSaveLoginCookies()}
-                  >
-                    保存应用内登录
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={checkingCookies}
-                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-                    onClick={() => void refreshCookieStatus()}
-                  >
-                    {cookieCheckCompleted
-                      ? '检测完成'
-                      : checkingCookies
-                        ? '检测中…'
-                        : '检测登录状态'}
-                  </Button>
-                </div>
-              )}
-
-              {!anyBuiltinPlatform && (
-                <div className="platform-auth-toolbar">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={checkingCookies}
-                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-                    onClick={() => void refreshCookieStatus()}
-                  >
-                    {cookieCheckCompleted
-                      ? '检测完成'
-                      : checkingCookies
-                        ? '检测中…'
-                        : '检测粘贴 Cookie'}
-                  </Button>
-                </div>
-              )}
+              <div className="platform-auth-toolbar">
+                <span className="field-hint">四个平台完全独立保存；切换登录方式不会清空另一种方式已经保存的数据。</span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  loading={checkingCookies}
+                  icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
+                  onClick={() => void refreshCookieStatus()}
+                >
+                  {cookieCheckCompleted ? '检测完成' : checkingCookies ? '检测中…' : '检测全部平台'}
+                </Button>
+              </div>
 
               {cookieStatus && (
                 <div className="cookie-status-panel">
                   <div className="cookie-status-head">
                     <span>
-                      应用内会话 {cookieStatus.cookieCount} 个 cookie
+                      当前会话共 {cookieStatus.cookieCount} 个 Cookie
                       {cookieStatus.exported && cookieStatus.exportedAt
                         ? ` · 已导出 ${new Date(cookieStatus.exportedAt).toLocaleString()}`
                         : ''}
@@ -528,14 +486,14 @@ export function SettingsPage({
                     {cookieStatus.platforms.map((platform) => (
                       <div
                         key={platform.id}
-                        className={`cookie-status-item ${platform.loggedIn ? 'ok' : 'warn'}`}
+                        className={`cookie-status-item ${platform.liveVerified ? 'ok' : platform.loggedIn ? 'pending' : 'warn'}`}
                       >
-                        {platform.loggedIn
+                        {platform.liveVerified
                           ? <CheckCircle size={15} weight="fill" />
                           : <Warning size={15} weight="fill" />}
                         <div>
                           <strong>{platform.label}</strong>
-                          <span>{platform.detail}</span>
+                          <span>{platform.mode === 'builtin' ? '应用内登录' : '粘贴 Cookie'} · {platform.detail}</span>
                         </div>
                       </div>
                     ))}
@@ -562,7 +520,7 @@ export function SettingsPage({
                             {entry.mode === 'paste'
                               ? (entry.cookies.trim() ? '粘贴 Cookie · 已填写' : '粘贴 Cookie · 待粘贴')
                               : '应用内登录'}
-                            {status ? ` · ${status.loggedIn ? '就绪' : '未就绪'}` : ''}
+                            {status ? ` · ${status.liveVerified ? '已验证' : status.loggedIn ? '格式完整' : '未就绪'}` : ''}
                           </small>
                         </span>
                         <CaretDown size={16} weight="bold" className={open ? 'rotated' : ''} />
@@ -602,11 +560,57 @@ export function SettingsPage({
                                 placeholder={'# Netscape HTTP Cookie File\n...'}
                                 spellCheck={false}
                               />
+                              <div className="platform-auth-actions">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="md"
+                                  loading={platformAction === `${platform.id}:config`}
+                                  icon={<FloppyDiskBack size={16} weight="bold" />}
+                                  onClick={() => void handleSavePlatformAuth(platform.id)}
+                                >
+                                  保存 {platform.label} 粘贴 Cookie
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="md"
+                                  loading={checkingCookies}
+                                  icon={<ArrowsClockwise size={16} weight="bold" />}
+                                  onClick={() => void refreshCookieStatus()}
+                                >
+                                  检测
+                                </Button>
+                              </div>
                             </>
                           ) : (
-                            <p className="field-hint">
-                              下载 {platform.label} 时使用应用内登录窗口保存的会话。点上方「打开登录窗口」完成登录并保存。
-                            </p>
+                            <>
+                              <p className="field-hint">
+                                {platform.label} 使用独立浏览器会话和独立 Cookie 文件，不会覆盖其他平台或粘贴 Cookie。
+                              </p>
+                              <div className="platform-auth-actions">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="md"
+                                  loading={platformAction === `${platform.id}:open`}
+                                  icon={<Globe size={16} weight="bold" />}
+                                  onClick={() => void handleOpenLoginWindow(platform.id)}
+                                >
+                                  打开 {platform.label} 登录窗口
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="md"
+                                  loading={platformAction === `${platform.id}:builtin`}
+                                  icon={<FloppyDiskBack size={16} weight="bold" />}
+                                  onClick={() => void handleSaveLoginCookies(platform.id)}
+                                >
+                                  保存 {platform.label} 应用内登录
+                                </Button>
+                              </div>
+                            </>
                           )}
                         </div>
                       )}
@@ -615,18 +619,6 @@ export function SettingsPage({
                 })}
               </div>
 
-              <div className="platform-auth-save">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={savingPlatformAuth}
-                  icon={<FloppyDiskBack size={16} weight="bold" />}
-                  onClick={() => void handleSavePlatformAuth()}
-                >
-                  保存平台登录配置
-                </Button>
-              </div>
             </>
           )}
 

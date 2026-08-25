@@ -12,7 +12,8 @@ import type {
   TaskEvent,
   TaskSnapshot,
   Transcript,
-  TranslationTargetLanguage
+  TranslationTargetLanguage,
+  YtdlpCookiePlatformId
 } from '@koubox/shared'
 import {
   assertPastedPlatformCookies,
@@ -20,6 +21,7 @@ import {
   pastedCookieNamesFromNetscape,
   PLATFORM_COOKIE_RULES,
   platformAuthMissingMessage,
+  platformBuiltinCookiesFilename,
   toUserTaskMessage,
   normalizeProxyUrl,
   platformAuthIdFromUrlPlatform
@@ -27,6 +29,31 @@ import {
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 
 const log = createLogger('tasks')
+
+export function platformYtdlpCompatibilityAttempts(platformId?: YtdlpCookiePlatformId): string[][] {
+  if (platformId !== 'tiktok') return [[]]
+  return [
+    ['--impersonate', 'Chrome-145:Macos-26'],
+    ['--impersonate', 'Chrome-131:Macos-14'],
+    ['--impersonate', 'Edge-101:Windows-10']
+  ]
+}
+
+export function canonicalPlatformDownloadUrl(url: string, platformId?: YtdlpCookiePlatformId): string {
+  if (platformId !== 'tiktok') return url
+  try {
+    const parsed = new URL(url)
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+export function selectedPlatformCookieFilename(platformId: YtdlpCookiePlatformId, mode: 'builtin' | 'paste'): string {
+  return mode === 'paste' ? `${platformId}-cookies.txt` : platformBuiltinCookiesFilename(platformId)
+}
 
 type TaskManagerOptions = {
   getConfig(): KouboxConfig
@@ -136,7 +163,7 @@ function splitProcessLines(text: string): string[] {
 function formatCommandError(stderr: string, commandName: string): string {
   const text = stderr.trim()
   if (!text) return `${commandName} 执行失败。`
-  return toUserTaskMessage(text)
+  return text
 }
 
 function dateStamp(value = new Date()): string {
@@ -562,14 +589,19 @@ export class TaskManager {
       if (proxy) args.push('--proxy', proxy)
     }
     const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
-    const platformAuth = platformId ? config.ytdlpPlatformAuth[platformId] : undefined
+    const platformAuth = platformId ? config.ytdlpPlatformAuth?.[platformId] : undefined
+    let cookieSourceText: string | undefined
+    let cookieWorkingFile: string | undefined
     if (config.ytdlpCookieSource === 'none') {
       // no cookies
     } else if (config.ytdlpCookieSource === 'file') {
       const cookiesPath = config.ytdlpCookiesPath.trim()
       if (!cookiesPath) throw new Error('登录来源为 Cookies 文件，但未选择文件。请在「全局设置 → 下载（yt-dlp）」中选择 cookies.txt。')
       if (!existsSync(cookiesPath)) throw new Error(`Cookies 文件不存在：${cookiesPath}`)
-      args.push('--cookies', cookiesPath)
+      cookieSourceText = readFileSync(cookiesPath, 'utf8')
+      cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
+      writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
+      args.push('--cookies', cookieWorkingFile)
     } else if (config.ytdlpCookieSource === 'builtin') {
       if (platformId && platformAuth?.mode === 'paste') {
         const pasted = platformAuth.cookies.trim()
@@ -577,12 +609,15 @@ export class TaskManager {
           throw new Error(platformAuthMissingMessage(platformId, 'paste', 'empty-paste'))
         }
         assertPastedPlatformCookies(platformId, pasted)
-        const cookiesFile = join(dirname(this.options.taskIndexFile), `${platformId}-cookies.txt`)
-        writeFileSync(cookiesFile, pasted.endsWith('\n') ? pasted : `${pasted}\n`, 'utf8')
-        log.info('下载使用粘贴的平台 Cookie', { taskId: record.task.taskId, platform: platformId, cookies: cookiesFile })
-        args.push('--cookies', cookiesFile)
+        cookieSourceText = pasted.endsWith('\n') ? pasted : `${pasted}\n`
+        cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
+        writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
+        log.info('下载使用粘贴的平台 Cookie', { taskId: record.task.taskId, platform: platformId, cookies: cookieWorkingFile })
+        args.push('--cookies', cookieWorkingFile)
       } else {
-        const exportedCookies = join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
+        const exportedCookies = platformId
+          ? join(dirname(this.options.taskIndexFile), selectedPlatformCookieFilename(platformId, 'builtin'))
+          : join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
         if (!existsSync(exportedCookies)) {
           if (platformId) {
             throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'no-builtin-export'))
@@ -600,13 +635,17 @@ export class TaskManager {
             }
           }
         }
-        args.push('--cookies', exportedCookies)
+        cookieSourceText = readFileSync(exportedCookies, 'utf8')
+        cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
+        writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
+        args.push('--cookies', cookieWorkingFile)
       }
     }
     args.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
     if (config.ytdlpExtraArgs.trim()) args.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
-    args.push(record.task.url)
-    await this.runCommand(record, executable, args, (line) => {
+    const compatibilityAttempts = platformYtdlpCompatibilityAttempts(platformId)
+    const canonicalUrl = canonicalPlatformDownloadUrl(record.task.url, platformId)
+    const onLine = (line: string) => {
       const percent = line.match(/(\d+(?:\.\d+)?)%/)
       if (percent) {
         this.update(record, {
@@ -626,7 +665,36 @@ export class TaskManager {
       if (/\[download\]\s+Destination:/i.test(line)) {
         this.update(record, { percent: 8, message: '开始下载视频文件…' })
       }
-    }, 'yt-dlp')
+    }
+    try {
+      for (let index = 0; index < compatibilityAttempts.length; index += 1) {
+        if (cookieWorkingFile && cookieSourceText !== undefined) writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
+        const compatibilityArgs = compatibilityAttempts[index]
+        if (compatibilityArgs.length > 0) {
+          log.info('下载启用平台兼容参数', {
+            taskId: record.task.taskId,
+            platform: platformId,
+            attempt: index + 1,
+            impersonate: compatibilityArgs.at(-1)
+          })
+        }
+        try {
+          await this.runCommand(record, executable, [...args, ...compatibilityArgs, canonicalUrl], onLine, 'yt-dlp')
+          break
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const retryableTikTok = platformId === 'tiktok' && /Unable to extract universal data for rehydration|Unexpected response from webpage request|Unable to extract challenge data/i.test(message)
+          if (!retryableTikTok || index >= compatibilityAttempts.length - 1) throw error
+          log.warn('TikTok 页面验证失败，切换下一组浏览器兼容参数重试', {
+            taskId: record.task.taskId,
+            attempt: index + 1,
+            error: message
+          })
+        }
+      }
+    } finally {
+      if (cookieWorkingFile && existsSync(cookieWorkingFile)) unlinkSync(cookieWorkingFile)
+    }
     const file = readdirSync(directory).find((name) => !name.endsWith('.part') && !name.endsWith('.ytdl') && name.startsWith(`${tempStem}.`))
     if (!file) throw new Error('yt-dlp 已结束，但没有找到下载的视频文件。')
     const downloaded = join(directory, file)
@@ -862,7 +930,12 @@ export class TaskManager {
   }
 
   private fail(record: TaskRecord, code: string, message: string): void {
-    const userMessage = toUserTaskMessage(message)
+    const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
+    const config = this.options.getConfig()
+    const auth = platformId
+      ? { platformId, mode: config.ytdlpPlatformAuth?.[platformId]?.mode ?? 'builtin' as const }
+      : undefined
+    const userMessage = toUserTaskMessage(message, auth)
     log.error('任务阶段失败', { taskId: record.task.taskId, code, message: userMessage })
     this.update(record, { status: 'error', stage: 'error', message: userMessage, error: { code, message: userMessage } })
   }
