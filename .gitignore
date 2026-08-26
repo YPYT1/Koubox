@@ -25,3 +25,4 @@ vendor/**/*
 !.vscode/extensions.json
 tests/
 packages/core/test/
+链接.txt

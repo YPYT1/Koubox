@@ -365,23 +365,22 @@ async function resolveInstagram(url: string, proxy: string): Promise<PublicMedia
   const info = extractInstagramInfo(url)
   if (!info) throw new Error('Instagram 链接格式不正确。仅支持 /reels/ 和 /p/ 格式。')
 
-  // 规范化代理 URL
+  // 规范化代理 URL（可选）
   const normalizedProxy = normalizeProxyUrl(proxy)
-  if (!normalizedProxy) {
-    throw new Error('Instagram 解析需要代理配置。请在设置中配置代理后重试。')
-  }
 
   // 使用 Playwright 捕获网络请求来获取视频 URL
   const { spawn } = await import('node:child_process')
 
   return new Promise<PublicMediaResolution>((resolve, reject) => {
+    // 代理配置：如果有代理则使用，否则不配置
+    const proxyConfig = normalizedProxy ? `proxy: { server: '${normalizedProxy}' },` : ''
     const playwrightScript = `
 const { chromium } = require('playwright');
 
 (async () => {
   const browser = await chromium.launch({
     headless: true,
-    proxy: { server: '${normalizedProxy}' }
+    ${proxyConfig}
   });
   const context = await browser.newContext({ userAgent: '${DEFAULT_USER_AGENT}' });
   const page = await context.newPage();
