@@ -152,7 +152,22 @@ async function createWindow(): Promise<void> {
   // Dev logs → repo/logs；打包便携包 logs → exe 旁 userdata/logs
   initLogger(app.isPackaged ? userData : projectDirectory)
   const mainLog = createLogger('main')
-  mainLog.info('应用启动', { projectDirectory, userData, packaged: app.isPackaged })
+  mainLog.info('========== 应用启动 ==========')
+  mainLog.info('环境信息', {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version
+  })
+  mainLog.info('路径配置', {
+    projectDirectory,
+    userData,
+    documents: app.getPath('documents'),
+    logs: app.getPath('logs')
+  })
   patchBundledPythonHome()
 
   const bundledYtdlp = join(findVendorDirectory(), 'yt-dlp', 'yt-dlp.exe')
@@ -253,6 +268,9 @@ async function createWindow(): Promise<void> {
     getLoginCookieStatus: (platformAuth, proxy, platformId) => buildLoginCookieStatus(platformAuth, proxy, platformId)
   })
 
+  mainLog.info('本地 API 已启动', { baseUrl: localApi.baseUrl })
+  mainLog.info('初始配置', localApi.getConfig())
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -293,9 +311,27 @@ async function createWindow(): Promise<void> {
 
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   else await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+
+  mainLog.info('主窗口已创建')
 }
 
 ipcMain.handle('devtools:toggle', () => toggleDevTools())
+
+// 前端日志记录
+ipcMain.handle('log:error', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.error(message, detail)
+})
+
+ipcMain.handle('log:warn', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.warn(message, detail)
+})
+
+ipcMain.handle('log:info', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.info(message, detail)
+})
 
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

@@ -169,10 +169,12 @@ export async function startLocalApi(options: ServerOptions) {
   tasks.restore(store.read().outputDirectory)
   const token = randomBytes(24).toString('hex')
   const server = createServer(async (request, response) => {
+    const startTime = Date.now()
+    let requestBody: unknown = undefined
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const method = request.method ?? 'GET'
-      apiLog.debug(`${method} ${url.pathname}`)
+      apiLog.info(`→ ${method} ${url.pathname}${url.search}`)
       if (method === 'OPTIONS') {
         response.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
@@ -243,9 +245,13 @@ export async function startLocalApi(options: ServerOptions) {
       if (method === 'GET' && url.pathname === '/config') return json(response, 200, config)
       if (method === 'PUT' && url.pathname === '/config') {
         const body = await readJson(request)
+        requestBody = body
+        apiLog.info('更新配置', { keys: Object.keys(body) })
         const next = mergeConfig(body, config)
         mkdirSync(next.outputDirectory, { recursive: true })
-        return json(response, 200, store.write(next))
+        const result = store.write(next)
+        apiLog.info('✓ 配置已保存')
+        return json(response, 200, result)
       }
       const platformAuthConfigMatch = url.pathname.match(/^\/config\/platform-auth\/(youtube|tiktok|instagram|facebook)$/)
       if (method === 'PUT' && platformAuthConfigMatch) {
@@ -444,7 +450,17 @@ export async function startLocalApi(options: ServerOptions) {
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {
-      return json(response, 400, { error: 'Bad request', detail: error instanceof Error ? error.message : String(error) })
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const errorStack = error instanceof Error ? error.stack : undefined
+      apiLog.error(`✗ 请求失败`, {
+        method: request.method,
+        url: request.url,
+        error: errorMessage,
+        stack: errorStack,
+        body: requestBody,
+        duration: `${Date.now() - startTime}ms`
+      })
+      return json(response, 400, { error: 'Bad request', detail: errorMessage })
     }
   })
 
