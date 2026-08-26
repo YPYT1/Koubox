@@ -12,7 +12,8 @@
 # 说明：
 # - 不打包 python/wheels（2.6GB 的 torch.whl）
 # - 不打包 AppData 登录态 / Cookie；便携版用 exe 旁 userdata（空目录）
-# - 打包版强制使用 resources 内的 models / vendor / python
+# - 打包版强制使用 resources 内的 vendor / python
+# - resources/models 只创建空目录，模型由用户手动放入
 
 param(
   [string]$Version = '',
@@ -108,6 +109,7 @@ function Invoke-Preflight {
 
   $desktopPkg = Get-Content -LiteralPath (Join-Path $root 'apps\desktop\package.json') -Raw
   Assert-NotPacked $desktopPkg 'wheels' 'extraResources 里出现了 wheels，whl 不应打进安装包。'
+  Assert-NotPacked $desktopPkg '"from":\s*"\.\./\.\./models"' 'extraResources 不应复制开发机 models；便携包只保留空 models 目录。'
   if ($desktopPkg -notmatch '"from":\s*"../../python/\.venv"') {
     throw '预检失败：打包没有包含 python/.venv。'
   }
@@ -116,11 +118,9 @@ function Invoke-Preflight {
   }
 
   Assert-Path (Join-Path $root 'vendor\yt-dlp\yt-dlp.exe') 'yt-dlp'
+  Assert-Path (Join-Path $root 'vendor\deno\deno.exe') 'Deno'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffmpeg.exe') 'ffmpeg'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffprobe.exe') 'ffprobe'
-  Assert-Path (Join-Path $root 'models\faster-whisper-large-v3\model.bin') 'Whisper 模型'
-  Assert-Path (Join-Path $root 'models\HYMT21.8B\model.safetensors') '翻译模型'
-  Assert-Path (Join-Path $root 'models\demucs') 'Demucs 模型目录'
   Assert-Path (Join-Path $root 'python\.venv\Scripts\python.exe') 'Python 虚拟环境'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\torch') '已安装的 torch'
 
@@ -187,9 +187,15 @@ function Invoke-Postflight {
   Write-Host '== 打包结果校验 =='
   Assert-Path $exe '口播匣.exe'
   Assert-Path (Join-Path $resources 'vendor\yt-dlp\yt-dlp.exe') '包内 yt-dlp'
+  Assert-Path (Join-Path $resources 'vendor\deno\deno.exe') '包内 Deno'
   Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffmpeg.exe') '包内 ffmpeg'
-  Assert-Path (Join-Path $resources 'models\faster-whisper-large-v3\model.bin') '包内 Whisper'
-  Assert-Path (Join-Path $resources 'models\HYMT21.8B\model.safetensors') '包内翻译模型'
+  $packedModels = Join-Path $resources 'models'
+  Assert-Path $packedModels '包内空 models 目录'
+  $packedModelEntries = @(Get-ChildItem -LiteralPath $packedModels -Force -ErrorAction SilentlyContinue)
+  if ($packedModelEntries.Count -ne 0) {
+    throw ("校验失败：resources\models 必须为空，发现：`n" + ($packedModelEntries.FullName -join "`n"))
+  }
+  Write-Host 'resources\models 已验证为空；模型需由用户手动放入。'
   Assert-Path (Join-Path $resources 'python\Scripts\python.exe') '包内 Python'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\c10.dll') '包内 torch c10.dll'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\MSVCP140.dll') '包内 VC++ MSVCP140（WinError 126 依赖）'
@@ -239,7 +245,7 @@ function Invoke-Postflight {
   Write-Host ''
   Write-Host '便携目录已生成（解压即用）：'
   Write-Host $distDir
-  Write-Host '双击 口播匣.exe。工具/模型路径会指向 resources\；登录需用户自己完成。'
+  Write-Host '双击 口播匣.exe。工具路径会指向 resources\；请把模型手动放入 resources\models，登录需用户自己完成。'
   Write-Host "把整个 $distFolderName（含空 userdata）打成 7z/zip 发给用户即可。"
 }
 

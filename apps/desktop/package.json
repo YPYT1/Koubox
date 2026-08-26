@@ -38,7 +38,6 @@
     "files": ["out/**/*", "package.json"],
     "extraResources": [
       { "from": "../../vendor", "to": "vendor" },
-      { "from": "../../models", "to": "models" },
       {
         "from": "../../python/.venv",
         "to": "python",

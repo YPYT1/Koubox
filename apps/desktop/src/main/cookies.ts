@@ -1,12 +1,17 @@
 import { BrowserWindow, session, type Cookie, type Session } from 'electron'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
 import {
+  defaultPlatformAuth,
   pastedPlatformCookiesReady,
   PLATFORM_COOKIE_RULES,
+  platformAuthMissingMessage,
+  platformLabel,
+  type PlatformAuthEntry,
   type PlatformAuthConfig,
+  type YtdlpCookiePlatformId,
   type YtdlpCookiePlatformStatus,
   type YtdlpCookieStatus
 } from '@koubox/shared'
+import { createTemporaryPlatformCookieFile, type AuthenticatedCookieFile } from '@koubox/core'
 
 export const LOGIN_PARTITION = 'persist:koubox-ytdlp-login'
 const INSTAGRAM_PROBE_PARTITION = 'persist:koubox-instagram-probe'
@@ -43,6 +48,17 @@ function cookieNamesForPlatform(cookies: Cookie[], rule: (typeof PLATFORM_COOKIE
     names.add(cookie.name)
   }
   return names
+}
+
+function platformRule(platformId: YtdlpCookiePlatformId) {
+  const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
+  if (!rule) throw new Error(`未知平台：${platformId}`)
+  return rule
+}
+
+function platformCookies(cookies: Cookie[], platformId: YtdlpCookiePlatformId): Cookie[] {
+  const rule = platformRule(platformId)
+  return cookies.filter((cookie) => rule.domainTest.test(cookieDomain(cookie)))
 }
 
 function instagramCheckpoint(url: string, html: string): boolean {
@@ -191,10 +207,12 @@ async function applyLoginSessionProxyTo(sess: Session, proxy: string): Promise<v
 async function platformStatuses(
   cookies: Cookie[],
   platformAuth: PlatformAuthConfig,
-  proxy: string
+  proxy: string,
+  onlyPlatformId?: YtdlpCookiePlatformId
 ): Promise<YtdlpCookiePlatformStatus[]> {
   const statuses: YtdlpCookiePlatformStatus[] = []
   for (const rule of PLATFORM_COOKIE_RULES) {
+    if (onlyPlatformId && rule.id !== onlyPlatformId) continue
     const auth = platformAuth[rule.id]
     const matched = cookieNamesForPlatform(cookies, rule)
     if (auth.mode === 'paste') {
@@ -265,12 +283,15 @@ async function platformStatuses(
       continue
     }
 
-    const loggedIn = matched.size > 0
+    const missing = rule.requiredNames.filter((name) => !matched.has(name))
+    const loggedIn = missing.length === 0
     statuses.push({
       id: rule.id,
       label: rule.label,
       loggedIn,
-      detail: loggedIn ? `应用内已检测到 ${matched.size} 个登录 cookie` : '应用内未检测到登录 cookie'
+      detail: loggedIn
+        ? `应用内已检测到 ${matched.size} 个关键 Cookie`
+        : `应用内登录缺少 ${missing.join(' / ')}`
     })
   }
   return statuses
@@ -296,34 +317,47 @@ export function cookiesToNetscape(cookies: Cookie[]): string {
 }
 
 export async function buildLoginCookieStatus(
-  exportedFile?: string,
-  platformAuth: PlatformAuthConfig = {
-    youtube: { mode: 'builtin', cookies: '' },
-    tiktok: { mode: 'builtin', cookies: '' },
-    instagram: { mode: 'paste', cookies: '' },
-    facebook: { mode: 'builtin', cookies: '' }
-  },
-  proxy = ''
+  platformAuth: PlatformAuthConfig = defaultPlatformAuth(),
+  proxy = '',
+  onlyPlatformId?: YtdlpCookiePlatformId
 ): Promise<YtdlpCookieStatus> {
   const cookies = await readLoginCookies()
-  const platforms = await platformStatuses(cookies, platformAuth, proxy)
-  let exported = false
-  let exportedAt: string | undefined
-  if (exportedFile && existsSync(exportedFile)) {
-    exported = true
-    exportedAt = statSync(exportedFile).mtime.toISOString()
-  }
+  const platforms = await platformStatuses(cookies, platformAuth, proxy, onlyPlatformId)
   return {
-    exported,
-    exportedAt,
+    exported: false,
     cookieCount: cookies.length,
     platforms
   }
 }
 
-export async function exportLoginCookies(exportedFile: string): Promise<YtdlpCookieStatus> {
-  const cookies = await readLoginCookies()
-  if (cookies.length === 0) throw new Error('登录窗口中没有任何 cookie。请先打开登录窗口并完成登录。')
-  writeFileSync(exportedFile, cookiesToNetscape(cookies), 'utf8')
-  return buildLoginCookieStatus(exportedFile)
+export async function resolvePlatformAuthentication(
+  platformId: YtdlpCookiePlatformId,
+  auth: PlatformAuthEntry
+): Promise<AuthenticatedCookieFile> {
+  try {
+    if (auth.mode === 'paste') {
+      if (!auth.cookies.trim()) throw new Error(platformAuthMissingMessage(platformId, 'paste', 'empty-paste'))
+      return createTemporaryPlatformCookieFile({
+        platformId,
+        source: 'paste',
+        cookieText: auth.cookies,
+        validatePastedCookies: true
+      })
+    }
+
+    const selected = platformCookies(await readLoginCookies(), platformId)
+    const names = cookieNamesForPlatform(selected, platformRule(platformId))
+    const missing = platformRule(platformId).requiredNames.filter((name) => !names.has(name))
+    if (missing.length > 0) {
+      throw new Error(platformAuthMissingMessage(platformId, 'builtin', selected.length ? 'builtin-incomplete' : 'no-builtin-export'))
+    }
+    return createTemporaryPlatformCookieFile({
+      platformId,
+      source: 'builtin',
+      cookieText: cookiesToNetscape(selected),
+      userAgent: loginSession().getUserAgent(),
+    })
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : `${platformLabel(platformId)} 登录解析失败`)
+  }
 }

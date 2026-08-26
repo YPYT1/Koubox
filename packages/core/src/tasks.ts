@@ -6,8 +6,8 @@ import { alignKnownText } from './align.js'
 import { transcriptToSrt } from './srt.js'
 import { downloadVideo, type PublicMediaResolution } from './video-download.js'
 import type {
-  BrowserProfile,
   KouboxConfig,
+  PlatformAuthEntry,
   RequirementTwoMode,
   TaskArtifacts,
   TaskError,
@@ -24,16 +24,16 @@ const log = createLogger('tasks')
 
 type TaskManagerOptions = {
   getConfig(): KouboxConfig
-  resolveVendor(): { ytdlpExecutable: string; ffmpegExecutable: string }
+  resolveVendor(): { ytdlpExecutable: string; ffmpegExecutable: string; denoExecutable: string }
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
   taskIndexFile: string
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
   resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
-  exportBrowserProfileCookies?(
-    profile: BrowserProfile,
-    platformId: 'youtube' | 'tiktok' | 'instagram' | 'facebook'
+  resolvePlatformAuthentication?(
+    platformId: 'youtube' | 'tiktok' | 'instagram' | 'facebook',
+    auth: PlatformAuthEntry
   ): Promise<AuthenticatedCookieFile>
 }
 
@@ -335,6 +335,10 @@ export class TaskManager {
     writeFileSync(this.options.taskIndexFile, '[]', 'utf8')
   }
 
+  hasActiveTasks(): boolean {
+    return this.runningCount > 0 || this.queue.length > 0
+  }
+
   async translate(taskIdValue: string, modelPaths: ModelPaths, targetLanguage?: TranslationTargetLanguage): Promise<TaskSnapshot> {
     const record = this.records.get(taskIdValue)
     if (!record) throw new Error('任务不存在。')
@@ -608,9 +612,8 @@ export class TaskManager {
       resolveFacebookAnonymousMedia: this.options.resolveFacebookAnonymousMedia,
       resolveAuthenticatedCookies: async (platform) => {
         const platformId = platformAuthIdFromUrlPlatform(platform)
-        const profile = platformId ? config.platformBrowserProfiles[platformId] : undefined
-        if (!platformId || !profile || !this.options.exportBrowserProfileCookies) return undefined
-        return this.options.exportBrowserProfileCookies(profile, platformId)
+        if (!platformId || !this.options.resolvePlatformAuthentication) return undefined
+        return this.options.resolvePlatformAuthentication(platformId, config.ytdlpPlatformAuth[platformId])
       }
     })
     log.info('公共下载层完成', {

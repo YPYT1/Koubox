@@ -1,22 +1,17 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { startLocalApi } from '@koubox/core'
+import { createYtdlpUpdateManager, startLocalApi } from '@koubox/core'
+import { defaultPlatformAuth, PLATFORM_HOMEPAGES, type YtdlpCookiePlatformId } from '@koubox/shared'
 import { initLogger, createLogger } from '@koubox/shared/logger'
-import { buildLoginCookieStatus, exportLoginCookies, applyLoginSessionProxy, readLoginCookies, cookiesToNetscape } from './cookies'
-import {
-  probeChromeProfileLogin,
-  exportBrowserProfileCookies,
-  resolveFacebookAnonymousWithChromium,
-  scanBrowserProfiles
-} from './browser-profiles'
+import { buildLoginCookieStatus, applyLoginSessionProxy, resolvePlatformAuthentication } from './cookies'
+import { resolveFacebookAnonymousWithChromium } from './facebook-browser'
 import { clearAppCache, resolveAppDataRoots, applyPendingDiskClear } from './clear-cache'
 import { resolveTikTokBrowserMedia } from './tiktok-browser'
 
 let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
 let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
-let exportedCookiesFile = ''
 
 /** 便携包：用户数据与 Cookie 放在 exe 旁 userdata，不共用开发机 AppData。 */
 function usePortableUserData(): void {
@@ -73,17 +68,6 @@ function patchBundledPythonHome(): void {
   if (next !== cfg) writeFileSync(cfgPath, next, 'utf8')
 }
 
-function resolveLoginHtmlPath(): string {
-  const candidates = [
-    join(__dirname, 'login-window.html'),
-    join(__dirname, '../../src/main/login-window.html'),
-    join(app.getAppPath(), 'src/main/login-window.html')
-  ]
-  const found = candidates.find((item) => existsSync(item))
-  if (!found) throw new Error('找不到登录窗口页面文件。')
-  return found
-}
-
 function isDebugModeEnabled(): boolean {
   return Boolean(localApi?.getConfig().debugMode)
 }
@@ -108,16 +92,10 @@ function registerDebugShortcuts(): void {
   globalShortcut.register('CommandOrControl+Shift+I', open)
 }
 
-async function syncExportedCookies(): Promise<void> {
-  const config = localApi?.getConfig()
-  if (!config || config.ytdlpCookieSource !== 'builtin' || !exportedCookiesFile) return
-  const cookies = await readLoginCookies()
-  if (cookies.length === 0) return
-  writeFileSync(exportedCookiesFile, cookiesToNetscape(cookies), 'utf8')
-}
-
-async function openLoginWindow(): Promise<void> {
+async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void> {
   if (loginWindow && !loginWindow.isDestroyed()) {
+    loginWindow.setTitle(`登录 ${platformId}`)
+    await loginWindow.loadURL(PLATFORM_HOMEPAGES[platformId])
     loginWindow.focus()
     return
   }
@@ -129,12 +107,11 @@ async function openLoginWindow(): Promise<void> {
     height: 780,
     minWidth: 900,
     minHeight: 640,
-    title: '登录视频平台',
+    title: `登录 ${platformId}`,
     icon: findWindowIcon(),
     autoHideMenuBar: true,
     webPreferences: {
       partition: 'persist:koubox-ytdlp-login',
-      preload: join(__dirname, '../preload/login-preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
@@ -160,13 +137,11 @@ async function openLoginWindow(): Promise<void> {
     void child.loadURL(url)
     return { action: 'deny' }
   })
-  await loginWindow.loadFile(resolveLoginHtmlPath())
+  await loginWindow.loadURL(PLATFORM_HOMEPAGES[platformId])
   loginWindow.on('closed', () => {
     loginWindow = undefined
   })
 }
-
-ipcMain.handle('login:cookie-status', () => buildLoginCookieStatus(exportedCookiesFile))
 
 async function createWindow(): Promise<void> {
   const projectDirectory = findProjectDirectory()
@@ -180,7 +155,13 @@ async function createWindow(): Promise<void> {
   mainLog.info('应用启动', { projectDirectory, userData, packaged: app.isPackaged })
   patchBundledPythonHome()
 
-  exportedCookiesFile = join(userData, 'ytdlp-cookies.txt')
+  const bundledYtdlp = join(findVendorDirectory(), 'yt-dlp', 'yt-dlp.exe')
+  const denoExecutable = join(findVendorDirectory(), 'deno', 'deno.exe')
+  const ytdlpUpdates = createYtdlpUpdateManager({
+    bundledExecutable: bundledYtdlp,
+    denoExecutable,
+    updateDirectory: join(userData, 'vendor-updates', 'yt-dlp')
+  })
 
   localApi = await startLocalApi({
     configFile: join(userData, 'runtime.json'),
@@ -192,19 +173,12 @@ async function createWindow(): Promise<void> {
       demucsModelDirectory: join(findModelsDirectory(), 'demucs'),
       ytdlpDirectory: join(findVendorDirectory(), 'yt-dlp'),
       ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin'),
+      denoDirectory: join(findVendorDirectory(), 'deno'),
       translationTargetLanguage: 'zh-Hans',
       asrLanguage: 'auto',
       openOutputOnComplete: false,
       ytdlpProxy: '',
-      ytdlpCookieSource: 'none',
-      ytdlpCookiesPath: '',
-      ytdlpPlatformAuth: {
-        youtube: { mode: 'builtin', cookies: '' },
-        tiktok: { mode: 'builtin', cookies: '' },
-        instagram: { mode: 'paste', cookies: '' },
-        facebook: { mode: 'builtin', cookies: '' }
-      },
-      platformBrowserProfiles: {},
+      ytdlpPlatformAuth: defaultPlatformAuth(),
       ytdlpMaxHeight: 0,
       ytdlpExtraArgs: '',
       maxConcurrentTasks: 1,
@@ -219,17 +193,17 @@ async function createWindow(): Promise<void> {
     pythonProjectDirectory: findPythonProjectDirectory(),
     bundledPythonExecutable: findBundledPythonExecutable(),
     pinBundledPaths: app.isPackaged,
-    exportedCookiesFile,
     resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: resolveFacebookAnonymousWithChromium,
-    exportBrowserProfileCookies,
-    scanBrowserProfiles,
-    probeChromeProfileLogin,
+    resolvePlatformAuthentication,
+    resolveActiveYtdlp: ytdlpUpdates.resolveActive,
+    checkYtdlpUpdate: ytdlpUpdates.check,
+    installYtdlpUpdate: ytdlpUpdates.install,
+    restoreBundledYtdlp: ytdlpUpdates.restore,
     getAppDataRoots: async () => resolveAppDataRoots(projectDirectory),
     clearAppCache: async () => clearAppCache({
       projectDirectory,
       parentWindow: mainWindow,
-      exportedCookiesFile,
       closeLoginWindow: () => {
         if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close()
       }
@@ -276,8 +250,7 @@ async function createWindow(): Promise<void> {
       if (error) throw new Error(error)
     },
     openLoginWindow,
-    exportLoginCookies: () => exportLoginCookies(exportedCookiesFile),
-    getLoginCookieStatus: (platformAuth, proxy) => buildLoginCookieStatus(exportedCookiesFile, platformAuth, proxy)
+    getLoginCookieStatus: (platformAuth, proxy, platformId) => buildLoginCookieStatus(platformAuth, proxy, platformId)
   })
 
   mainWindow = new BrowserWindow({
@@ -318,8 +291,6 @@ async function createWindow(): Promise<void> {
 
   registerDebugShortcuts()
 
-  await syncExportedCookies()
-
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   else await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
 }
@@ -329,7 +300,6 @@ ipcMain.handle('devtools:toggle', () => toggleDevTools())
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', () => {
-  void syncExportedCookies()
   void localApi?.close()
 })
 app.on('will-quit', () => { globalShortcut.unregisterAll() })

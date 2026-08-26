@@ -10,24 +10,23 @@ import {
   Globe,
   ArrowsClockwise,
   FloppyDiskBack,
-  MagnifyingGlass,
+  ClipboardText,
+  DownloadSimple,
   Trash
 } from '@phosphor-icons/react'
 import type {
   AsrLanguage,
-  BrowserProfile,
-  ChromeProfileLoginProbe,
   KouboxConfig,
   PlatformAuthMode,
   RuntimeStatus,
   TranslationTargetLanguage,
   VendorToolCheck,
   YtdlpCookiePlatformId,
-  YtdlpCookieSource,
   YtdlpCookieStatus,
+  YtdlpUpdateStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
-import { defaultPlatformAuth, normalizeBrowserProfile } from '@koubox/shared'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 
@@ -69,12 +68,6 @@ const HEIGHT_OPTIONS: Array<{ value: YtdlpMaxHeight; label: string }> = [
   { value: 480, label: '最高 480p' }
 ]
 
-const COOKIE_SOURCE_OPTIONS: Array<{ value: YtdlpCookieSource; label: string }> = [
-  { value: 'none', label: '公开解析（默认，无需账号）' },
-  { value: 'builtin', label: '公开解析失败后按平台登录兜底' },
-  { value: 'file', label: '统一 Cookies 文件（高级）' }
-]
-
 const PLATFORM_AUTH_OPTIONS: Array<{
   id: YtdlpCookiePlatformId
   label: string
@@ -85,11 +78,6 @@ const PLATFORM_AUTH_OPTIONS: Array<{
   { id: 'instagram', label: 'Instagram', requiredHint: 'sessionid / ds_user_id' },
   { id: 'facebook', label: 'Facebook', requiredHint: 'c_user / xs' }
 ]
-
-type LoginProbeUi = {
-  state: 'idle' | 'probing' | 'logged-in' | 'logged-out' | 'error'
-  detail: string
-}
 
 type AppDataRoots = {
   mode: 'development' | 'packaged'
@@ -105,21 +93,6 @@ type ClearAppCacheResult = {
   config?: KouboxConfig
 }
 
-function idleProbe(): LoginProbeUi {
-  return { state: 'idle', detail: '' }
-}
-
-/** HTML <option value> cannot reliably hold U+0000; use a Windows-illegal separator. */
-function browserProfileKey(profile: Pick<BrowserProfile, 'browser' | 'userDataDirectory' | 'profileDirectory' | 'bitBrowserId'>): string {
-  const bitId = profile.bitBrowserId?.trim() || ''
-  return `${profile.browser}|${profile.userDataDirectory}|${profile.profileDirectory}|${bitId}`
-}
-
-function normalizeCookieSource(source: YtdlpCookieSource | 'chrome' | 'edge'): YtdlpCookieSource {
-  if (source === 'builtin' || source === 'none' || source === 'file') return source
-  return 'builtin'
-}
-
 const guides: Record<GuideKind, {
   title: string
   role: string
@@ -131,8 +104,8 @@ const guides: Record<GuideKind, {
   ytdlp: {
     title: 'yt-dlp 使用说明',
     role: '负责按视频链接下载各大平台素材（视频文件）。爆款素材获取工具依赖它。',
-    download: '前往 GitHub Releases 下载 Windows 可执行文件 yt-dlp.exe。',
-    downloadUrl: 'https://github.com/yt-dlp/yt-dlp/releases',
+    download: '口播匣内置经过验证的 nightly。需要更新时在设置中手动检查并由用户确认。',
+    downloadUrl: 'https://github.com/yt-dlp/yt-dlp-nightly-builds/releases',
     layout: '选择的目录内直接放置 yt-dlp.exe（不要再套一层子文件夹）。',
     files: ['yt-dlp.exe']
   },
@@ -179,7 +152,11 @@ function VendorIntegrity({ check }: { check: VendorToolCheck | undefined }) {
         </div>
       )}
       {check.missingFiles.length === 0 && check.ready && (
-        <div className="vendor-integrity-ok">清单完整，运行时可用</div>
+        <div className="vendor-integrity-ok">
+          清单完整，运行时可用
+          {check.ejsVersion ? ` · EJS ${check.ejsVersion}` : ''}
+          {check.jsRuntimeVersion ? ` · Deno ${check.jsRuntimeVersion}` : ''}
+        </div>
       )}
     </div>
   )
@@ -196,8 +173,7 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const [guide, setGuide] = useState<GuideKind | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [openingLogin, setOpeningLogin] = useState(false)
-  const [savingCookies, setSavingCookies] = useState(false)
+  const [openingLogin, setOpeningLogin] = useState<YtdlpCookiePlatformId | null>(null)
   const [checkingCookies, setCheckingCookies] = useState(false)
   const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
   const cookieCheckDoneTimerRef = useRef<number | null>(null)
@@ -217,108 +193,16 @@ export function SettingsPage({
     })
   }
   const [savingPlatformAuth, setSavingPlatformAuth] = useState(false)
-  const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([])
-  const [scanningBrowserProfiles, setScanningBrowserProfiles] = useState(false)
-  const [loginProbes, setLoginProbes] = useState<Partial<Record<YtdlpCookiePlatformId, LoginProbeUi>>>({})
-  const [probingPlatformId, setProbingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
-  const [probingAllProfiles, setProbingAllProfiles] = useState(false)
+  const [savingPlatformId, setSavingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
+  const [checkingPlatformId, setCheckingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
+  const [readingClipboard, setReadingClipboard] = useState<YtdlpCookiePlatformId | null>(null)
+  const [ytdlpUpdate, setYtdlpUpdate] = useState<YtdlpUpdateStatus | null>(null)
+  const [checkingYtdlpUpdate, setCheckingYtdlpUpdate] = useState(false)
+  const [installingYtdlpUpdate, setInstallingYtdlpUpdate] = useState(false)
   const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
   const activeGuide = guide ? guides[guide] : null
-  const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
   const platformAuth = config.ytdlpPlatformAuth ?? defaultPlatformAuth()
-  const usePlatformAuth = cookieSource === 'builtin'
-  const anyBuiltinPlatform = PLATFORM_AUTH_OPTIONS.some((item) => platformAuth[item.id].mode === 'builtin')
-  const platformBrowserProfiles = config.platformBrowserProfiles ?? {}
-
-  const probeFor = (id: YtdlpCookiePlatformId): LoginProbeUi => loginProbes[id] ?? idleProbe()
-
-  const scanBrowserProfiles = async () => {
-    setScanningBrowserProfiles(true)
-    try {
-      const profiles = await window.koubox.get<BrowserProfile[]>('/browser/profiles')
-      setBrowserProfiles(profiles)
-      onShowToast(profiles.length ? `已发现 ${profiles.length} 个浏览器配置（Chrome / 比特）。` : '未发现可用的 Chrome / 比特浏览器配置。', profiles.length ? 'success' : 'warning')
-    } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '扫描浏览器配置失败', 'error')
-    } finally {
-      setScanningBrowserProfiles(false)
-    }
-  }
-
-  const selectBrowserProfile = (id: YtdlpCookiePlatformId, profileKey: string) => {
-    const selected = browserProfiles.find((item) => browserProfileKey(item) === profileKey)
-    const next = { ...platformBrowserProfiles }
-    if (selected) next[id] = normalizeBrowserProfile(selected)
-    else delete next[id]
-    onChange({ ...config, platformBrowserProfiles: next })
-    setLoginProbes((prev) => ({ ...prev, [id]: idleProbe() }))
-  }
-
-  const probePlatformLogin = async (id: YtdlpCookiePlatformId, options?: { silentToast?: boolean }): Promise<boolean> => {
-    const profile = platformBrowserProfiles[id]
-    if (!profile) {
-      setLoginProbes((prev) => ({
-        ...prev,
-        [id]: { state: 'error', detail: '请先为该平台选择 Chrome 配置文件。' }
-      }))
-      if (!options?.silentToast) {
-        onShowToast(`请先选择 ${PLATFORM_AUTH_OPTIONS.find((item) => item.id === id)?.label ?? id} 的配置文件。`, 'warning')
-      }
-      return false
-    }
-    setProbingPlatformId(id)
-    setLoginProbes((prev) => ({
-      ...prev,
-      [id]: { state: 'probing', detail: `正在打开 ${PLATFORM_AUTH_OPTIONS.find((item) => item.id === id)?.label ?? id} 首页检测登录…` }
-    }))
-    try {
-      const result = await Promise.race([
-        window.koubox.post<ChromeProfileLoginProbe>('/browser/profiles/probe-login', {
-          platformId: id,
-          profile,
-          proxy: config.ytdlpProxy
-        }),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('登录检测超时（20 秒）。请关闭占用该配置的浏览器，检查代理后重试。')), 20_000)
-        })
-      ])
-      setLoginProbes((prev) => ({
-        ...prev,
-        [id]: {
-          state: result.loggedIn ? 'logged-in' : 'logged-out',
-          detail: result.detail
-        }
-      }))
-      if (!options?.silentToast) onShowToast(result.detail, result.loggedIn ? 'success' : 'warning')
-      return result.loggedIn
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : '登录检测失败'
-      setLoginProbes((prev) => ({ ...prev, [id]: { state: 'error', detail } }))
-      if (!options?.silentToast) onShowToast(detail, 'error')
-      return false
-    } finally {
-      setProbingPlatformId(null)
-    }
-  }
-
-  const probeAllSelectedLogins = async () => {
-    const selectedIds = PLATFORM_AUTH_OPTIONS.map((item) => item.id).filter((id) => platformBrowserProfiles[id])
-    if (selectedIds.length === 0) {
-      onShowToast('请先为至少一个平台选择 Chrome 配置文件。', 'warning')
-      return
-    }
-    setProbingAllProfiles(true)
-    try {
-      let loggedInCount = 0
-      for (const id of selectedIds) {
-        if (await probePlatformLogin(id, { silentToast: true })) loggedInCount += 1
-      }
-      onShowToast(`检测完成：${loggedInCount}/${selectedIds.length} 个平台已登录。`, loggedInCount === selectedIds.length ? 'success' : 'warning')
-    } finally {
-      setProbingAllProfiles(false)
-    }
-  }
 
   const patchPlatformAuth = (id: YtdlpCookiePlatformId, patch: { mode?: PlatformAuthMode; cookies?: string }) => {
     onChange({
@@ -343,8 +227,6 @@ export function SettingsPage({
     setCheckingCookies(true)
     let success = false
     try {
-      const saved = await window.koubox.put<KouboxConfig>('/config', config)
-      onChange(saved)
       const status = await window.koubox.get<YtdlpCookieStatus>('/browser/cookie-status')
       setCookieStatus(status)
       success = true
@@ -368,12 +250,8 @@ export function SettingsPage({
   }
 
   useEffect(() => {
-    if (!usePlatformAuth) {
-      setCookieStatus(null)
-      return
-    }
     void refreshCookieStatus()
-  }, [usePlatformAuth])
+  }, [])
 
   useEffect(() => {
     void window.koubox.get<AppDataRoots>('/system/data-roots')
@@ -390,8 +268,6 @@ export function SettingsPage({
         return
       }
       setAppDataRoots(result.roots)
-      setBrowserProfiles([])
-      setLoginProbes({})
       setCookieStatus(null)
       if (result.config) onChange(result.config)
       if (result.failed.length > 0) {
@@ -413,7 +289,7 @@ export function SettingsPage({
   }
 
   const handleSelectFile = async (
-    key: 'ytdlpCookiesPath' | 'pythonExecutable',
+    key: 'pythonExecutable',
     title: string,
     filters?: FileFilter[]
   ) => {
@@ -421,50 +297,118 @@ export function SettingsPage({
     if (picked) onChange({ ...config, [key]: picked })
   }
 
-  const handleSavePlatformAuth = async () => {
+  const handleSavePlatformAuth = async (platformId: YtdlpCookiePlatformId) => {
+    setSavingPlatformId(platformId)
     setSavingPlatformAuth(true)
     try {
-      const saved = await window.koubox.put<KouboxConfig>('/config', config)
+      const saved = await window.koubox.put<KouboxConfig>(`/config/platform-auth/${platformId}`, platformAuth[platformId])
       onChange(saved)
-      onShowToast('平台登录配置已保存。', 'success')
-      if (usePlatformAuth) await refreshCookieStatus()
+      const label = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)?.label ?? platformId
+      onShowToast(`${label} 登录配置已保存。`, 'success')
+      await handleCheckPlatformLogin(platformId, saved.ytdlpPlatformAuth[platformId])
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '保存平台登录配置失败', 'error')
     } finally {
       setSavingPlatformAuth(false)
+      setSavingPlatformId(null)
     }
   }
 
-  const handleOpenLoginWindow = async () => {
-    setOpeningLogin(true)
+  const handleCheckPlatformLogin = async (platformId: YtdlpCookiePlatformId, auth = platformAuth[platformId]) => {
+    setCheckingPlatformId(platformId)
     try {
-      const nextConfig: KouboxConfig = {
-        ...config,
-        ytdlpCookieSource: 'none',
-        ytdlpCookiesPath: ''
-      }
-      onChange(nextConfig)
-      const saved = await window.koubox.put<KouboxConfig>('/config', nextConfig)
+      const status = await window.koubox.post<YtdlpCookieStatus>('/browser/cookie-status', { platformId, auth })
+      const platformStatus = status.platforms[0]
+      setCookieStatus((previous) => ({
+        exported: false,
+        cookieCount: status.cookieCount,
+        platforms: PLATFORM_AUTH_OPTIONS.map((item) =>
+          item.id === platformId
+            ? platformStatus
+            : previous?.platforms.find((existing) => existing.id === item.id) ?? {
+                id: item.id,
+                label: item.label,
+                loggedIn: false,
+                detail: '尚未检测'
+              })
+      }))
+      const label = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)?.label ?? platformId
+      onShowToast(platformStatus?.loggedIn ? `${label} 登录检测通过。` : (platformStatus?.detail ?? `${label} 登录未就绪。`), platformStatus?.loggedIn ? 'success' : 'warning')
+      return status
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '检测平台登录失败', 'error')
+      return null
+    } finally {
+      setCheckingPlatformId(null)
+    }
+  }
+
+  const handleOpenLoginWindow = async (platformId: YtdlpCookiePlatformId) => {
+    setOpeningLogin(platformId)
+    try {
+      const saved = await window.koubox.put<KouboxConfig>('/config', config)
       onChange(saved)
-      await window.koubox.post<{ ok: boolean }>('/browser/open-login')
-      onShowToast('已打开登录窗口。请依次登录各平台，完成后点「保存登录状态」。', 'success')
+      await window.koubox.post<{ ok: boolean }>('/browser/open-login', { platformId })
+      const label = PLATFORM_AUTH_OPTIONS.find((item) => item.id === platformId)?.label ?? platformId
+      onShowToast(`已打开 ${label} 应用内登录窗口，登录状态会自动保存。`, 'success')
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '打开登录窗口失败', 'error')
     } finally {
-      setOpeningLogin(false)
+      setOpeningLogin(null)
     }
   }
 
-  const handleSaveLoginCookies = async () => {
-    setSavingCookies(true)
+  const handleReadClipboard = async (platformId: YtdlpCookiePlatformId) => {
+    setReadingClipboard(platformId)
     try {
-      const status = await window.koubox.post<YtdlpCookieStatus>('/browser/export-cookies')
-      setCookieStatus(status)
-      onShowToast('登录状态已保存，可直接开始下载。', 'success')
+      const text = await navigator.clipboard.readText()
+      if (!text.trim()) throw new Error('剪贴板为空，请先在 Cookie 扩展中复制全文。')
+      patchPlatformAuth(platformId, { cookies: text })
+      onShowToast('已从剪贴板读取 Cookie；请点击“保存平台登录配置”。', 'success')
     } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '保存登录状态失败', 'error')
+      onShowToast(error instanceof Error ? error.message : '读取剪贴板失败', 'error')
     } finally {
-      setSavingCookies(false)
+      setReadingClipboard(null)
+    }
+  }
+
+  const handleCheckYtdlpUpdate = async () => {
+    setCheckingYtdlpUpdate(true)
+    try {
+      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/check-update')
+      setYtdlpUpdate(status)
+      onShowToast(status.updateAvailable ? `发现 yt-dlp nightly ${status.latestVersion}` : 'yt-dlp 已是最新 nightly。', status.updateAvailable ? 'info' : 'success')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '检查 yt-dlp 更新失败', 'error')
+    } finally {
+      setCheckingYtdlpUpdate(false)
+    }
+  }
+
+  const handleInstallYtdlpUpdate = async () => {
+    if (!ytdlpUpdate?.latestVersion) return
+    setInstallingYtdlpUpdate(true)
+    try {
+      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/install-update', { version: ytdlpUpdate.latestVersion })
+      setYtdlpUpdate(status)
+      onShowToast(`yt-dlp 已更新到 ${status.currentVersion}。`, 'success')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '更新 yt-dlp 失败', 'error')
+    } finally {
+      setInstallingYtdlpUpdate(false)
+    }
+  }
+
+  const handleRestoreYtdlp = async () => {
+    setInstallingYtdlpUpdate(true)
+    try {
+      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/restore-bundled')
+      setYtdlpUpdate(status)
+      onShowToast(`已恢复内置 yt-dlp ${status.currentVersion}。`, 'success')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '恢复内置 yt-dlp 失败', 'error')
+    } finally {
+      setInstallingYtdlpUpdate(false)
     }
   }
 
@@ -525,13 +469,53 @@ export function SettingsPage({
             )}
             hint="目录内需包含 yt-dlp.exe。"
           >
-            <PathPicker
-              value={config.ytdlpDirectory}
-              onChange={(val) => onChange({ ...config, ytdlpDirectory: val })}
-              onBrowse={() => handleSelectPath('ytdlpDirectory', '选择 yt-dlp 所在目录')}
-              placeholder="例如 D:/Project/Koubox/vendor/yt-dlp"
-            />
+            <code>{runtime?.vendor.ytdlp.executable ?? config.ytdlpDirectory}</code>
             <VendorIntegrity check={runtime?.vendor.ytdlp} />
+            <div className="platform-auth-toolbar">
+              <span className="chrome-account-scan-meta">
+                当前 {ytdlpUpdate?.currentVersion ?? runtime?.vendor.ytdlp.version ?? '未知'}
+                {' · nightly · '}
+                {(ytdlpUpdate?.currentSource ?? runtime?.vendor.ytdlp.source) === 'user-update' ? '用户更新' : '内置版本'}
+              </span>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={checkingYtdlpUpdate}
+                icon={<ArrowsClockwise size={15} weight="bold" />}
+                onClick={() => void handleCheckYtdlpUpdate()}
+              >
+                检查更新
+              </Button>
+              {ytdlpUpdate?.updateAvailable && ytdlpUpdate.latestVersion ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={installingYtdlpUpdate}
+                  icon={<DownloadSimple size={15} weight="bold" />}
+                  onClick={() => void handleInstallYtdlpUpdate()}
+                >
+                  更新到 {ytdlpUpdate.latestVersion}
+                </Button>
+              ) : null}
+              {(ytdlpUpdate?.currentSource ?? runtime?.vendor.ytdlp.source) === 'user-update' ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  loading={installingYtdlpUpdate}
+                  onClick={() => void handleRestoreYtdlp()}
+                >
+                  恢复内置版本
+                </Button>
+              ) : null}
+            </div>
+          </FormField>
+
+          <FormField label="Deno 目录" hint="YouTube EJS 解算使用随软件携带的 Deno 2.x；目录内需包含 deno.exe。">
+            <code>{runtime?.vendor.deno.executable ?? config.denoDirectory}</code>
+            <VendorIntegrity check={runtime?.vendor.deno} />
           </FormField>
 
           <FormField
@@ -601,11 +585,11 @@ export function SettingsPage({
 
         <div className="panel-box">
           <div className="panel-title">
-            <h3>下载与浏览器账号</h3>
-            <span className="panel-title-badge">直连优先</span>
+            <h3>下载与平台登录</h3>
+            <span className="panel-title-badge">公开解析优先</span>
           </div>
 
-          <FormField label="代理地址" hint="例如 http://127.0.0.1:7897；Facebook 的页面解析、Chrome 配置文件解析和媒体下载共用此代理。">
+          <FormField label="代理地址" hint="例如 http://127.0.0.1:7897；公开解析、应用内登录验证和 yt-dlp 下载共用此代理。">
             <input
               className="input-text"
               value={config.ytdlpProxy}
@@ -614,167 +598,23 @@ export function SettingsPage({
             />
           </FormField>
 
-          <FormField
-            label="Chrome 浏览器账号"
-            hint="扫描本机 Chrome 与比特浏览器配置后按平台选择；点「检测登录」会打开对应首页核对会话。应用只保存路径。比特需保持客户端运行（本地 API）。"
-          >
-            <div className="chrome-account-panel">
-              <div className="chrome-account-toolbar">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={scanningBrowserProfiles}
-                  icon={<ArrowsClockwise size={16} weight="bold" />}
-                  onClick={() => void scanBrowserProfiles()}
-                >
-                  {scanningBrowserProfiles ? '扫描中…' : '扫描配置文件'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={probingAllProfiles}
-                  disabled={scanningBrowserProfiles || probingPlatformId !== null}
-                  icon={<MagnifyingGlass size={16} weight="bold" />}
-                  onClick={() => void probeAllSelectedLogins()}
-                >
-                  {probingAllProfiles ? '检测中…' : '检测已选平台'}
-                </Button>
-                <span className="chrome-account-scan-meta">
-                  {browserProfiles.length > 0 ? `已发现 ${browserProfiles.length} 个配置` : '尚未扫描'}
-                </span>
-              </div>
+          <div className="platform-auth-toolbar">
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              loading={checkingCookies}
+              icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
+              onClick={() => void refreshCookieStatus()}
+            >
+              {cookieCheckCompleted ? '检测完成' : checkingCookies ? '检测中…' : '检测四平台登录配置'}
+            </Button>
+          </div>
 
-              <div className="chrome-account-list">
-                {PLATFORM_AUTH_OPTIONS.map((platform) => {
-                  const selected = platformBrowserProfiles[platform.id]
-                  const selectedKey = selected ? browserProfileKey(selected) : ''
-                  const probe = probeFor(platform.id)
-                  const busy = probingPlatformId === platform.id || probingAllProfiles
-                  return (
-                    <div key={platform.id} className={`chrome-account-row chrome-account-row--${probe.state}`}>
-                      <strong className="chrome-account-platform">{platform.label}</strong>
-                      <select
-                        className="input-text"
-                        value={selectedKey}
-                        disabled={busy}
-                        onChange={(event) => selectBrowserProfile(platform.id, event.target.value)}
-                        aria-label={`${platform.label} 浏览器配置文件`}
-                      >
-                        <option value="">未选择配置文件</option>
-                        {browserProfiles.map((profile) => {
-                          const key = browserProfileKey(profile)
-                          return <option key={key} value={key}>{profile.label}</option>
-                        })}
-                        {selected && !browserProfiles.some((profile) => browserProfileKey(profile) === selectedKey) && (
-                          <option value={selectedKey}>{selected.label}（已保存，待重新扫描）</option>
-                        )}
-                      </select>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="md"
-                        loading={probingPlatformId === platform.id}
-                        disabled={busy && probingPlatformId !== platform.id}
-                        icon={<MagnifyingGlass size={16} weight="bold" />}
-                        onClick={() => void probePlatformLogin(platform.id)}
-                      >
-                        检测登录
-                      </Button>
-                      <span className={`chrome-account-badge chrome-account-badge--${probe.state}`}>
-                        {probe.state === 'idle' && '未检测'}
-                        {probe.state === 'probing' && '检测中'}
-                        {probe.state === 'logged-in' && '已登录'}
-                        {probe.state === 'logged-out' && '未登录'}
-                        {probe.state === 'error' && '检测失败'}
-                      </span>
-                      {probe.detail ? (
-                        <p className="chrome-account-row-detail">{probe.detail}</p>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          </FormField>
-
-          <FormField
-            label="Facebook 下载策略"
-            hint="固定为：公开页面直连 → 已选 Chrome 配置文件 → FFmpeg stream copy。Facebook 不调用 yt-dlp，不重编码视频或音频。"
-          >
-            <div className="vendor-integrity-ok">已启用 Facebook 原画直连链路</div>
-          </FormField>
-
-          {false && usePlatformAuth && (
-            <>
-              {anyBuiltinPlatform && (
-                <div className="platform-auth-toolbar">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={openingLogin}
-                    icon={<Globe size={16} weight="bold" />}
-                    onClick={() => void handleOpenLoginWindow()}
-                  >
-                    打开登录窗口
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={savingCookies}
-                    icon={<FloppyDiskBack size={16} weight="bold" />}
-                    onClick={() => void handleSaveLoginCookies()}
-                  >
-                    保存应用内登录
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={checkingCookies}
-                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-                    onClick={() => void refreshCookieStatus()}
-                  >
-                    {cookieCheckCompleted
-                      ? '检测完成'
-                      : checkingCookies
-                        ? '检测中…'
-                        : '检测登录状态'}
-                  </Button>
-                </div>
-              )}
-
-              {!anyBuiltinPlatform && (
-                <div className="platform-auth-toolbar">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="md"
-                    loading={checkingCookies}
-                    icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-                    onClick={() => void refreshCookieStatus()}
-                  >
-                    {cookieCheckCompleted
-                      ? '检测完成'
-                      : checkingCookies
-                        ? '检测中…'
-                        : '检测粘贴 Cookie'}
-                  </Button>
-                </div>
-              )}
-
-              {cookieStatus && (
+          {cookieStatus && (
                 <div className="cookie-status-panel">
                   <div className="cookie-status-head">
-                    <span>
-                      应用内会话 {cookieStatus!.cookieCount} 个 cookie
-                      {cookieStatus!.exported && cookieStatus!.exportedAt
-                        ? ` · 已导出 ${new Date(cookieStatus!.exportedAt!).toLocaleString()}`
-                        : ''}
-                    </span>
+                    <span>应用内会话共 {cookieStatus.cookieCount} 个 Cookie；各平台按当前选择的方式检测</span>
                   </div>
                   <div className="cookie-status-grid">
                     {cookieStatus!.platforms.map((platform) => (
@@ -793,9 +633,9 @@ export function SettingsPage({
                     ))}
                   </div>
                 </div>
-              )}
+          )}
 
-              <div className="platform-auth-list">
+          <div className="platform-auth-list">
                 {PLATFORM_AUTH_OPTIONS.map((platform) => {
                   const entry = platformAuth[platform.id]
                   const open = platformPanelOpen[platform.id]
@@ -846,6 +686,18 @@ export function SettingsPage({
                               <p className="field-hint">
                                 用「口播匣 Cookie 导出」插件导出 {platform.label} 后全文粘贴。需含：{platform.requiredHint}
                               </p>
+                              <div className="platform-auth-toolbar">
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  loading={readingClipboard === platform.id}
+                                  icon={<ClipboardText size={15} weight="bold" />}
+                                  onClick={() => void handleReadClipboard(platform.id)}
+                                >
+                                  从剪贴板读取
+                                </Button>
+                              </div>
                               <textarea
                                 className="textarea-box platform-auth-text"
                                 rows={7}
@@ -856,47 +708,48 @@ export function SettingsPage({
                               />
                             </>
                           ) : (
-                            <p className="field-hint">
-                              下载 {platform.label} 时使用应用内登录窗口保存的会话。点上方「打开登录窗口」完成登录并保存。
-                            </p>
+                            <>
+                              <p className="field-hint">下载 {platform.label} 时使用口播匣独立登录会话，登录成功后 Cookie 会自动持久化。</p>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                loading={openingLogin === platform.id}
+                                icon={<Globe size={15} weight="bold" />}
+                                onClick={() => void handleOpenLoginWindow(platform.id)}
+                              >
+                                打开 {platform.label} 登录
+                              </Button>
+                            </>
                           )}
+                          <div className="platform-auth-toolbar">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              loading={checkingPlatformId === platform.id}
+                              icon={<CheckCircle size={15} weight="bold" />}
+                              onClick={() => void handleCheckPlatformLogin(platform.id)}
+                            >
+                              检测 {platform.label} 登录
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              loading={savingPlatformAuth && savingPlatformId === platform.id}
+                              icon={<FloppyDiskBack size={15} weight="bold" />}
+                              onClick={() => void handleSavePlatformAuth(platform.id)}
+                            >
+                              保存 {platform.label}
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
                   )
                 })}
-              </div>
-
-              <div className="platform-auth-save">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="md"
-                  loading={savingPlatformAuth}
-                  icon={<FloppyDiskBack size={16} weight="bold" />}
-                  onClick={() => void handleSavePlatformAuth()}
-                >
-                  保存平台登录配置
-                </Button>
-              </div>
-            </>
-          )}
-
-          {false && cookieSource === 'file' && (
-            <FormField label="Cookies 文件" hint="Netscape cookies.txt，所有平台共用这一份。">
-              <PathPicker
-                value={config.ytdlpCookiesPath}
-                onChange={(val) => onChange({ ...config, ytdlpCookiesPath: val })}
-                onBrowse={() =>
-                  handleSelectFile('ytdlpCookiesPath', '选择 cookies 文件', [
-                    { name: 'Cookies', extensions: ['txt'] },
-                    { name: '所有文件', extensions: ['*'] }
-                  ])
-                }
-                placeholder="例如 D:/cookies.txt"
-              />
-            </FormField>
-          )}
+          </div>
 
           <FormField label="清晰度上限" hint="默认最清晰。限制高度会放弃更高分辨率。">
             <select

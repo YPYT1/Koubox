@@ -141,7 +141,6 @@ async function clearOldLogDirs(
 export async function clearAppCache(options: {
   projectDirectory: string
   parentWindow?: BrowserWindow
-  exportedCookiesFile?: string
   closeLoginWindow?: () => void
 }): Promise<ClearAppCacheResult> {
   const roots = resolveAppDataRoots(options.projectDirectory)
@@ -158,7 +157,7 @@ export async function clearAppCache(options: {
       `用户数据：${roots.userData}`,
       `日志目录：${roots.logs}`,
       '',
-      '将清理：会话缓存、登录 Cookie / 平台登录配置、浏览器账号选择、任务记录、旧日志。',
+      '将清理：会话缓存、登录 Cookie / 平台登录配置、任务记录、旧日志。',
       '磁盘 Cache 会在下次启动时彻底清除（避免运行中删除导致卡死）。',
       '不会删除：模型、yt-dlp / FFmpeg、输出视频目录。'
     ].join('\n')
@@ -204,18 +203,6 @@ export async function clearAppCache(options: {
     })
   }
   await yieldMain()
-
-  if (options.exportedCookiesFile && existsSync(options.exportedCookiesFile)) {
-    try {
-      unlinkSync(options.exportedCookiesFile)
-      cleared.push(options.exportedCookiesFile)
-    } catch (error) {
-      failed.push({
-        path: options.exportedCookiesFile,
-        error: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
 
   // Do NOT delete Cache/GPUCache while Chromium is running — that causes
   // entry_impl.cc "No file for …" and freezes the window.

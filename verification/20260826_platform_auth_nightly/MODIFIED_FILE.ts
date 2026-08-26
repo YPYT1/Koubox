@@ -31,7 +31,6 @@ export type AuthenticatedCookieFile = {
   userAgent?: string
   cleanup(): Promise<void> | void
 }
-
 export type VerifiedMedia = {
   duration: number
   size: number

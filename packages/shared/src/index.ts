@@ -84,6 +84,22 @@ export type VendorToolCheck = {
   expectedFiles: string[]
   foundFiles: string[]
   missingFiles: string[]
+  version?: string
+  channel?: 'stable' | 'nightly' | 'master'
+  source?: 'bundled' | 'user-update'
+  ejsVersion?: string
+  jsRuntimeVersion?: string
+}
+
+export type YtdlpUpdateStatus = {
+  channel: 'nightly'
+  currentVersion: string
+  currentSource: 'bundled' | 'user-update'
+  latestVersion?: string
+  updateAvailable: boolean
+  checkedAt?: string
+  downloadUrl?: string
+  sha256?: string
 }
 
 export type RuntimeStatus = {
@@ -94,6 +110,7 @@ export type RuntimeStatus = {
   vendor: {
     ytdlp: VendorToolCheck
     ffmpeg: VendorToolCheck
+    deno: VendorToolCheck
   }
 }
 
@@ -212,25 +229,8 @@ export type TaskEvent = {
 export type TranslationTargetLanguage = 'zh-Hans' | 'zh-Hant' | 'en' | 'ja' | 'ko'
 export type AsrLanguage = 'auto' | TranslationTargetLanguage
 export type YtdlpMaxHeight = 0 | 1080 | 720 | 480
-export type YtdlpCookieSource = 'builtin' | 'none' | 'file'
 export type YtdlpCookiePlatformId = 'youtube' | 'tiktok' | 'instagram' | 'facebook'
 export type PlatformAuthMode = 'builtin' | 'paste'
-
-/** A Chrome / 比特浏览器 profile selected by the user; no cookie text is persisted. */
-export type BrowserProfile = {
-  browser: 'chrome' | 'bitbrowser'
-  userDataDirectory: string
-  profileDirectory: string
-  label: string
-  /** 比特浏览器窗口 ID，用于本地 API 读取 Cookie */
-  bitBrowserId?: string
-}
-
-export type PlatformBrowserProfiles = Partial<Record<YtdlpCookiePlatformId, BrowserProfile>>
-
-export function defaultPlatformBrowserProfiles(): PlatformBrowserProfiles {
-  return {}
-}
 
 export type PlatformAuthEntry = {
   mode: PlatformAuthMode
@@ -241,10 +241,10 @@ export type PlatformAuthConfig = Record<YtdlpCookiePlatformId, PlatformAuthEntry
 
 export function defaultPlatformAuth(): PlatformAuthConfig {
   return {
-    youtube: { mode: 'builtin', cookies: '' },
-    tiktok: { mode: 'builtin', cookies: '' },
+    youtube: { mode: 'paste', cookies: '' },
+    tiktok: { mode: 'paste', cookies: '' },
     instagram: { mode: 'paste', cookies: '' },
-    facebook: { mode: 'builtin', cookies: '' }
+    facebook: { mode: 'paste', cookies: '' }
   }
 }
 
@@ -290,8 +290,10 @@ export const PLATFORM_COOKIE_RULES: PlatformCookieRule[] = [
   }
 ]
 
-export function pastedCookieNamesFromNetscape(text: string, domainTest: RegExp): Set<string> {
-  const names = new Set<string>()
+type ParsedNetscapeCookie = { domain: string; expiry: number; name: string }
+
+function parsedNetscapeCookies(text: string): ParsedNetscapeCookie[] {
+  const rows: ParsedNetscapeCookie[] = []
   for (const raw of text.split(/\r?\n/)) {
     let line = raw.trim()
     if (!line) continue
@@ -300,10 +302,18 @@ export function pastedCookieNamesFromNetscape(text: string, domainTest: RegExp):
     const parts = line.split('\t')
     if (parts.length < 7) continue
     const domain = (parts[0] ?? '').replace(/^\./, '')
+    const expiry = Number(parts[4] ?? 0)
     const name = parts[5]
     if (!domain || !name) continue
-    if (!domainTest.test(domain)) continue
-    names.add(name)
+    rows.push({ domain, expiry: Number.isFinite(expiry) ? expiry : 0, name })
+  }
+  return rows
+}
+
+export function pastedCookieNamesFromNetscape(text: string, domainTest: RegExp): Set<string> {
+  const names = new Set<string>()
+  for (const row of parsedNetscapeCookies(text)) {
+    if (domainTest.test(row.domain)) names.add(row.name)
   }
   return names
 }
@@ -311,10 +321,26 @@ export function pastedCookieNamesFromNetscape(text: string, domainTest: RegExp):
 export function assertPastedPlatformCookies(platformId: YtdlpCookiePlatformId, text: string): void {
   const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
   if (!rule) throw new Error(`未知平台：${platformId}`)
-  const names = pastedCookieNamesFromNetscape(text, rule.domainTest)
+  const parsed = parsedNetscapeCookies(text)
+  if (parsed.length === 0) {
+    throw new Error(`${rule.label} Cookie 格式错误：需要 Netscape cookies.txt 格式。`)
+  }
+  const platformRows = parsed.filter((row) => rule.domainTest.test(row.domain))
+  if (platformRows.length === 0) {
+    throw new Error(`Cookie 平台错误：粘贴内容不属于 ${rule.label}。`)
+  }
+  const names = new Set(platformRows.map((row) => row.name))
   const missing = rule.requiredNames.filter((name) => !names.has(name))
   if (missing.length > 0) {
     throw new Error(`${rule.label} Cookie 不完整：缺少 ${missing.join(' / ')}。请用浏览器插件重新导出后粘贴。`)
+  }
+  const now = Math.floor(Date.now() / 1000)
+  const expiredRequired = platformRows
+    .filter((row) => rule.requiredNames.includes(row.name))
+    .filter((row) => row.expiry > 0 && row.expiry < now)
+    .map((row) => row.name)
+  if (expiredRequired.length > 0) {
+    throw new Error(`${rule.label} Cookie 已过期：${[...new Set(expiredRequired)].join(' / ')}。请用浏览器插件重新导出后粘贴。`)
   }
 }
 
@@ -376,17 +402,6 @@ export type YtdlpCookieStatus = {
   platforms: YtdlpCookiePlatformStatus[]
 }
 
-/** Chrome 配置文件进平台首页后的登录检测结果 */
-export type ChromeProfileLoginProbe = {
-  platformId: YtdlpCookiePlatformId
-  label: string
-  loggedIn: boolean
-  detail: string
-  homepage: string
-  finalUrl: string
-  profileLabel: string
-}
-
 export const PLATFORM_HOMEPAGES: Record<YtdlpCookiePlatformId, string> = {
   youtube: 'https://www.youtube.com/',
   tiktok: 'https://www.tiktok.com/',
@@ -402,16 +417,13 @@ export type KouboxConfig = {
   demucsModelDirectory: string
   ytdlpDirectory: string
   ffmpegDirectory: string
+  denoDirectory: string
   translationTargetLanguage: TranslationTargetLanguage
   asrLanguage: AsrLanguage
   openOutputOnComplete: boolean
   ytdlpProxy: string
-  ytdlpCookieSource: YtdlpCookieSource
-  ytdlpCookiesPath: string
   /** 各平台独立：应用内登录 / 粘贴 Cookie */
   ytdlpPlatformAuth: PlatformAuthConfig
-  /** 各平台独立选择本机 Chrome 配置文件，不保存或展示 Cookie。 */
-  platformBrowserProfiles: PlatformBrowserProfiles
   ytdlpMaxHeight: YtdlpMaxHeight
   ytdlpExtraArgs: string
   maxConcurrentTasks: number
@@ -434,22 +446,8 @@ export function normalizeOsPath(input: string): string {
   return input.replace(/\u00A5/g, '\\').replace(/\uFFE5/g, '\\')
 }
 
-export function normalizeBrowserProfile(profile: BrowserProfile): BrowserProfile {
-  const next: BrowserProfile = {
-    ...profile,
-    userDataDirectory: normalizeOsPath(profile.userDataDirectory.trim()),
-    profileDirectory: normalizeOsPath(profile.profileDirectory.trim())
-  }
-  if (profile.bitBrowserId) next.bitBrowserId = profile.bitBrowserId.trim()
-  return next
-}
-
 /** Normalize every filesystem path field on KouboxConfig (JP Windows ¥/￥ → `\`). */
 export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
-  const platformBrowserProfiles: PlatformBrowserProfiles = {}
-  for (const [id, profile] of Object.entries(config.platformBrowserProfiles ?? {}) as Array<[YtdlpCookiePlatformId, BrowserProfile | undefined]>) {
-    if (profile) platformBrowserProfiles[id] = normalizeBrowserProfile(profile)
-  }
   return {
     ...config,
     modelsDirectory: normalizeOsPath(config.modelsDirectory),
@@ -459,9 +457,8 @@ export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
     demucsModelDirectory: normalizeOsPath(config.demucsModelDirectory),
     ytdlpDirectory: normalizeOsPath(config.ytdlpDirectory),
     ffmpegDirectory: normalizeOsPath(config.ffmpegDirectory),
-    ytdlpCookiesPath: normalizeOsPath(config.ytdlpCookiesPath),
-    pythonExecutable: normalizeOsPath(config.pythonExecutable),
-    platformBrowserProfiles
+    denoDirectory: normalizeOsPath(config.denoDirectory),
+    pythonExecutable: normalizeOsPath(config.pythonExecutable)
   }
 }
 
@@ -475,10 +472,16 @@ export function toUserTaskMessage(raw: string): string {
   const text = raw.trim()
   if (!text) return '任务失败，请重试。'
 
-  if (/Netscape formatted|not JSON/i.test(text)) {
-    return 'Cookies 文件格式不对。若已选择 Chrome / Edge 登录，请先点「保存配置更改」；若使用 Cookies 文件，需 Netscape 格式的 cookies.txt，不能用浏览器导出的 JSON。'
+  if (/Deno (?:运行时不存在|运行时检测失败|SHA-256 校验失败)|未能启用 Deno JS Challenge Provider/i.test(text)) {
+    return 'Deno 运行时缺失或损坏。请在「全局设置 → 模型与运行环境」检查内置 Deno 2.9.5。'
   }
-  if (/浏览器登录有效，但 yt-dlp 鉴权失败/i.test(text)) {
+  if (/yt-dlp.*未检测到内置 yt-dlp-ejs|yt-dlp-ejs.*(?:missing|缺失)/i.test(text)) {
+    return 'yt-dlp 内置 EJS 组件缺失或损坏。请恢复内置版本，或重新执行手动更新。'
+  }
+  if (/Netscape formatted|not JSON/i.test(text)) {
+    return 'Cookie 格式不对。请使用「口播匣 Cookie 导出」插件复制 Netscape 格式全文，不能使用 JSON。'
+  }
+  if (/(粘贴 Cookie 已配置|应用内登录已保存)，?但 yt-dlp 鉴权失败/i.test(text)) {
     return text
   }
   if (/DEMUCS|demucs|torchaudio|人声分离|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
@@ -499,9 +502,6 @@ export function toUserTaskMessage(raw: string): string {
       return `网络连接失败 ${where}。请检查系统 HTTP_PROXY 环境变量与全局设置中的代理是否一致。`
     }
   }
-  if (/Could not copy (Chrome|Edge) cookie|Failed to decrypt|Failed to load cookies|cookie database is locked|being used by/i.test(text)) {
-    return '读不到系统浏览器登录状态。请在「全局设置 → 平台登录」使用应用内登录，打开登录窗口完成登录后点「保存应用内登录」。'
-  }
   if (/已选「粘贴 Cookie」|当前为「应用内登录」|平台登录/i.test(text) && /请到「全局设置/i.test(text)) {
     return text
   }
@@ -514,7 +514,7 @@ export function toUserTaskMessage(raw: string): string {
   }
   if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
     if (authPlatform) {
-      return platformAuthMissingMessage(authPlatform, 'builtin', 'login-required')
+      return `${platformLabel(authPlatform)} Cookie 或应用内登录已被平台拒绝。请到「全局设置 → 平台登录」检查当前选择的登录方式。`
     }
     return '该视频需要登录后才能下载。请到「全局设置 → 平台登录」为对应平台配置登录后再试。'
   }

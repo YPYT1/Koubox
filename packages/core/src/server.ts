@@ -3,8 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, BrowserProfile, KouboxConfig, PlatformAuthConfig, PlatformBrowserProfiles, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
-import { assertDownloadableVideoUrl, assertLocalVideoPath, defaultPlatformAuth, defaultPlatformBrowserProfiles, normalizeBrowserProfile, normalizeOsPath, tools } from '@koubox/shared'
+import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
@@ -22,22 +22,15 @@ type ServerOptions = {
   selectAudioFile(title: string, defaultPath?: string): Promise<string | undefined>
   selectFile(title: string, defaultPath?: string, filters?: FileFilter[]): Promise<string | undefined>
   openPath(targetPath: string): Promise<void>
-  openLoginWindow(): Promise<void>
-  exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  exportedCookiesFile: string
+  openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
+  getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string, platformId?: YtdlpCookiePlatformId): Promise<import('@koubox/shared').YtdlpCookieStatus>
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
   resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
-  exportBrowserProfileCookies?(
-    profile: BrowserProfile,
-    platformId: import('@koubox/shared').YtdlpCookiePlatformId
-  ): Promise<import('./video-download.js').AuthenticatedCookieFile>
-  scanBrowserProfiles?(): Promise<BrowserProfile[]>
-  probeChromeProfileLogin?(
-    profile: BrowserProfile,
-    platformId: import('@koubox/shared').YtdlpCookiePlatformId,
-    proxy: string
-  ): Promise<import('@koubox/shared').ChromeProfileLoginProbe>
+  resolvePlatformAuthentication?(platformId: YtdlpCookiePlatformId, auth: PlatformAuthEntry): Promise<import('./video-download.js').AuthenticatedCookieFile>
+  resolveActiveYtdlp(): { executable: string; source: 'bundled' | 'user-update'; channel: 'nightly' }
+  checkYtdlpUpdate(): Promise<YtdlpUpdateStatus>
+  installYtdlpUpdate(version: string): Promise<YtdlpUpdateStatus>
+  restoreBundledYtdlp(): Promise<YtdlpUpdateStatus>
   getAppDataRoots?(): Promise<{ mode: 'development' | 'packaged'; userData: string; logs: string }>
   clearAppCache?(): Promise<{
     cancelled: boolean
@@ -95,12 +88,6 @@ function asYtdlpMaxHeight(value: unknown, fallback: YtdlpMaxHeight): YtdlpMaxHei
   return fallback
 }
 
-function asYtdlpCookieSource(value: unknown, fallback: YtdlpCookieSource): YtdlpCookieSource {
-  if (value === 'builtin' || value === 'none' || value === 'file') return value
-  if (value === 'chrome' || value === 'edge') return 'builtin'
-  return fallback
-}
-
 function asPlatformAuth(value: unknown, fallback: PlatformAuthConfig): PlatformAuthConfig {
   const next = defaultPlatformAuth()
   const ids = ['youtube', 'tiktok', 'instagram', 'facebook'] as const
@@ -134,39 +121,7 @@ function readVideoPipelineInput(body: Record<string, unknown>, defaultOutputDire
   return { url: checked.url, outputDirectory }
 }
 
-function asBrowserProfile(value: unknown): BrowserProfile | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const profile = value as Partial<BrowserProfile>
-  if (profile.browser !== 'chrome' && profile.browser !== 'bitbrowser') return undefined
-  if (typeof profile.userDataDirectory !== 'string' || !profile.userDataDirectory.trim()) return undefined
-  if (typeof profile.profileDirectory !== 'string' || !/^(Default|Profile \d+)$/i.test(profile.profileDirectory)) return undefined
-  if (typeof profile.label !== 'string') return undefined
-  const next: BrowserProfile = normalizeBrowserProfile({
-    browser: profile.browser,
-    userDataDirectory: profile.userDataDirectory,
-    profileDirectory: profile.profileDirectory,
-    label: profile.label,
-    ...(typeof profile.bitBrowserId === 'string' && profile.bitBrowserId.trim()
-      ? { bitBrowserId: profile.bitBrowserId.trim() }
-      : {})
-  })
-  return next
-}
-
-function asPlatformBrowserProfiles(value: unknown, fallback: PlatformBrowserProfiles): PlatformBrowserProfiles {
-  const next = { ...defaultPlatformBrowserProfiles(), ...fallback }
-  if (!value || typeof value !== 'object') return next
-  const record = value as Record<string, unknown>
-  for (const id of ['youtube', 'tiktok', 'instagram', 'facebook'] as const) {
-    const profile = asBrowserProfile(record[id])
-    if (profile) next[id] = profile
-    else if (record[id] === null) delete next[id]
-  }
-  return next
-}
-
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
-  const ytdlpCookieSource = asYtdlpCookieSource(body.ytdlpCookieSource, config.ytdlpCookieSource)
   return {
     modelsDirectory: asPathString(body.modelsDirectory, config.modelsDirectory),
     outputDirectory: asPathString(body.outputDirectory, config.outputDirectory),
@@ -175,16 +130,12 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     demucsModelDirectory: asPathString(body.demucsModelDirectory, config.demucsModelDirectory),
     ytdlpDirectory: asPathString(body.ytdlpDirectory, config.ytdlpDirectory),
     ffmpegDirectory: asPathString(body.ffmpegDirectory, config.ffmpegDirectory),
+    denoDirectory: asPathString(body.denoDirectory, config.denoDirectory),
     translationTargetLanguage: asTranslationTargetLanguage(body.translationTargetLanguage, config.translationTargetLanguage),
     asrLanguage: asAsrLanguage(body.asrLanguage, config.asrLanguage),
     openOutputOnComplete: asBoolean(body.openOutputOnComplete, config.openOutputOnComplete),
     ytdlpProxy: asString(body.ytdlpProxy, config.ytdlpProxy),
-    ytdlpCookieSource,
-    ytdlpCookiesPath: ytdlpCookieSource === 'file'
-      ? asPathString(body.ytdlpCookiesPath, config.ytdlpCookiesPath)
-      : '',
     ytdlpPlatformAuth: asPlatformAuth(body.ytdlpPlatformAuth, config.ytdlpPlatformAuth),
-    platformBrowserProfiles: asPlatformBrowserProfiles(body.platformBrowserProfiles, config.platformBrowserProfiles),
     ytdlpMaxHeight: asYtdlpMaxHeight(body.ytdlpMaxHeight, config.ytdlpMaxHeight),
     ytdlpExtraArgs: asString(body.ytdlpExtraArgs, config.ytdlpExtraArgs),
     maxConcurrentTasks: Math.max(1, Math.floor(asNumber(body.maxConcurrentTasks, config.maxConcurrentTasks))),
@@ -200,16 +151,20 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
 export async function startLocalApi(options: ServerOptions) {
   const apiLog = createLogger('api')
   const store = new RuntimeStore(options.configFile, options.defaults, Boolean(options.pinBundledPaths))
+  const resolveVendor = () => {
+    const base = resolveVendorPaths(store.read())
+    return { ...base, ytdlpExecutable: options.resolveActiveYtdlp().executable }
+  }
   const tasks = new TaskManager({
     getConfig: () => store.read(),
-    resolveVendor: () => resolveVendorPaths(store.read()),
+    resolveVendor,
     projectDirectory: options.projectDirectory,
     pythonProjectDirectory: options.pythonProjectDirectory,
     bundledPythonExecutable: options.bundledPythonExecutable,
     taskIndexFile: join(dirname(options.configFile), 'tasks.json'),
     resolveTikTokBrowserMedia: options.resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: options.resolveFacebookAnonymousMedia,
-    exportBrowserProfileCookies: options.exportBrowserProfileCookies
+    resolvePlatformAuthentication: options.resolvePlatformAuthentication
   })
   tasks.restore(store.read().outputDirectory)
   const token = randomBytes(24).toString('hex')
@@ -284,7 +239,7 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'GET' && url.pathname === '/tools') return json(response, 200, tools)
       if (method === 'GET' && url.pathname === '/tasks') return json(response, 200, tasks.list())
-      if (method === 'GET' && url.pathname === '/runtime/status') return json(response, 200, getRuntimeStatus(config))
+      if (method === 'GET' && url.pathname === '/runtime/status') return json(response, 200, getRuntimeStatus(config, options.resolveActiveYtdlp()))
       if (method === 'GET' && url.pathname === '/config') return json(response, 200, config)
       if (method === 'PUT' && url.pathname === '/config') {
         const body = await readJson(request)
@@ -292,7 +247,35 @@ export async function startLocalApi(options: ServerOptions) {
         mkdirSync(next.outputDirectory, { recursive: true })
         return json(response, 200, store.write(next))
       }
-      if (method === 'POST' && url.pathname === '/runtime/refresh') return json(response, 200, getRuntimeStatus(config))
+      const platformAuthConfigMatch = url.pathname.match(/^\/config\/platform-auth\/(youtube|tiktok|instagram|facebook)$/)
+      if (method === 'PUT' && platformAuthConfigMatch) {
+        const platformId = platformAuthConfigMatch[1] as YtdlpCookiePlatformId
+        const body = await readJson(request)
+        const current = store.read()
+        const entry = asPlatformAuth({ [platformId]: body }, current.ytdlpPlatformAuth)[platformId]
+        const next = store.write({
+          ...current,
+          ytdlpPlatformAuth: {
+            ...current.ytdlpPlatformAuth,
+            [platformId]: entry
+          }
+        })
+        return json(response, 200, next)
+      }
+      if (method === 'POST' && url.pathname === '/runtime/refresh') return json(response, 200, getRuntimeStatus(config, options.resolveActiveYtdlp()))
+      if (method === 'POST' && url.pathname === '/runtime/ytdlp/check-update') {
+        return json(response, 200, await options.checkYtdlpUpdate())
+      }
+      if (method === 'POST' && url.pathname === '/runtime/ytdlp/install-update') {
+        if (tasks.hasActiveTasks()) return json(response, 409, { error: '下载任务运行中，不能更新 yt-dlp。' })
+        const body = await readJson(request)
+        if (typeof body.version !== 'string' || !body.version.trim()) return json(response, 400, { error: '请提供要安装的 yt-dlp 版本。' })
+        return json(response, 200, await options.installYtdlpUpdate(body.version.trim()))
+      }
+      if (method === 'POST' && url.pathname === '/runtime/ytdlp/restore-bundled') {
+        if (tasks.hasActiveTasks()) return json(response, 409, { error: '下载任务运行中，不能恢复 yt-dlp。' })
+        return json(response, 200, await options.restoreBundledYtdlp())
+      }
       if (method === 'POST' && url.pathname === '/dialog/select-directory') {
         const body = await readJson(request)
         const title = typeof body.title === 'string' ? body.title : '选择文件夹'
@@ -330,21 +313,32 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/browser/open-login') {
         try {
-          await options.openLoginWindow()
+          const body = await readJson(request)
+          const platformId = body.platformId
+          if (platformId !== 'youtube' && platformId !== 'tiktok' && platformId !== 'instagram' && platformId !== 'facebook') {
+            return json(response, 400, { error: '请选择要登录的平台。' })
+          }
+          await options.openLoginWindow(platformId)
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
         }
         return json(response, 200, { ok: true })
       }
-      if (method === 'POST' && url.pathname === '/browser/export-cookies') {
-        try {
-          return json(response, 200, await options.exportLoginCookies())
-        } catch (error) {
-          return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }
       if (method === 'GET' && url.pathname === '/browser/cookie-status') {
-        return json(response, 200, await options.getLoginCookieStatus(config.ytdlpPlatformAuth, config.ytdlpProxy))
+        const requested = url.searchParams.get('platformId')
+        const platformId = requested === 'youtube' || requested === 'tiktok' || requested === 'instagram' || requested === 'facebook'
+          ? requested
+          : undefined
+        return json(response, 200, await options.getLoginCookieStatus(config.ytdlpPlatformAuth, config.ytdlpProxy, platformId))
+      }
+      if (method === 'POST' && url.pathname === '/browser/cookie-status') {
+        const body = await readJson(request)
+        const requested = body.platformId
+        if (requested !== 'youtube' && requested !== 'tiktok' && requested !== 'instagram' && requested !== 'facebook') {
+          return json(response, 400, { error: '请选择要检测的平台。' })
+        }
+        const platformAuth = asPlatformAuth({ [requested]: body.auth }, config.ytdlpPlatformAuth)
+        return json(response, 200, await options.getLoginCookieStatus(platformAuth, config.ytdlpProxy, requested))
       }
       if (method === 'GET' && url.pathname === '/system/data-roots') {
         if (!options.getAppDataRoots) {
@@ -364,43 +358,9 @@ export async function startLocalApi(options: ServerOptions) {
           const current = store.read()
           const next = store.write({
             ...current,
-            ytdlpCookiesPath: '',
-            ytdlpPlatformAuth: defaultPlatformAuth(),
-            platformBrowserProfiles: defaultPlatformBrowserProfiles()
+            ytdlpPlatformAuth: defaultPlatformAuth()
           })
           return json(response, 200, { ...result, config: next })
-        } catch (error) {
-          return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }
-      if (method === 'GET' && url.pathname === '/browser/profiles') {
-        if (!options.scanBrowserProfiles) return json(response, 200, [])
-        return json(response, 200, await options.scanBrowserProfiles())
-      }
-      if (method === 'POST' && url.pathname === '/browser/profiles/probe-login') {
-        if (!options.probeChromeProfileLogin) {
-          return json(response, 400, { error: '当前环境不支持 Chrome 登录检测。' })
-        }
-        const body = await readJson(request)
-        const platformId = body.platformId
-        if (
-          platformId !== 'youtube' &&
-          platformId !== 'tiktok' &&
-          platformId !== 'instagram' &&
-          platformId !== 'facebook'
-        ) {
-          return json(response, 400, { error: 'platformId 必须是 youtube / tiktok / instagram / facebook。' })
-        }
-        const profile = body.profile as BrowserProfile | undefined
-        if (!profile || typeof profile !== 'object' || (profile.browser !== 'chrome' && profile.browser !== 'bitbrowser')) {
-          return json(response, 400, { error: '请提供有效的 Chrome / 比特浏览器 profile。' })
-        }
-        if (typeof profile.userDataDirectory !== 'string' || typeof profile.profileDirectory !== 'string') {
-          return json(response, 400, { error: 'Chrome profile 缺少 userDataDirectory / profileDirectory。' })
-        }
-        try {
-          const proxy = typeof body.proxy === 'string' ? body.proxy : config.ytdlpProxy
-          return json(response, 200, await options.probeChromeProfileLogin(profile, platformId, proxy))
         } catch (error) {
           return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
         }

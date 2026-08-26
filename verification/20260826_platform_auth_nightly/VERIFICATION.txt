@@ -1,0 +1,111 @@
+# VERIFICATION.txt
+
+DATE: 2026-08-26
+BRANCH: exp/platform-fetch-download
+BASE_COMMIT: 56a7ded259d691797d1f321b7c64fb9126a409a7
+CHANGED_BRANCH_FIELD: packages/core/src/video-download.ts / VideoDownloadStrategy and downloadVideo route
+RESULT: YouTube uses authenticated yt-dlp only; Instagram, TikTok, and Facebook use public routes first and exactly one selected authentication fallback; anonymous yt-dlp fallback is removed.
+
+ARTIFACTS
+MODIFIED_FILE: D:/Project/Koubox-exp-platform-fetch/verification/20260826_platform_auth_nightly/MODIFIED_FILE.ts
+DIFF_FILE: D:/Project/Koubox-exp-platform-fetch/verification/20260826_platform_auth_nightly/DIFF_FILE.patch
+VERIFICATION: D:/Project/Koubox-exp-platform-fetch/verification/20260826_platform_auth_nightly/VERIFICATION.txt
+ROLLBACK: D:/Project/Koubox-exp-platform-fetch/verification/20260826_platform_auth_nightly/ROLLBACK.sh
+
+BASELINE
+COMMAND: git show 56a7ded259d691797d1f321b7c64fb9126a409a7:packages/core/src/video-download.ts | Select-String -Pattern 'yt-dlp-public'
+INPUT: baseline packages/core/src/video-download.ts at commit 56a7ded259d691797d1f321b7c64fb9126a409a7
+LITERAL_OUTPUT:
+  | 'yt-dlp-public'
+    return await verifyResult(request, path, checked.platform, 'yt-dlp-public', failures)
+    failures.push({ strategy: 'yt-dlp-public', message: errorMessage(error) })
+EXIT_STATUS: 0
+BASELINE_STATUS: authenticated platform failure could continue to anonymous yt-dlp-public.
+
+MODIFIED
+COMMAND: rg -n "yt-dlp-public" packages/core/src/video-download.ts; if ($LASTEXITCODE -eq 1) { 'NO_MATCH' }
+INPUT: modified packages/core/src/video-download.ts
+LITERAL_OUTPUT: NO_MATCH
+EXIT_STATUS: 0
+MODIFIED_STATUS: YouTube skips public routes; the other three platforms use public parser/browser routes first, then exactly one configured paste/builtin authenticated yt-dlp route.
+
+ROLLBACK
+COMMAND: Copy-Item verification\20260826_platform_auth_nightly\MODIFIED_FILE.ts verification\20260826_platform_auth_nightly\ROLLBACK_TEST_COPY.ts -Force; bash verification/20260826_platform_auth_nightly/ROLLBACK.sh verification/20260826_platform_auth_nightly/ROLLBACK_TEST_COPY.ts
+INPUT: a copy of MODIFIED_FILE.ts
+LITERAL_OUTPUT:
+restored=verification/20260826_platform_auth_nightly/ROLLBACK_TEST_COPY.ts
+source=packages/core/src/video-download.ts
+blob=78baaaada208deecc0d4bd1e9e3b8939ecdd1b02
+EXIT_STATUS: 0
+ROLLBACK_RESULT: restored hash 78baaaada208deecc0d4bd1e9e3b8939ecdd1b02 exactly matched the baseline blob; MODIFIED_FILE.ts remained changed.
+
+TARGETED_TESTS
+COMMAND: pnpm --filter @koubox/core exec vitest run test/runtime-asr-model.test.ts test/platform-auth.test.ts test/platform-auth-cookie-file.test.ts test/video-download.test.ts test/test-youtube-auth-required.test.ts test/ytdlp-update.test.ts
+INPUT: platform authentication, config migration, common routing, temporary cookie, YouTube errors, nightly update fixtures
+LITERAL_RESULT: Test Files 6 passed (6); Tests 32 passed (32)
+EXIT_STATUS: 0
+
+TYPECHECK
+COMMAND: pnpm typecheck
+INPUT: all workspace TypeScript packages
+LITERAL_RESULT: packages/shared Done; packages/core Done; apps/desktop Done
+EXIT_STATUS: 0
+
+DESKTOP_BUILD
+COMMAND: pnpm build
+INPUT: Electron main, preload, renderer
+LITERAL_RESULT: main 141 modules; preload 1 module; renderer 4596 modules; all built successfully
+EXIT_STATUS: 0
+
+PORTABLE_PREFLIGHT
+COMMAND: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -SkipPackage
+INPUT: portable packaging configuration
+LITERAL_RESULT: preflight passed; CUDA torch 2.11.0+cu128 detected; packaging intentionally skipped
+EXIT_STATUS: 0
+
+PORTABLE_PACKAGE
+COMMAND: pnpm pack:portable
+INPUT: version 0.4.0 portable directory build
+LITERAL_RESULT: D:/Project/Koubox-exp-platform-fetch/apps/desktop/release/Koubox-0.4.0 generated; resources/models verified empty; python-home 3586 files; torch and koubox_runtime import runtime-ok
+EXIT_STATUS: 0
+
+PACKAGED_VENDOR
+COMMAND: inspect packaged yt-dlp, Deno, FFmpeg, FFprobe, manifest and hashes
+INPUT: apps/desktop/release/Koubox-0.4.0/resources/vendor
+LITERAL_RESULT:
+yt-dlp version=2026.08.25.233329
+yt-dlp sha256=05d3bd5d2ae149256ebf9f2840b5a8daf6e6f1a2f9a346eb60e1fd906ba06ba8
+Deno version=2.9.5
+Deno sha256=98f8c2a2d470e4ccb04c935c86ff8050817d877762aec5eaeeb9e409ccb3b9fd
+ffmpeg.exe=True
+ffprobe.exe=True
+resources/models entries=0
+EXIT_STATUS: 0
+
+OFFICIAL_NIGHTLY
+COMMAND: GitHub release API request for yt-dlp/yt-dlp-nightly-builds latest
+INPUT: official latest release metadata
+LITERAL_RESULT: tag=2026.08.25.233329; asset=yt-dlp.exe; digest=sha256:05d3bd5d2ae149256ebf9f2840b5a8daf6e6f1a2f9a346eb60e1fd906ba06ba8; official URL=True
+EXIT_STATUS: 0
+
+LIVE_PUBLIC_DOWNLOAD_E2E
+COMMAND: temporary Vitest live test invoking downloadVideo() and FFprobe for one Instagram, TikTok, and Facebook sample
+INPUT:
+Instagram https://www.instagram.com/p/DbqDr00BIqD/
+TikTok https://www.tiktok.com/@nguoidepngutrongr57/video/7674851661906562324
+Facebook https://www.facebook.com/watch/?v=1071464599175027
+LITERAL_RESULT: Test Files 1 passed (1); Tests 3 passed (3); Instagram 19817ms; TikTok 2758ms; Facebook 14579ms
+EXIT_STATUS: 0
+RESTORED_BEHAVIOR_STATUS: all three platforms completed through the canonical public-page strategy and generated media verified with video and audio streams.
+
+YOUTUBE_SEVEN_SAMPLE_PREFLIGHT
+COMMAND: bundled yt-dlp --ignore-config --no-playlist --skip-download --simulate --proxy http://127.0.0.1:7897 --cookies temporary-application-login-copy --js-runtimes deno:<bundled-deno> for each supplied URL
+INPUT: seven supplied YouTube Shorts/watch URLs
+LITERAL_RESULT: 7/7 exited 1 with "Sign in to confirm you’re not a bot"; classification COOKIE_OR_RISK_CONTROL; no result was classified EJS_OR_DENO.
+CURRENT_LOGIN_CONTEXT: existing application config selected builtin YouTube login but the persisted application-login session contained zero YouTube/Google cookies.
+EXIT_STATUS: wrapper 0; each yt-dlp preflight 1
+ERROR_CLASSIFICATION: current Cookie/account/network risk-control failure, not EJS or Deno missing.
+
+FULL_CORE_SUITE_NOTE
+COMMAND: pnpm --filter @koubox/core test
+LITERAL_RESULT: authentication/update/public-route tests passed; the full discovery also included ignored live network tests and an unrelated existing SRT BOM expectation. That run reported one SRT assertion and four variable TikTok public-page samples failing. These files/behaviors were outside this change; targeted tests and the later three-platform live download E2E passed.

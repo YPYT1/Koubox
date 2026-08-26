@@ -14,7 +14,11 @@ afterEach(() => {
 function createManager(root: string): TaskManager {
   return new TaskManager({
     getConfig: () => ({ maxConcurrentTasks: 1 } as KouboxConfig),
-    resolveVendor: () => ({ ytdlpExecutable: join(root, 'missing-yt-dlp.exe'), ffmpegExecutable: join(root, 'missing-ffmpeg.exe') }),
+    resolveVendor: () => ({
+      ytdlpExecutable: join(root, 'missing-yt-dlp.exe'),
+      ffmpegExecutable: join(root, 'missing-ffmpeg.exe'),
+      denoExecutable: join(root, 'missing-deno.exe')
+    }),
     projectDirectory: root,
     pythonProjectDirectory: root,
     taskIndexFile: join(root, 'runtime', 'tasks.json')

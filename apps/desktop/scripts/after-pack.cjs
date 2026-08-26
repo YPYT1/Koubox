@@ -70,6 +70,9 @@ function copyPythonHomeReal(sourceHome, destHome) {
 
 module.exports = async function afterPack(context) {
   const resources = join(context.appOutDir, 'resources')
+  // Models are intentionally user-supplied. Keep the canonical directory in
+  // every packaged build, but never copy development-machine model weights.
+  mkdirSync(join(resources, 'models'), { recursive: true })
   const cfgPath = join(resources, 'python', 'pyvenv.cfg')
   if (!existsSync(cfgPath)) {
     throw new Error(`打包后找不到 Python 配置：${cfgPath}`)
