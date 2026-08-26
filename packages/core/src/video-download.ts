@@ -187,7 +187,7 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
   const tempPath = join(request.directory, `_dl_${request.fileStem}.public.mp4`)
   const finalPath = join(request.directory, `${request.fileStem}.mp4`)
   if (existsSync(tempPath)) unlinkSync(tempPath)
-  const args = ['-hide_banner', '-loglevel', 'warning', '-y']
+  const args = ['-hide_banner', '-loglevel', 'warning', '-y', '-progress', 'pipe:1']
   const addInput = (url: string) => {
     args.push(
       '-rw_timeout', '30000000',
@@ -211,7 +211,30 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
   else args.push('-map', '0:a:0?')
   args.push('-c', 'copy', '-movflags', '+faststart', tempPath)
   request.updateProgress(8, `已解析公开媒体流（${resolved.source}），正在下载…`)
-  await request.runCommand(request.vendor.ffmpegExecutable, args, undefined, '公开媒体下载')
+
+  // 监控 FFmpeg 进度
+  let lastProgressTime = Date.now()
+  await request.runCommand(request.vendor.ffmpegExecutable, args, (line) => {
+    // FFmpeg progress 格式: time=00:00:10.00
+    const timeMatch = line.match(/time=(\d+):(\d+):(\d+\.\d+)/)
+    if (timeMatch) {
+      const hours = parseInt(timeMatch[1])
+      const minutes = parseInt(timeMatch[2])
+      const seconds = parseFloat(timeMatch[3])
+      const currentSeconds = hours * 3600 + minutes * 60 + seconds
+
+      // 节流：每 500ms 更新一次进度
+      const now = Date.now()
+      if (now - lastProgressTime > 500) {
+        lastProgressTime = now
+        // 假设视频不超过 10 分钟，按比例计算进度（8% - 28%）
+        const estimatedDuration = 600 // 10 分钟
+        const progress = Math.min(20, (currentSeconds / estimatedDuration) * 20)
+        request.updateProgress(8 + progress, `下载中 ${Math.floor(currentSeconds)}s…`)
+      }
+    }
+  }, '公开媒体下载')
+
   if (!existsSync(tempPath)) throw new Error('公开媒体流已处理，但没有生成视频文件。')
   if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
   renameSync(tempPath, finalPath)
@@ -222,12 +245,9 @@ async function resolvePrimaryPublicMedia(
   request: VideoDownloadRequest,
   platform: DownloadableVideoPlatform
 ): Promise<PublicMediaResolution> {
-  // YouTube 和 Instagram 不使用公开解析，强制走 yt-dlp 登录态
+  // YouTube 不使用公开解析，强制走 yt-dlp 登录态
   if (platform === 'YouTube') {
     throw new Error('YouTube 需要登录后才能下载。')
-  }
-  if (platform === 'Instagram') {
-    throw new Error('Instagram 公开解析成功率低，建议配置登录后下载。')
   }
   if (platform === 'Facebook') {
     return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy)
@@ -396,8 +416,8 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
-  // YouTube 和 Instagram 跳过公开解析，直接走登录态（公开解析成功率极低）
-  if (checked.platform !== 'YouTube' && checked.platform !== 'Instagram') {
+  // YouTube 跳过公开解析，直接走登录态
+  if (checked.platform !== 'YouTube') {
     const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
     if (direct) return direct
 
@@ -411,7 +431,7 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   let ytdlpAuthenticationFailure: string | undefined
   if (request.resolveAuthenticatedCookies) {
     try {
-      request.updateProgress(4, checked.platform === 'YouTube' || checked.platform === 'Instagram' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
+      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
       const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
         authenticationResolved = cookieFile

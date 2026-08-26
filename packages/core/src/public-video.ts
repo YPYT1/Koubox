@@ -66,7 +66,7 @@ function cookieHeaderFromResponse(headers: Record<string, string | string[] | un
 async function fetchPage(
   url: string,
   proxy: string,
-  timeoutMs = 12_000,  // 从 25 秒降低到 12 秒，加快失败切换速度
+  timeoutMs = 30_000,  // 恢复为 30 秒
   userAgent = DEFAULT_USER_AGENT
 ): Promise<{ text: string; cookieHeader?: string }> {
   const normalizedProxy = normalizeProxyUrl(proxy)
@@ -95,11 +95,11 @@ async function fetchPage(
   }
 }
 
-async function fetchText(url: string, proxy: string, timeoutMs = 12_000, userAgent = DEFAULT_USER_AGENT): Promise<string> {
+async function fetchText(url: string, proxy: string, timeoutMs = 30_000, userAgent = DEFAULT_USER_AGENT): Promise<string> {
   return (await fetchPage(url, proxy, timeoutMs, userAgent)).text
 }
 
-async function fetchJson<T>(url: string, proxy: string, timeoutMs = 12_000): Promise<T> {
+async function fetchJson<T>(url: string, proxy: string, timeoutMs = 30_000): Promise<T> {
   return JSON.parse(await fetchText(url, proxy, timeoutMs)) as T
 }
 
