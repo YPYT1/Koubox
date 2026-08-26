@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -99,5 +99,29 @@ describe('Faster-Whisper ASR configuration', () => {
     const config = new RuntimeStore(runtimeFile, defaults(modelsDirectory)).read()
     expect(config.ytdlpPlatformAuth.instagram.cookies).toContain('sessionid=legacy')
     expect(config.ytdlpPlatformAuth.instagram.mode).toBe('paste')
+  })
+
+  it('migrates only the old Koubox development vendor paths to this checkout defaults', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-vendor-'))
+    temporaryRoots.push(root)
+    const runtimeFile = join(root, 'runtime.json')
+    const configured = defaults(join(root, 'models'))
+    const currentVendor = join(root, 'current-vendor')
+    const currentDefaults = {
+      ...configured,
+      ytdlpDirectory: join(currentVendor, 'yt-dlp'),
+      ffmpegDirectory: join(currentVendor, 'ffmpeg', 'bin')
+    }
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...configured,
+      ytdlpDirectory: 'D:\\Project\\Koubox\\vendor\\yt-dlp',
+      ffmpegDirectory: 'D:\\Project\\Koubox\\vendor\\ffmpeg\\bin'
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, currentDefaults).read()
+
+    expect(config.ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
+    expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
+    expect(JSON.parse(readFileSync(runtimeFile, 'utf8')).ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
   })
 })

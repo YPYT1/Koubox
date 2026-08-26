@@ -32,6 +32,11 @@ const ffmpegExpectedFiles = [
   'swscale-9.dll'
 ]
 
+function isLegacyDevelopmentVendorPath(directory: string, suffix: 'yt-dlp' | 'ffmpeg/bin'): boolean {
+  const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return normalized.endsWith(`/koubox/vendor/${suffix}`)
+}
+
 export class RuntimeStore {
   constructor(
     private readonly file: string,
@@ -68,6 +73,13 @@ export class RuntimeStore {
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
     if (!config.ffmpegDirectory) config.ffmpegDirectory = this.defaults.ffmpegDirectory
+    // Development builds used to persist tools from the sibling Koubox checkout.
+    // Migrate only that legacy vendor layout; keep any other user-selected path.
+    const migrateLegacyYtdlpPath = isLegacyDevelopmentVendorPath(config.ytdlpDirectory, 'yt-dlp')
+    const migrateLegacyFfmpegPath = isLegacyDevelopmentVendorPath(config.ffmpegDirectory, 'ffmpeg/bin')
+    const migratedLegacyVendorPaths = migrateLegacyYtdlpPath || migrateLegacyFfmpegPath
+    if (migrateLegacyYtdlpPath) config.ytdlpDirectory = this.defaults.ytdlpDirectory
+    if (migrateLegacyFfmpegPath) config.ffmpegDirectory = this.defaults.ffmpegDirectory
     if (!config.translationTargetLanguage) config.translationTargetLanguage = this.defaults.translationTargetLanguage
     if (!config.asrLanguage) config.asrLanguage = this.defaults.asrLanguage
     if (typeof config.openOutputOnComplete !== 'boolean') config.openOutputOnComplete = this.defaults.openOutputOnComplete
@@ -107,7 +119,7 @@ export class RuntimeStore {
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
     const normalized = normalizeKouboxConfigPaths(this.applyPinned(config))
-    if (usesLegacyAsrModel || this.pinBundledPaths) return this.write(normalized)
+    if (usesLegacyAsrModel || migratedLegacyVendorPaths || this.pinBundledPaths) return this.write(normalized)
     return normalized
   }
 

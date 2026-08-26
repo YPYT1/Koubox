@@ -478,6 +478,9 @@ export function toUserTaskMessage(raw: string): string {
   if (/Netscape formatted|not JSON/i.test(text)) {
     return 'Cookies 文件格式不对。若已选择 Chrome / Edge 登录，请先点「保存配置更改」；若使用 Cookies 文件，需 Netscape 格式的 cookies.txt，不能用浏览器导出的 JSON。'
   }
+  if (/浏览器登录有效，但 yt-dlp 鉴权失败/i.test(text)) {
+    return text
+  }
   if (/DEMUCS|demucs|torchaudio|人声分离|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
     return '人声分离启动失败：检测到系统代理环境变量可能指向错误端口。请到「全局设置 → 下载（yt-dlp）」确认代理为 http://127.0.0.1:7897，或清空系统 HTTP_PROXY。'
   }

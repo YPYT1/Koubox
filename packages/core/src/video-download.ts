@@ -26,6 +26,8 @@ export type VideoDownloadStrategy =
 /** A per-task cookie file created by the desktop host and removed after yt-dlp exits. */
 export type AuthenticatedCookieFile = {
   path: string
+  /** User-Agent from the browser session that supplied the cookie jar. */
+  userAgent?: string
   cleanup(): Promise<void> | void
 }
 
@@ -255,11 +257,39 @@ async function runYtdlpPublic(request: VideoDownloadRequest): Promise<string> {
   return runYtdlp(request)
 }
 
-async function runYtdlpAuthenticated(request: VideoDownloadRequest, cookiesPath: string): Promise<string> {
-  return runYtdlp(request, cookiesPath)
+async function runYtdlpAuthenticated(request: VideoDownloadRequest, authentication: AuthenticatedCookieFile): Promise<string> {
+  return runYtdlp(request, authentication)
 }
 
-async function runYtdlp(request: VideoDownloadRequest, cookiesPath?: string): Promise<string> {
+function ytdlpAuthenticationArgs(request: VideoDownloadRequest, authentication?: AuthenticatedCookieFile): string[] {
+  const args: string[] = []
+  const proxy = normalizeProxyUrl(request.config.ytdlpProxy)
+  if (proxy) args.push('--proxy', proxy)
+  if (authentication?.path) args.push('--cookies', authentication.path)
+  if (authentication?.userAgent?.trim()) args.push('--user-agent', authentication.userAgent.trim())
+  return args
+}
+
+/**
+ * Verify the exported browser session before beginning a media download.
+ * `--skip-download --simulate` still forces yt-dlp to load the target page and
+ * select the requested format, but leaves no partial media files behind.
+ */
+async function runYtdlpAuthenticationPreflight(
+  request: VideoDownloadRequest,
+  authentication: AuthenticatedCookieFile
+): Promise<void> {
+  const args = [
+    '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
+    '--skip-download', '--simulate',
+    ...ytdlpAuthenticationArgs(request, authentication),
+    '-f', ytdlpVideoFormat(request.config.ytdlpMaxHeight),
+    request.url
+  ]
+  await request.runCommand(request.vendor.ytdlpExecutable, args, undefined, 'yt-dlp 认证预检')
+}
+
+async function runYtdlp(request: VideoDownloadRequest, authentication?: AuthenticatedCookieFile): Promise<string> {
   const tempStem = `_dl_${request.fileStem}`
   const args = [
     '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
@@ -267,9 +297,7 @@ async function runYtdlp(request: VideoDownloadRequest, cookiesPath?: string): Pr
     '--merge-output-format', 'mp4',
     '-o', join(request.directory, `${tempStem}.%(ext)s`)
   ]
-  const proxy = normalizeProxyUrl(request.config.ytdlpProxy)
-  if (proxy) args.push('--proxy', proxy)
-  if (cookiesPath) args.push('--cookies', cookiesPath)
+  args.push(...ytdlpAuthenticationArgs(request, authentication))
   args.push('-f', ytdlpVideoFormat(request.config.ytdlpMaxHeight))
   if (request.config.ytdlpExtraArgs.trim()) args.push(...publicYtdlpExtraArgs(request.config.ytdlpExtraArgs.trim()))
   const onLine = (line: string) => {
@@ -369,17 +397,25 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
-  let hasValidCookieConfig = false
-  if (request.resolveAuthenticatedCookies) {
+  let browserSessionExported = false
+  let ytdlpAuthenticationFailure: string | undefined
+  // Facebook is intentionally kept on its direct public/DASH + anonymous
+  // browser pipeline. Do not reintroduce a logged-in profile or yt-dlp there.
+  if (checked.platform !== 'Facebook' && request.resolveAuthenticatedCookies) {
     try {
       request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取已登录浏览器会话…' : '公开解析失败，正在读取已登录浏览器会话…')
       const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
-        hasValidCookieConfig = true
+        browserSessionExported = true
         try {
-          request.updateProgress(5, '正在使用已登录浏览器会话下载…')
-          const path = await runYtdlpAuthenticated(request, cookieFile.path)
+          request.updateProgress(5, '正在验证浏览器登录会话…')
+          await runYtdlpAuthenticationPreflight(request, cookieFile)
+          request.updateProgress(6, '浏览器会话验证通过，正在下载…')
+          const path = await runYtdlpAuthenticated(request, cookieFile)
           return await verifyResult(request, path, checked.platform, 'yt-dlp-authenticated', failures)
+        } catch (error) {
+          ytdlpAuthenticationFailure = errorMessage(error)
+          throw error
         } finally {
           await cookieFile.cleanup()
         }
@@ -391,8 +427,11 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
 
   // 个性化错误提示
   if (checked.platform === 'YouTube') {
-    if (!request.resolveAuthenticatedCookies || !hasValidCookieConfig) {
+    if (!request.resolveAuthenticatedCookies || !browserSessionExported) {
       throw new Error('YouTube 视频需要登录后才能下载。请在【全局设置】→【平台登录配置】中配置 YouTube 登录状态。')
+    }
+    if (ytdlpAuthenticationFailure) {
+      throw new Error(`YouTube 浏览器登录有效，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
     }
     throw new Error(`YouTube 视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请检查 YouTube 登录状态是否有效。`)
   }
@@ -422,6 +461,10 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     return await verifyResult(request, path, checked.platform, 'yt-dlp-public', failures)
   } catch (error) {
     failures.push({ strategy: 'yt-dlp-public', message: errorMessage(error) })
+  }
+
+  if (ytdlpAuthenticationFailure) {
+    throw new Error(`${checked.platform} 浏览器登录有效，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
   }
 
   throw new Error(`公开视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}`)

@@ -31,6 +31,8 @@ type BitBrowserCookie = {
 
 type CookieFile = {
   path: string
+  /** Must accompany the exported cookies so yt-dlp uses the same Chromium UA. */
+  userAgent: string
   cleanup(): Promise<void>
 }
 
@@ -336,6 +338,11 @@ export async function exportBrowserProfileCookies(
   const cookiesPath = join(temporaryDirectory, `${platformId}.cookies.txt`)
   let profileClone: string | undefined
   let profileSession: Electron.Session | undefined
+  // BitBrowser exposes its cookie jar through the local API but not a portable
+  // per-profile UA endpoint. Electron's session UA is also the UA used by this
+  // desktop bridge when it probes the selected profile, so preserve it for
+  // yt-dlp instead of relying on yt-dlp's unrelated default UA.
+  let userAgent = session.defaultSession.getUserAgent()
   const cleanup = async (): Promise<void> => {
     if (profileSession && profileClone) {
       disposeClonedProfileSession(profileSession, profileClone)
@@ -353,6 +360,7 @@ export async function exportBrowserProfileCookies(
     } else {
       profileClone = cloneProfileForSession(normalizedProfile)
       profileSession = session.fromPath(profileClone)
+      userAgent = profileSession.getUserAgent()
       cookies = await profileSession.cookies.get({})
     }
     const selectedCookies = platformCookies(cookies, platformId)
@@ -361,7 +369,7 @@ export async function exportBrowserProfileCookies(
       throw new Error(`${platformLabel(platformId)} 登录 Cookie 不完整：缺少 ${missing.join(' / ')}。请在所选浏览器配置中重新登录后再试。`)
     }
     writeFileSync(cookiesPath, cookiesToNetscape(selectedCookies), 'utf8')
-    return { path: cookiesPath, cleanup }
+    return { path: cookiesPath, userAgent, cleanup }
   } catch (error) {
     await cleanup()
     throw error
