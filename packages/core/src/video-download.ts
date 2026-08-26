@@ -214,6 +214,10 @@ async function resolvePrimaryPublicMedia(
   request: VideoDownloadRequest,
   platform: DownloadableVideoPlatform
 ): Promise<PublicMediaResolution> {
+  // YouTube 不使用公开解析，强制走 yt-dlp 登录态
+  if (platform === 'YouTube') {
+    throw new Error('YouTube 需要登录后才能下载。')
+  }
   if (platform === 'Facebook') {
     return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy)
   }
@@ -354,19 +358,24 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
-  const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
-  if (direct) return direct
+  // YouTube 跳过公开解析，直接走登录态
+  if (checked.platform !== 'YouTube') {
+    const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
+    if (direct) return direct
 
-  for (const fallback of publicFallbacks(request, checked.platform)) {
-    const result = await tryResolved(fallback.strategy, fallback.resolve, fallback.resolveAttempts)
-    if (result) return result
+    for (const fallback of publicFallbacks(request, checked.platform)) {
+      const result = await tryResolved(fallback.strategy, fallback.resolve, fallback.resolveAttempts)
+      if (result) return result
+    }
   }
 
+  let hasValidCookieConfig = false
   if (request.resolveAuthenticatedCookies) {
     try {
-      request.updateProgress(4, '公开解析失败，正在读取已登录浏览器会话…')
+      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取已登录浏览器会话…' : '公开解析失败，正在读取已登录浏览器会话…')
       const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
+        hasValidCookieConfig = true
         try {
           request.updateProgress(5, '正在使用已登录浏览器会话下载…')
           const path = await runYtdlpAuthenticated(request, cookieFile.path)
@@ -380,8 +389,31 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
+  // 个性化错误提示
+  if (checked.platform === 'YouTube') {
+    if (!request.resolveAuthenticatedCookies || !hasValidCookieConfig) {
+      throw new Error('YouTube 视频需要登录后才能下载。请在【全局设置】→【平台登录配置】中配置 YouTube 登录状态。')
+    }
+    throw new Error(`YouTube 视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请检查 YouTube 登录状态是否有效。`)
+  }
+
+  if (checked.platform === 'TikTok') {
+    if (!request.resolveAuthenticatedCookies && failures.length > 0) {
+      throw new Error(`TikTok 视频公开解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。建议在【全局设置】→【平台登录配置】中配置 TikTok 登录状态以提高成功率。`)
+    }
+  }
+
   if (checked.platform === 'Facebook') {
+    if (!request.resolveAuthenticatedCookies && failures.length > 0) {
+      throw new Error(`Facebook 视频公开解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。建议在【全局设置】→【平台登录配置】中配置 Facebook 登录状态以提高成功率。`)
+    }
     throw new Error(`Facebook 公开视频直连失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}`)
+  }
+
+  if (checked.platform === 'Instagram') {
+    if (!request.resolveAuthenticatedCookies && failures.length > 0) {
+      throw new Error(`Instagram 视频公开解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。建议在【全局设置】→【平台登录配置】中配置 Instagram 登录状态以提高成功率。`)
+    }
   }
 
   try {
