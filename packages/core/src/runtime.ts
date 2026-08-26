@@ -316,7 +316,9 @@ export function getRuntimeStatus(
         source: activeYtdlp?.source ?? 'bundled',
         ejsVersion: ytdlpRuntime.ejsVersion,
         jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion,
-        ready: Boolean(ytdlpRuntime.version && ytdlpRuntime.ejsVersion && ytdlpRuntime.jsRuntimeVersion)
+        // 只要 version 和 jsRuntimeVersion 存在就认为 ready
+        // ejsVersion 只在用 --simulate 时才能检测到，不作为 ready 的必要条件
+        ready: Boolean(ytdlpRuntime.version && ytdlpRuntime.jsRuntimeVersion)
       },
       ffmpeg: inspectVendorTool(vendorPaths.ffmpegDirectory, 'ffmpeg.exe', '-version', ffmpegExpectedFiles),
       deno: inspectVendorTool(config.denoDirectory, 'deno.exe', '--version', denoExpectedFiles)

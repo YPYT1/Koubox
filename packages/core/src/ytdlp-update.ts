@@ -112,8 +112,12 @@ export function createYtdlpUpdateManager(options: {
     if (inspected.jsRuntimeVersion !== BUNDLED_DENO_VERSION) {
       throw new Error(`Deno 运行时检测失败：要求 ${BUNDLED_DENO_VERSION}，实际 ${inspected.jsRuntimeVersion ?? '未检测到'}`)
     }
-    if (!inspected.ejsVersion) throw new Error('yt-dlp 可执行文件未检测到内置 yt-dlp-ejs。')
-    if (probeProvider && !inspected.providerReady) throw new Error('yt-dlp 未能启用 Deno JS Challenge Provider。')
+    // EJS 只在 --list-extractors 时不显示，启动验证时不强制要求
+    // 只在 probeProvider=true 时才要求 EJS 和 Provider 就绪
+    if (probeProvider) {
+      if (!inspected.ejsVersion) throw new Error('yt-dlp 可执行文件未检测到内置 yt-dlp-ejs。')
+      if (!inspected.providerReady) throw new Error('yt-dlp 未能启用 Deno JS Challenge Provider。')
+    }
   })
 
   const validateCandidate = (executable: string, expectedVersion: string, expectedHash: string, probeProvider = false): void => {
