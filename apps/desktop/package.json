@@ -1,6 +1,6 @@
 {
   "name": "@koubox/desktop",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -49,6 +49,9 @@
     "afterPack": "./scripts/after-pack.cjs",
     "electronDist": "../../node_modules/.pnpm/electron@33.4.11/node_modules/electron/dist",
     "compression": "store",
-    "win": { "target": ["dir"] }
+    "win": {
+      "target": ["dir"],
+      "icon": "build/icon.png"
+    }
   }
 }
