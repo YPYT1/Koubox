@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KouboxConfig } from '@koubox/shared'
-import { defaultPlatformAuth } from '@koubox/shared'
+import { defaultPlatformAuth, defaultPlatformBrowserProfiles } from '@koubox/shared'
 import { RuntimeStore } from '../src/runtime.js'
 
 const temporaryRoots: string[] = []
@@ -28,6 +28,7 @@ function defaults(modelsDirectory: string): KouboxConfig {
     ytdlpCookieSource: 'none',
     ytdlpCookiesPath: '',
     ytdlpPlatformAuth: defaultPlatformAuth(),
+    platformBrowserProfiles: defaultPlatformBrowserProfiles(),
     ytdlpMaxHeight: 0,
     ytdlpExtraArgs: '',
     maxConcurrentTasks: 1,

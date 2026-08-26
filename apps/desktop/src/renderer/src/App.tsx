@@ -109,6 +109,18 @@ export function App() {
     return result.path ?? undefined
   }
 
+  const handleChooseVideo = async (
+    title: string,
+    defaultPath?: string
+  ): Promise<string | undefined> => {
+    const result = await window.koubox.post<{ path: string | null }>('/dialog/select-file', {
+      title,
+      defaultPath,
+      filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv'] }]
+    })
+    return result.path ?? undefined
+  }
+
   const handleChooseFile = async (
     title: string,
     defaultPath?: string,
@@ -191,6 +203,7 @@ export function App() {
               translationTargetLanguage={config?.translationTargetLanguage ?? 'zh-Hans'}
               openOutputOnComplete={config?.openOutputOnComplete ?? false}
               onChooseDirectory={handleChooseDirectory}
+              onChooseVideoFile={handleChooseVideo}
               onShowToast={showToast}
               onTaskStatus={bindToolStatus('viral-materials')}
             />
@@ -214,24 +227,19 @@ export function App() {
               defaultOutputDirectory={config?.outputDirectory ?? ''}
               onChooseDirectory={handleChooseDirectory}
               onShowToast={showToast}
+              onTaskStatus={bindToolStatus('video-downloader')}
             />
           )}
 
-          {focus.kind === 'tool' && focus.menu !== 'run' && focus.toolId === 'video-downloader' && (
-            <div className="page-container">
-              <div className="page-header-block">
-                <h1>任务中心</h1>
-                <p>视频下载任务记录将在此显示</p>
-              </div>
-              <section className="panel-box">
-                <div className="empty-sessions-hint">暂无下载任务记录</div>
-              </section>
-            </div>
-          )}
-
-          {focus.kind === 'tool' && focus.menu !== 'run' && focus.toolId !== 'video-downloader' && (
+          {focus.kind === 'tool' && focus.menu !== 'run' && (
             <TaskHistoryPage
-              kind={focus.toolId === 'precise-srt' ? 'req2' : 'req1'}
+              kind={
+                focus.toolId === 'precise-srt'
+                  ? 'req2'
+                  : focus.toolId === 'video-downloader'
+                    ? 'download'
+                    : 'req1'
+              }
               outputDirectory={config?.outputDirectory ?? ''}
               onShowToast={showToast}
             />

@@ -97,7 +97,7 @@ export type RuntimeStatus = {
   }
 }
 
-export type TaskKind = 'req1' | 'req2'
+export type TaskKind = 'req1' | 'req2' | 'download'
 export type RequirementTwoMode = 'align' | 'asr-only'
 export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
@@ -117,6 +117,50 @@ export function detectPlatform(url: string): KouboxPlatform {
   } catch { /* local audio or legacy task */ }
   return 'Video'
 }
+
+/** 爆款素材获取 / 视频下载 共用的可下载平台 */
+export const DOWNLOADABLE_VIDEO_PLATFORMS = ['YouTube', 'TikTok', 'Instagram', 'Facebook'] as const
+export type DownloadableVideoPlatform = (typeof DOWNLOADABLE_VIDEO_PLATFORMS)[number]
+
+export function isDownloadableVideoPlatform(platform: KouboxPlatform): platform is DownloadableVideoPlatform {
+  return (DOWNLOADABLE_VIDEO_PLATFORMS as readonly string[]).includes(platform)
+}
+
+/** 校验链接后返回 trim 后的 URL；不合法直接抛错 */
+export function assertDownloadableVideoUrl(url: string): { url: string; platform: DownloadableVideoPlatform } {
+  const trimmed = url.trim()
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error('请输入合法的视频链接（http/https）。')
+  }
+  const platform = detectPlatform(trimmed)
+  if (!isDownloadableVideoPlatform(platform)) {
+    throw new Error('仅支持 YouTube / Facebook / Instagram / TikTok。')
+  }
+  return { url: trimmed, platform }
+}
+
+/** 爆款素材获取：本地上传视频允许的扩展名 */
+export const LOCAL_VIDEO_EXTENSIONS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv'] as const
+
+/** 校验本地视频路径（只校验路径与扩展名；是否存在由调用方用 fs 检查） */
+export function assertLocalVideoPath(filePath: string): string {
+  const trimmed = normalizeOsPath(filePath.trim())
+  if (!trimmed) throw new Error('请选择本地视频文件。')
+  const base = trimmed.replace(/^.*[/\\]/, '')
+  const dot = base.lastIndexOf('.')
+  const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : ''
+  if (!(LOCAL_VIDEO_EXTENSIONS as readonly string[]).includes(ext)) {
+    throw new Error(`仅支持常见视频格式：${LOCAL_VIDEO_EXTENSIONS.join(' / ')}。`)
+  }
+  return trimmed
+}
+
+/** 爆款素材获取的视频来源：链接下载或本地上传 */
+export type MaterialsSourceMode = 'url' | 'local'
+
+/** 桌面端/任务共用的下载管线路径 */
+export const VIDEO_DOWNLOAD_PIPELINE_PATH = '/pipelines/download'
+export const VIDEO_MATERIALS_PIPELINE_PATH = '/pipelines/req1'
 
 export type TaskArtifacts = {
   video?: string
@@ -139,10 +183,13 @@ export type TaskSnapshot = {
   taskId: string
   kind: TaskKind
   mode?: RequirementTwoMode
+  /** req1：链接下载或本地上传；缺省按 url 以 http(s) 判断 */
+  sourceMode?: MaterialsSourceMode
   status: TaskStatus
   stage: TaskStage
   percent: number
   message: string
+  /** 链接 URL，或本地视频绝对路径（sourceMode=local） */
   url: string
   sourceText?: string
   outputDirectory: string
@@ -168,6 +215,22 @@ export type YtdlpMaxHeight = 0 | 1080 | 720 | 480
 export type YtdlpCookieSource = 'builtin' | 'none' | 'file'
 export type YtdlpCookiePlatformId = 'youtube' | 'tiktok' | 'instagram' | 'facebook'
 export type PlatformAuthMode = 'builtin' | 'paste'
+
+/** A Chrome / 比特浏览器 profile selected by the user; no cookie text is persisted. */
+export type BrowserProfile = {
+  browser: 'chrome' | 'bitbrowser'
+  userDataDirectory: string
+  profileDirectory: string
+  label: string
+  /** 比特浏览器窗口 ID，用于本地 API 读取 Cookie */
+  bitBrowserId?: string
+}
+
+export type PlatformBrowserProfiles = Partial<Record<YtdlpCookiePlatformId, BrowserProfile>>
+
+export function defaultPlatformBrowserProfiles(): PlatformBrowserProfiles {
+  return {}
+}
 
 export type PlatformAuthEntry = {
   mode: PlatformAuthMode
@@ -313,6 +376,24 @@ export type YtdlpCookieStatus = {
   platforms: YtdlpCookiePlatformStatus[]
 }
 
+/** Chrome 配置文件进平台首页后的登录检测结果 */
+export type ChromeProfileLoginProbe = {
+  platformId: YtdlpCookiePlatformId
+  label: string
+  loggedIn: boolean
+  detail: string
+  homepage: string
+  finalUrl: string
+  profileLabel: string
+}
+
+export const PLATFORM_HOMEPAGES: Record<YtdlpCookiePlatformId, string> = {
+  youtube: 'https://www.youtube.com/',
+  tiktok: 'https://www.tiktok.com/',
+  instagram: 'https://www.instagram.com/',
+  facebook: 'https://www.facebook.com/'
+}
+
 export type KouboxConfig = {
   modelsDirectory: string
   outputDirectory: string
@@ -329,6 +410,8 @@ export type KouboxConfig = {
   ytdlpCookiesPath: string
   /** 各平台独立：应用内登录 / 粘贴 Cookie */
   ytdlpPlatformAuth: PlatformAuthConfig
+  /** 各平台独立选择本机 Chrome 配置文件，不保存或展示 Cookie。 */
+  platformBrowserProfiles: PlatformBrowserProfiles
   ytdlpMaxHeight: YtdlpMaxHeight
   ytdlpExtraArgs: string
   maxConcurrentTasks: number
@@ -341,6 +424,46 @@ export type KouboxConfig = {
 }
 
 export type ApiError = { error: string; detail?: string }
+
+/**
+ * Japanese Windows often displays / copies backslash (U+005C) as yen (¥ U+00A5)
+ * or fullwidth yen (￥ U+FFE5). Node only treats `\` and `/` as separators, so
+ * normalize those glyphs before join / existsSync / open.
+ */
+export function normalizeOsPath(input: string): string {
+  return input.replace(/\u00A5/g, '\\').replace(/\uFFE5/g, '\\')
+}
+
+export function normalizeBrowserProfile(profile: BrowserProfile): BrowserProfile {
+  const next: BrowserProfile = {
+    ...profile,
+    userDataDirectory: normalizeOsPath(profile.userDataDirectory.trim()),
+    profileDirectory: normalizeOsPath(profile.profileDirectory.trim())
+  }
+  if (profile.bitBrowserId) next.bitBrowserId = profile.bitBrowserId.trim()
+  return next
+}
+
+/** Normalize every filesystem path field on KouboxConfig (JP Windows ¥/￥ → `\`). */
+export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
+  const platformBrowserProfiles: PlatformBrowserProfiles = {}
+  for (const [id, profile] of Object.entries(config.platformBrowserProfiles ?? {}) as Array<[YtdlpCookiePlatformId, BrowserProfile | undefined]>) {
+    if (profile) platformBrowserProfiles[id] = normalizeBrowserProfile(profile)
+  }
+  return {
+    ...config,
+    modelsDirectory: normalizeOsPath(config.modelsDirectory),
+    outputDirectory: normalizeOsPath(config.outputDirectory),
+    asrModelDirectory: normalizeOsPath(config.asrModelDirectory),
+    translationModelDirectory: normalizeOsPath(config.translationModelDirectory),
+    demucsModelDirectory: normalizeOsPath(config.demucsModelDirectory),
+    ytdlpDirectory: normalizeOsPath(config.ytdlpDirectory),
+    ffmpegDirectory: normalizeOsPath(config.ffmpegDirectory),
+    ytdlpCookiesPath: normalizeOsPath(config.ytdlpCookiesPath),
+    pythonExecutable: normalizeOsPath(config.pythonExecutable),
+    platformBrowserProfiles
+  }
+}
 
 export function normalizeProxyUrl(proxy: string): string | null {
   const trimmed = proxy.trim()

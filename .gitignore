@@ -23,3 +23,5 @@ vendor/**/*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+tests/
+packages/core/test/

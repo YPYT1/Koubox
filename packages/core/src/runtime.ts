@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId, YtdlpCookieSource } from '@koubox/shared'
-import { defaultPlatformAuth } from '@koubox/shared'
+import type { BrowserProfile, GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, PlatformBrowserProfiles, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId, YtdlpCookieSource } from '@koubox/shared'
+import { defaultPlatformAuth, defaultPlatformBrowserProfiles, normalizeBrowserProfile, normalizeKouboxConfigPaths } from '@koubox/shared'
 
 const asrModelFiles = [
   'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
@@ -85,6 +85,10 @@ export class RuntimeStore {
       this.defaults.ytdlpPlatformAuth,
       (parsed as { ytdlpInstagramCookies?: unknown }).ytdlpInstagramCookies
     )
+    config.platformBrowserProfiles = normalizePlatformBrowserProfiles(
+      (parsed as { platformBrowserProfiles?: unknown }).platformBrowserProfiles,
+      this.defaults.platformBrowserProfiles
+    )
     if (config.ytdlpMaxHeight !== 0 && config.ytdlpMaxHeight !== 1080 && config.ytdlpMaxHeight !== 720 && config.ytdlpMaxHeight !== 480) {
       config.ytdlpMaxHeight = this.defaults.ytdlpMaxHeight
     }
@@ -102,13 +106,13 @@ export class RuntimeStore {
     }
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
-    const normalized = this.applyPinned(config)
+    const normalized = normalizeKouboxConfigPaths(this.applyPinned(config))
     if (usesLegacyAsrModel || this.pinBundledPaths) return this.write(normalized)
     return normalized
   }
 
   write(next: KouboxConfig): KouboxConfig {
-    const pinned = this.applyPinned(next)
+    const pinned = normalizeKouboxConfigPaths(this.applyPinned(next))
     mkdirSync(dirname(this.file), { recursive: true })
     writeFileSync(this.file, JSON.stringify(pinned, null, 2), 'utf8')
     return pinned
@@ -261,6 +265,27 @@ function normalizePlatformAuth(
       next.instagram.cookies = legacyInstagramCookies
       next.instagram.mode = 'paste'
     }
+  }
+  return next
+}
+
+function isBrowserProfile(value: unknown): value is BrowserProfile {
+  if (!value || typeof value !== 'object') return false
+  const profile = value as Partial<BrowserProfile>
+  const browserOk = profile.browser === 'chrome' || profile.browser === 'bitbrowser'
+  return browserOk
+    && typeof profile.userDataDirectory === 'string' && profile.userDataDirectory.trim() !== ''
+    && typeof profile.profileDirectory === 'string' && /^(Default|Profile \d+)$/i.test(profile.profileDirectory)
+    && typeof profile.label === 'string'
+}
+
+function normalizePlatformBrowserProfiles(raw: unknown, defaults: PlatformBrowserProfiles): PlatformBrowserProfiles {
+  const next = { ...defaultPlatformBrowserProfiles(), ...defaults }
+  if (!raw || typeof raw !== 'object') return next
+  const record = raw as Record<string, unknown>
+  const ids: YtdlpCookiePlatformId[] = ['youtube', 'tiktok', 'instagram', 'facebook']
+  for (const id of ids) {
+    if (isBrowserProfile(record[id])) next[id] = normalizeBrowserProfile(record[id])
   }
   return next
 }

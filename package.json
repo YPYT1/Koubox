@@ -17,6 +17,7 @@
   },
   "packageManager": "pnpm@11.1.2",
   "devDependencies": {
+    "playwright": "^1.62.1",
     "typescript": "^5.9.3"
   }
 }

@@ -9,10 +9,14 @@ import {
   TerminalWindow,
   Globe,
   ArrowsClockwise,
-  FloppyDiskBack
+  FloppyDiskBack,
+  MagnifyingGlass,
+  Trash
 } from '@phosphor-icons/react'
 import type {
   AsrLanguage,
+  BrowserProfile,
+  ChromeProfileLoginProbe,
   KouboxConfig,
   PlatformAuthMode,
   RuntimeStatus,
@@ -23,7 +27,7 @@ import type {
   YtdlpCookieStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
-import { defaultPlatformAuth } from '@koubox/shared'
+import { defaultPlatformAuth, normalizeBrowserProfile } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 
@@ -81,6 +85,35 @@ const PLATFORM_AUTH_OPTIONS: Array<{
   { id: 'instagram', label: 'Instagram', requiredHint: 'sessionid / ds_user_id' },
   { id: 'facebook', label: 'Facebook', requiredHint: 'c_user / xs' }
 ]
+
+type LoginProbeUi = {
+  state: 'idle' | 'probing' | 'logged-in' | 'logged-out' | 'error'
+  detail: string
+}
+
+type AppDataRoots = {
+  mode: 'development' | 'packaged'
+  userData: string
+  logs: string
+}
+
+type ClearAppCacheResult = {
+  cancelled: boolean
+  cleared: string[]
+  failed: Array<{ path: string; error: string }>
+  roots: AppDataRoots
+  config?: KouboxConfig
+}
+
+function idleProbe(): LoginProbeUi {
+  return { state: 'idle', detail: '' }
+}
+
+/** HTML <option value> cannot reliably hold U+0000; use a Windows-illegal separator. */
+function browserProfileKey(profile: Pick<BrowserProfile, 'browser' | 'userDataDirectory' | 'profileDirectory' | 'bitBrowserId'>): string {
+  const bitId = profile.bitBrowserId?.trim() || ''
+  return `${profile.browser}|${profile.userDataDirectory}|${profile.profileDirectory}|${bitId}`
+}
 
 function normalizeCookieSource(source: YtdlpCookieSource | 'chrome' | 'edge'): YtdlpCookieSource {
   if (source === 'builtin' || source === 'none' || source === 'file') return source
@@ -184,11 +217,108 @@ export function SettingsPage({
     })
   }
   const [savingPlatformAuth, setSavingPlatformAuth] = useState(false)
+  const [browserProfiles, setBrowserProfiles] = useState<BrowserProfile[]>([])
+  const [scanningBrowserProfiles, setScanningBrowserProfiles] = useState(false)
+  const [loginProbes, setLoginProbes] = useState<Partial<Record<YtdlpCookiePlatformId, LoginProbeUi>>>({})
+  const [probingPlatformId, setProbingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
+  const [probingAllProfiles, setProbingAllProfiles] = useState(false)
+  const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
+  const [clearingCache, setClearingCache] = useState(false)
   const activeGuide = guide ? guides[guide] : null
   const cookieSource = normalizeCookieSource(config.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge')
   const platformAuth = config.ytdlpPlatformAuth ?? defaultPlatformAuth()
   const usePlatformAuth = cookieSource === 'builtin'
   const anyBuiltinPlatform = PLATFORM_AUTH_OPTIONS.some((item) => platformAuth[item.id].mode === 'builtin')
+  const platformBrowserProfiles = config.platformBrowserProfiles ?? {}
+
+  const probeFor = (id: YtdlpCookiePlatformId): LoginProbeUi => loginProbes[id] ?? idleProbe()
+
+  const scanBrowserProfiles = async () => {
+    setScanningBrowserProfiles(true)
+    try {
+      const profiles = await window.koubox.get<BrowserProfile[]>('/browser/profiles')
+      setBrowserProfiles(profiles)
+      onShowToast(profiles.length ? `已发现 ${profiles.length} 个浏览器配置（Chrome / 比特）。` : '未发现可用的 Chrome / 比特浏览器配置。', profiles.length ? 'success' : 'warning')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '扫描浏览器配置失败', 'error')
+    } finally {
+      setScanningBrowserProfiles(false)
+    }
+  }
+
+  const selectBrowserProfile = (id: YtdlpCookiePlatformId, profileKey: string) => {
+    const selected = browserProfiles.find((item) => browserProfileKey(item) === profileKey)
+    const next = { ...platformBrowserProfiles }
+    if (selected) next[id] = normalizeBrowserProfile(selected)
+    else delete next[id]
+    onChange({ ...config, platformBrowserProfiles: next })
+    setLoginProbes((prev) => ({ ...prev, [id]: idleProbe() }))
+  }
+
+  const probePlatformLogin = async (id: YtdlpCookiePlatformId, options?: { silentToast?: boolean }): Promise<boolean> => {
+    const profile = platformBrowserProfiles[id]
+    if (!profile) {
+      setLoginProbes((prev) => ({
+        ...prev,
+        [id]: { state: 'error', detail: '请先为该平台选择 Chrome 配置文件。' }
+      }))
+      if (!options?.silentToast) {
+        onShowToast(`请先选择 ${PLATFORM_AUTH_OPTIONS.find((item) => item.id === id)?.label ?? id} 的配置文件。`, 'warning')
+      }
+      return false
+    }
+    setProbingPlatformId(id)
+    setLoginProbes((prev) => ({
+      ...prev,
+      [id]: { state: 'probing', detail: `正在打开 ${PLATFORM_AUTH_OPTIONS.find((item) => item.id === id)?.label ?? id} 首页检测登录…` }
+    }))
+    try {
+      const result = await Promise.race([
+        window.koubox.post<ChromeProfileLoginProbe>('/browser/profiles/probe-login', {
+          platformId: id,
+          profile,
+          proxy: config.ytdlpProxy
+        }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('登录检测超时（20 秒）。请关闭占用该配置的浏览器，检查代理后重试。')), 20_000)
+        })
+      ])
+      setLoginProbes((prev) => ({
+        ...prev,
+        [id]: {
+          state: result.loggedIn ? 'logged-in' : 'logged-out',
+          detail: result.detail
+        }
+      }))
+      if (!options?.silentToast) onShowToast(result.detail, result.loggedIn ? 'success' : 'warning')
+      return result.loggedIn
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '登录检测失败'
+      setLoginProbes((prev) => ({ ...prev, [id]: { state: 'error', detail } }))
+      if (!options?.silentToast) onShowToast(detail, 'error')
+      return false
+    } finally {
+      setProbingPlatformId(null)
+    }
+  }
+
+  const probeAllSelectedLogins = async () => {
+    const selectedIds = PLATFORM_AUTH_OPTIONS.map((item) => item.id).filter((id) => platformBrowserProfiles[id])
+    if (selectedIds.length === 0) {
+      onShowToast('请先为至少一个平台选择 Chrome 配置文件。', 'warning')
+      return
+    }
+    setProbingAllProfiles(true)
+    try {
+      let loggedInCount = 0
+      for (const id of selectedIds) {
+        if (await probePlatformLogin(id, { silentToast: true })) loggedInCount += 1
+      }
+      onShowToast(`检测完成：${loggedInCount}/${selectedIds.length} 个平台已登录。`, loggedInCount === selectedIds.length ? 'success' : 'warning')
+    } finally {
+      setProbingAllProfiles(false)
+    }
+  }
 
   const patchPlatformAuth = (id: YtdlpCookiePlatformId, patch: { mode?: PlatformAuthMode; cookies?: string }) => {
     onChange({
@@ -244,6 +374,37 @@ export function SettingsPage({
     }
     void refreshCookieStatus()
   }, [usePlatformAuth])
+
+  useEffect(() => {
+    void window.koubox.get<AppDataRoots>('/system/data-roots')
+      .then((roots) => setAppDataRoots(roots))
+      .catch(() => setAppDataRoots(null))
+  }, [])
+
+  const handleClearCache = async () => {
+    setClearingCache(true)
+    try {
+      const result = await window.koubox.post<ClearAppCacheResult>('/system/clear-cache')
+      if (result.cancelled) {
+        onShowToast('已取消清理。', 'warning')
+        return
+      }
+      setAppDataRoots(result.roots)
+      setBrowserProfiles([])
+      setLoginProbes({})
+      setCookieStatus(null)
+      if (result.config) onChange(result.config)
+      if (result.failed.length > 0) {
+        onShowToast(`清理完成，但有 ${result.failed.length} 项失败（可能仍被占用）。`, 'warning')
+        return
+      }
+      onShowToast('已清理缓存、登录状态与任务记录。', 'success')
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '清理缓存失败', 'error')
+    } finally {
+      setClearingCache(false)
+    }
+  }
 
   const handleSelectPath = async (key: keyof KouboxConfig, title: string) => {
     const current = config[key]
@@ -334,6 +495,27 @@ export function SettingsPage({
           </FormField>
 
           <FormField
+            label="清理缓存"
+            hint={
+              appDataRoots
+                ? `${appDataRoots.mode === 'packaged' ? '打包模式' : '开发模式'}：日志在 ${appDataRoots.logs}；用户数据在 ${appDataRoots.userData}。会清理登录状态与任务记录；磁盘 Cache 下次启动清干净。不会删除模型、工具与输出视频。`
+                : '清理缓存、登录状态与任务记录。不会删除模型、工具与输出视频。'
+            }
+          >
+            <Button
+              type="button"
+              variant="secondary"
+              size="md"
+              className="btn-clear-cache"
+              loading={clearingCache}
+              icon={<Trash size={16} weight="bold" />}
+              onClick={() => void handleClearCache()}
+            >
+              {clearingCache ? '清理中…' : '清理缓存与临时数据'}
+            </Button>
+          </FormField>
+
+          <FormField
             label="yt-dlp 目录"
             labelAction={(
               <button type="button" className="field-help-btn" onClick={() => setGuide('ytdlp')} title="查看说明">
@@ -419,42 +601,112 @@ export function SettingsPage({
 
         <div className="panel-box">
           <div className="panel-title">
-            <h3>下载（yt-dlp）</h3>
-            <span className="panel-title-badge">网络与清晰度</span>
+            <h3>下载与浏览器账号</h3>
+            <span className="panel-title-badge">直连优先</span>
           </div>
 
-          <FormField label="代理地址" hint="例如 http://127.0.0.1:7890 ；留空表示不使用代理。">
+          <FormField label="代理地址" hint="例如 http://127.0.0.1:7897；Facebook 的页面解析、Chrome 配置文件解析和媒体下载共用此代理。">
             <input
               className="input-text"
               value={config.ytdlpProxy}
               onChange={(e) => onChange({ ...config, ytdlpProxy: e.target.value })}
-              placeholder="http://127.0.0.1:7890"
+              placeholder="http://127.0.0.1:7897"
             />
           </FormField>
 
           <FormField
-            label="下载策略"
-            hint="默认先用公开页面、公开接口和匿名浏览器解析，不需要账号。只有你主动配置登录态时，公开解析全部失败后才会使用 Cookie 兜底。"
+            label="Chrome 浏览器账号"
+            hint="扫描本机 Chrome 与比特浏览器配置后按平台选择；点「检测登录」会打开对应首页核对会话。应用只保存路径。比特需保持客户端运行（本地 API）。"
           >
-            <select
-              className="input-text"
-              value={cookieSource}
-              onChange={(e) => {
-                const ytdlpCookieSource = e.target.value as YtdlpCookieSource
-                onChange({
-                  ...config,
-                  ytdlpCookieSource,
-                  ytdlpCookiesPath: ytdlpCookieSource === 'file' ? config.ytdlpCookiesPath : ''
-                })
-              }}
-            >
-              {COOKIE_SOURCE_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
+            <div className="chrome-account-panel">
+              <div className="chrome-account-toolbar">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  loading={scanningBrowserProfiles}
+                  icon={<ArrowsClockwise size={16} weight="bold" />}
+                  onClick={() => void scanBrowserProfiles()}
+                >
+                  {scanningBrowserProfiles ? '扫描中…' : '扫描配置文件'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  loading={probingAllProfiles}
+                  disabled={scanningBrowserProfiles || probingPlatformId !== null}
+                  icon={<MagnifyingGlass size={16} weight="bold" />}
+                  onClick={() => void probeAllSelectedLogins()}
+                >
+                  {probingAllProfiles ? '检测中…' : '检测已选平台'}
+                </Button>
+                <span className="chrome-account-scan-meta">
+                  {browserProfiles.length > 0 ? `已发现 ${browserProfiles.length} 个配置` : '尚未扫描'}
+                </span>
+              </div>
+
+              <div className="chrome-account-list">
+                {PLATFORM_AUTH_OPTIONS.map((platform) => {
+                  const selected = platformBrowserProfiles[platform.id]
+                  const selectedKey = selected ? browserProfileKey(selected) : ''
+                  const probe = probeFor(platform.id)
+                  const busy = probingPlatformId === platform.id || probingAllProfiles
+                  return (
+                    <div key={platform.id} className={`chrome-account-row chrome-account-row--${probe.state}`}>
+                      <strong className="chrome-account-platform">{platform.label}</strong>
+                      <select
+                        className="input-text"
+                        value={selectedKey}
+                        disabled={busy}
+                        onChange={(event) => selectBrowserProfile(platform.id, event.target.value)}
+                        aria-label={`${platform.label} 浏览器配置文件`}
+                      >
+                        <option value="">未选择配置文件</option>
+                        {browserProfiles.map((profile) => {
+                          const key = browserProfileKey(profile)
+                          return <option key={key} value={key}>{profile.label}</option>
+                        })}
+                        {selected && !browserProfiles.some((profile) => browserProfileKey(profile) === selectedKey) && (
+                          <option value={selectedKey}>{selected.label}（已保存，待重新扫描）</option>
+                        )}
+                      </select>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="md"
+                        loading={probingPlatformId === platform.id}
+                        disabled={busy && probingPlatformId !== platform.id}
+                        icon={<MagnifyingGlass size={16} weight="bold" />}
+                        onClick={() => void probePlatformLogin(platform.id)}
+                      >
+                        检测登录
+                      </Button>
+                      <span className={`chrome-account-badge chrome-account-badge--${probe.state}`}>
+                        {probe.state === 'idle' && '未检测'}
+                        {probe.state === 'probing' && '检测中'}
+                        {probe.state === 'logged-in' && '已登录'}
+                        {probe.state === 'logged-out' && '未登录'}
+                        {probe.state === 'error' && '检测失败'}
+                      </span>
+                      {probe.detail ? (
+                        <p className="chrome-account-row-detail">{probe.detail}</p>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </FormField>
 
-          {usePlatformAuth && (
+          <FormField
+            label="Facebook 下载策略"
+            hint="固定为：公开页面直连 → 已选 Chrome 配置文件 → FFmpeg stream copy。Facebook 不调用 yt-dlp，不重编码视频或音频。"
+          >
+            <div className="vendor-integrity-ok">已启用 Facebook 原画直连链路</div>
+          </FormField>
+
+          {false && usePlatformAuth && (
             <>
               {anyBuiltinPlatform && (
                 <div className="platform-auth-toolbar">
@@ -518,14 +770,14 @@ export function SettingsPage({
                 <div className="cookie-status-panel">
                   <div className="cookie-status-head">
                     <span>
-                      应用内会话 {cookieStatus.cookieCount} 个 cookie
-                      {cookieStatus.exported && cookieStatus.exportedAt
-                        ? ` · 已导出 ${new Date(cookieStatus.exportedAt).toLocaleString()}`
+                      应用内会话 {cookieStatus!.cookieCount} 个 cookie
+                      {cookieStatus!.exported && cookieStatus!.exportedAt
+                        ? ` · 已导出 ${new Date(cookieStatus!.exportedAt!).toLocaleString()}`
                         : ''}
                     </span>
                   </div>
                   <div className="cookie-status-grid">
-                    {cookieStatus.platforms.map((platform) => (
+                    {cookieStatus!.platforms.map((platform) => (
                       <div
                         key={platform.id}
                         className={`cookie-status-item ${platform.loggedIn ? 'ok' : 'warn'}`}
@@ -630,7 +882,7 @@ export function SettingsPage({
             </>
           )}
 
-          {cookieSource === 'file' && (
+          {false && cookieSource === 'file' && (
             <FormField label="Cookies 文件" hint="Netscape cookies.txt，所有平台共用这一份。">
               <PathPicker
                 value={config.ytdlpCookiesPath}

@@ -3,8 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
-import { defaultPlatformAuth, tools } from '@koubox/shared'
+import type { AsrLanguage, BrowserProfile, KouboxConfig, PlatformAuthConfig, PlatformBrowserProfiles, TranslationTargetLanguage, YtdlpCookieSource, YtdlpMaxHeight } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertLocalVideoPath, defaultPlatformAuth, defaultPlatformBrowserProfiles, normalizeBrowserProfile, normalizeOsPath, tools } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
@@ -26,7 +26,26 @@ type ServerOptions = {
   exportLoginCookies(): Promise<import('@koubox/shared').YtdlpCookieStatus>
   getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string): Promise<import('@koubox/shared').YtdlpCookieStatus>
   exportedCookiesFile: string
-  resolveBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
+  exportBrowserProfileCookies?(
+    profile: BrowserProfile,
+    platformId: import('@koubox/shared').YtdlpCookiePlatformId
+  ): Promise<import('./video-download.js').AuthenticatedCookieFile>
+  scanBrowserProfiles?(): Promise<BrowserProfile[]>
+  probeChromeProfileLogin?(
+    profile: BrowserProfile,
+    platformId: import('@koubox/shared').YtdlpCookiePlatformId,
+    proxy: string
+  ): Promise<import('@koubox/shared').ChromeProfileLoginProbe>
+  getAppDataRoots?(): Promise<{ mode: 'development' | 'packaged'; userData: string; logs: string }>
+  clearAppCache?(): Promise<{
+    cancelled: boolean
+    cleared: string[]
+    failed: Array<{ path: string; error: string }>
+    roots: { mode: 'development' | 'packaged'; userData: string; logs: string }
+    config?: KouboxConfig
+  }>
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -48,6 +67,10 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
+}
+
+function asPathString(value: unknown, fallback: string): string {
+  return normalizeOsPath(asString(value, fallback))
 }
 
 function asBoolean(value: unknown, fallback: boolean): boolean {
@@ -100,25 +123,68 @@ function asPlatformAuth(value: unknown, fallback: PlatformAuthConfig): PlatformA
   return next
 }
 
+function readVideoPipelineInput(body: Record<string, unknown>, defaultOutputDirectory: string): {
+  url: string
+  outputDirectory: string
+} {
+  const checked = assertDownloadableVideoUrl(typeof body.url === 'string' ? body.url : '')
+  const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+    ? normalizeOsPath(body.outputDirectory.trim())
+    : normalizeOsPath(defaultOutputDirectory)
+  return { url: checked.url, outputDirectory }
+}
+
+function asBrowserProfile(value: unknown): BrowserProfile | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const profile = value as Partial<BrowserProfile>
+  if (profile.browser !== 'chrome' && profile.browser !== 'bitbrowser') return undefined
+  if (typeof profile.userDataDirectory !== 'string' || !profile.userDataDirectory.trim()) return undefined
+  if (typeof profile.profileDirectory !== 'string' || !/^(Default|Profile \d+)$/i.test(profile.profileDirectory)) return undefined
+  if (typeof profile.label !== 'string') return undefined
+  const next: BrowserProfile = normalizeBrowserProfile({
+    browser: profile.browser,
+    userDataDirectory: profile.userDataDirectory,
+    profileDirectory: profile.profileDirectory,
+    label: profile.label,
+    ...(typeof profile.bitBrowserId === 'string' && profile.bitBrowserId.trim()
+      ? { bitBrowserId: profile.bitBrowserId.trim() }
+      : {})
+  })
+  return next
+}
+
+function asPlatformBrowserProfiles(value: unknown, fallback: PlatformBrowserProfiles): PlatformBrowserProfiles {
+  const next = { ...defaultPlatformBrowserProfiles(), ...fallback }
+  if (!value || typeof value !== 'object') return next
+  const record = value as Record<string, unknown>
+  for (const id of ['youtube', 'tiktok', 'instagram', 'facebook'] as const) {
+    const profile = asBrowserProfile(record[id])
+    if (profile) next[id] = profile
+    else if (record[id] === null) delete next[id]
+  }
+  return next
+}
+
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
   const ytdlpCookieSource = asYtdlpCookieSource(body.ytdlpCookieSource, config.ytdlpCookieSource)
   return {
-    modelsDirectory: asString(body.modelsDirectory, config.modelsDirectory),
-    outputDirectory: asString(body.outputDirectory, config.outputDirectory),
-    asrModelDirectory: asString(body.asrModelDirectory, config.asrModelDirectory),
-    translationModelDirectory: asString(body.translationModelDirectory, config.translationModelDirectory),
-    demucsModelDirectory: asString(body.demucsModelDirectory, config.demucsModelDirectory),
-    ytdlpDirectory: asString(body.ytdlpDirectory, config.ytdlpDirectory),
-    ffmpegDirectory: asString(body.ffmpegDirectory, config.ffmpegDirectory),
+    modelsDirectory: asPathString(body.modelsDirectory, config.modelsDirectory),
+    outputDirectory: asPathString(body.outputDirectory, config.outputDirectory),
+    asrModelDirectory: asPathString(body.asrModelDirectory, config.asrModelDirectory),
+    translationModelDirectory: asPathString(body.translationModelDirectory, config.translationModelDirectory),
+    demucsModelDirectory: asPathString(body.demucsModelDirectory, config.demucsModelDirectory),
+    ytdlpDirectory: asPathString(body.ytdlpDirectory, config.ytdlpDirectory),
+    ffmpegDirectory: asPathString(body.ffmpegDirectory, config.ffmpegDirectory),
     translationTargetLanguage: asTranslationTargetLanguage(body.translationTargetLanguage, config.translationTargetLanguage),
     asrLanguage: asAsrLanguage(body.asrLanguage, config.asrLanguage),
     openOutputOnComplete: asBoolean(body.openOutputOnComplete, config.openOutputOnComplete),
     ytdlpProxy: asString(body.ytdlpProxy, config.ytdlpProxy),
     ytdlpCookieSource,
     ytdlpCookiesPath: ytdlpCookieSource === 'file'
-      ? asString(body.ytdlpCookiesPath, config.ytdlpCookiesPath)
+      ? asPathString(body.ytdlpCookiesPath, config.ytdlpCookiesPath)
       : '',
     ytdlpPlatformAuth: asPlatformAuth(body.ytdlpPlatformAuth, config.ytdlpPlatformAuth),
+    platformBrowserProfiles: asPlatformBrowserProfiles(body.platformBrowserProfiles, config.platformBrowserProfiles),
     ytdlpMaxHeight: asYtdlpMaxHeight(body.ytdlpMaxHeight, config.ytdlpMaxHeight),
     ytdlpExtraArgs: asString(body.ytdlpExtraArgs, config.ytdlpExtraArgs),
     maxConcurrentTasks: Math.max(1, Math.floor(asNumber(body.maxConcurrentTasks, config.maxConcurrentTasks))),
@@ -126,7 +192,7 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     translationMaxNewTokens: Math.max(1, Math.floor(asNumber(body.translationMaxNewTokens, config.translationMaxNewTokens))),
     translationTopP: asNumber(body.translationTopP, config.translationTopP),
     whisperChunkLengthS: Math.max(1, Math.floor(asNumber(body.whisperChunkLengthS, config.whisperChunkLengthS))),
-    pythonExecutable: asString(body.pythonExecutable, config.pythonExecutable),
+    pythonExecutable: asPathString(body.pythonExecutable, config.pythonExecutable),
     debugMode: asBoolean(body.debugMode, config.debugMode)
   }
 }
@@ -141,7 +207,9 @@ export async function startLocalApi(options: ServerOptions) {
     pythonProjectDirectory: options.pythonProjectDirectory,
     bundledPythonExecutable: options.bundledPythonExecutable,
     taskIndexFile: join(dirname(options.configFile), 'tasks.json'),
-    resolveBrowserMedia: options.resolveBrowserMedia
+    resolveTikTokBrowserMedia: options.resolveTikTokBrowserMedia,
+    resolveFacebookAnonymousMedia: options.resolveFacebookAnonymousMedia,
+    exportBrowserProfileCookies: options.exportBrowserProfileCookies
   })
   tasks.restore(store.read().outputDirectory)
   const token = randomBytes(24).toString('hex')
@@ -165,7 +233,7 @@ export async function startLocalApi(options: ServerOptions) {
 
       if (method === 'GET' && url.pathname === '/health') return json(response, 200, { ok: true })
       if (method === 'GET' && url.pathname === '/media') {
-        const filePath = url.searchParams.get('path')
+        const filePath = normalizeOsPath(url.searchParams.get('path') ?? '')
         if (!filePath || !existsSync(filePath)) return json(response, 404, { error: '文件不存在。' })
         const stat = statSync(filePath)
         if (!stat.isFile()) return json(response, 400, { error: '路径不是文件。' })
@@ -228,19 +296,21 @@ export async function startLocalApi(options: ServerOptions) {
       if (method === 'POST' && url.pathname === '/dialog/select-directory') {
         const body = await readJson(request)
         const title = typeof body.title === 'string' ? body.title : '选择文件夹'
-        const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined
-        return json(response, 200, { path: await options.selectDirectory(title, defaultPath) ?? null })
+        const defaultPath = typeof body.defaultPath === 'string' ? normalizeOsPath(body.defaultPath) : undefined
+        const selected = await options.selectDirectory(title, defaultPath)
+        return json(response, 200, { path: selected ? normalizeOsPath(selected) : null })
       }
       if (method === 'POST' && url.pathname === '/dialog/select-audio') {
         const body = await readJson(request)
         const title = typeof body.title === 'string' ? body.title : '选择音频文件'
-        const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined
-        return json(response, 200, { path: await options.selectAudioFile(title, defaultPath) ?? null })
+        const defaultPath = typeof body.defaultPath === 'string' ? normalizeOsPath(body.defaultPath) : undefined
+        const selected = await options.selectAudioFile(title, defaultPath)
+        return json(response, 200, { path: selected ? normalizeOsPath(selected) : null })
       }
       if (method === 'POST' && url.pathname === '/dialog/select-file') {
         const body = await readJson(request)
         const title = typeof body.title === 'string' ? body.title : '选择文件'
-        const defaultPath = typeof body.defaultPath === 'string' ? body.defaultPath : undefined
+        const defaultPath = typeof body.defaultPath === 'string' ? normalizeOsPath(body.defaultPath) : undefined
         const filters = Array.isArray(body.filters)
           ? body.filters.filter((item): item is FileFilter =>
             Boolean(item) &&
@@ -249,12 +319,13 @@ export async function startLocalApi(options: ServerOptions) {
             Array.isArray((item as FileFilter).extensions)
           )
           : undefined
-        return json(response, 200, { path: await options.selectFile(title, defaultPath, filters) ?? null })
+        const selected = await options.selectFile(title, defaultPath, filters)
+        return json(response, 200, { path: selected ? normalizeOsPath(selected) : null })
       }
       if (method === 'POST' && url.pathname === '/dialog/open-path') {
         const body = await readJson(request)
         if (typeof body.path !== 'string' || !body.path.trim()) return json(response, 400, { error: '请提供要打开的路径。' })
-        await options.openPath(body.path.trim())
+        await options.openPath(normalizeOsPath(body.path.trim()))
         return json(response, 200, { ok: true })
       }
       if (method === 'POST' && url.pathname === '/browser/open-login') {
@@ -274,6 +345,65 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'GET' && url.pathname === '/browser/cookie-status') {
         return json(response, 200, await options.getLoginCookieStatus(config.ytdlpPlatformAuth, config.ytdlpProxy))
+      }
+      if (method === 'GET' && url.pathname === '/system/data-roots') {
+        if (!options.getAppDataRoots) {
+          return json(response, 400, { error: '当前环境不支持查询数据目录。' })
+        }
+        return json(response, 200, await options.getAppDataRoots())
+      }
+      if (method === 'POST' && url.pathname === '/system/clear-cache') {
+        if (!options.clearAppCache) {
+          return json(response, 400, { error: '当前环境不支持清理缓存。' })
+        }
+        try {
+          const result = await options.clearAppCache()
+          if (result.cancelled) return json(response, 200, result)
+          tasks.clearAllRecords()
+          result.cleared.push('tasks.json / records')
+          const current = store.read()
+          const next = store.write({
+            ...current,
+            ytdlpCookiesPath: '',
+            ytdlpPlatformAuth: defaultPlatformAuth(),
+            platformBrowserProfiles: defaultPlatformBrowserProfiles()
+          })
+          return json(response, 200, { ...result, config: next })
+        } catch (error) {
+          return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      if (method === 'GET' && url.pathname === '/browser/profiles') {
+        if (!options.scanBrowserProfiles) return json(response, 200, [])
+        return json(response, 200, await options.scanBrowserProfiles())
+      }
+      if (method === 'POST' && url.pathname === '/browser/profiles/probe-login') {
+        if (!options.probeChromeProfileLogin) {
+          return json(response, 400, { error: '当前环境不支持 Chrome 登录检测。' })
+        }
+        const body = await readJson(request)
+        const platformId = body.platformId
+        if (
+          platformId !== 'youtube' &&
+          platformId !== 'tiktok' &&
+          platformId !== 'instagram' &&
+          platformId !== 'facebook'
+        ) {
+          return json(response, 400, { error: 'platformId 必须是 youtube / tiktok / instagram / facebook。' })
+        }
+        const profile = body.profile as BrowserProfile | undefined
+        if (!profile || typeof profile !== 'object' || (profile.browser !== 'chrome' && profile.browser !== 'bitbrowser')) {
+          return json(response, 400, { error: '请提供有效的 Chrome / 比特浏览器 profile。' })
+        }
+        if (typeof profile.userDataDirectory !== 'string' || typeof profile.profileDirectory !== 'string') {
+          return json(response, 400, { error: 'Chrome profile 缺少 userDataDirectory / profileDirectory。' })
+        }
+        try {
+          const proxy = typeof body.proxy === 'string' ? body.proxy : config.ytdlpProxy
+          return json(response, 200, await options.probeChromeProfileLogin(profile, platformId, proxy))
+        } catch (error) {
+          return json(response, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
       }
       const taskMatch = url.pathname.match(/^\/tasks\/([^/]+)(?:\/(events|translate|cancel|export))?$/)
       if (taskMatch) {
@@ -317,25 +447,40 @@ export async function startLocalApi(options: ServerOptions) {
         if (method === 'POST' && action === 'export') {
           const body = await readJson(request)
           if (typeof body.targetDirectory !== 'string' || !body.targetDirectory.trim()) return json(response, 400, { error: '请提供另存目录。' })
-          return json(response, 200, { artifacts: tasks.export(taskId, body.targetDirectory) })
+          return json(response, 200, { artifacts: tasks.export(taskId, normalizeOsPath(body.targetDirectory.trim())) })
         }
       }
       if (method === 'POST' && url.pathname === '/pipelines/req1') {
         const body = await readJson(request)
-        const urlValue = typeof body.url === 'string' ? body.url.trim() : ''
-        if (!/^https?:\/\//i.test(urlValue)) return json(response, 400, { error: '请输入有效的视频链接。' })
-        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim() ? body.outputDirectory : store.read().outputDirectory
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+          ? normalizeOsPath(body.outputDirectory.trim())
+          : normalizeOsPath(store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
-        return json(response, 202, tasks.startRequirementOne(urlValue, outputDirectory, resolveModelPaths(store.read())))
+        const videoPathRaw = typeof body.videoPath === 'string' ? body.videoPath : ''
+        if (videoPathRaw.trim()) {
+          const videoPath = assertLocalVideoPath(videoPathRaw)
+          if (!existsSync(videoPath)) return json(response, 400, { error: '本地视频文件不存在。' })
+          return json(response, 202, tasks.startRequirementOne(videoPath, outputDirectory, resolveModelPaths(store.read()), 'local'))
+        }
+        const { url: urlValue } = readVideoPipelineInput(body, store.read().outputDirectory)
+        return json(response, 202, tasks.startRequirementOne(urlValue, outputDirectory, resolveModelPaths(store.read()), 'url'))
       }
       if (method === 'POST' && url.pathname === '/pipelines/req2') {
         const body = await readJson(request)
-        const audioPath = typeof body.audioPath === 'string' ? body.audioPath.trim() : ''
+        const audioPath = typeof body.audioPath === 'string' ? normalizeOsPath(body.audioPath.trim()) : ''
         if (!audioPath) return json(response, 400, { error: '请选择本地音频文件。' })
         const sourceText = typeof body.sourceText === 'string' ? body.sourceText : ''
-        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim() ? body.outputDirectory : store.read().outputDirectory
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+          ? normalizeOsPath(body.outputDirectory.trim())
+          : normalizeOsPath(store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
         return json(response, 202, tasks.startRequirementTwo(audioPath, sourceText, outputDirectory, resolveModelPaths(store.read())))
+      }
+      if (method === 'POST' && url.pathname === '/pipelines/download') {
+        const body = await readJson(request)
+        const { url: urlValue, outputDirectory } = readVideoPipelineInput(body, store.read().outputDirectory)
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startDownload(urlValue, outputDirectory))
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {
