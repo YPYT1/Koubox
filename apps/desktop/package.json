@@ -1,6 +1,6 @@
 {
   "name": "@koubox/desktop",
-  "version": "0.7.0",
+  "version": "0.7.3",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
@@ -36,6 +36,7 @@
     "productName": "口播匣",
     "directories": { "output": "release" },
     "files": ["out/**/*", "package.json"],
+    "asarUnpack": ["**/node_modules/playwright/**/*", "**/node_modules/playwright-core/**/*"],
     "extraResources": [
       { "from": "../../vendor", "to": "vendor" },
       {
@@ -51,7 +52,8 @@
     "compression": "store",
     "win": {
       "target": ["dir"],
-      "icon": "build/icon.png"
+      "icon": "build/icon.png",
+      "requestedExecutionLevel": "requireAdministrator"
     }
   }
 }

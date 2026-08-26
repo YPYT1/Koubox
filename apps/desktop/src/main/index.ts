@@ -279,6 +279,7 @@ async function createWindow(): Promise<void> {
     title: '口播匣',
     icon: findWindowIcon(),
     backgroundColor: '#f0f2f5',
+    show: false,  // 先不显示，等内容加载后再显示
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -289,6 +290,11 @@ async function createWindow(): Promise<void> {
     }
   })
   mainWindow.setMenuBarVisibility(false)
+
+  // 内容加载完成后立即显示窗口
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+  })
 
   mainWindow.webContents.on('devtools-opened', () => {
     if (!isDebugModeEnabled()) mainWindow?.webContents.closeDevTools()

@@ -436,7 +436,8 @@ const { chromium } = require('playwright');
 });
 `.trim()
 
-    const child = spawn('node', ['--eval', playwrightScript], {
+    // 打包后使用 process.execPath（Electron），开发模式使用 node
+    const child = spawn(process.execPath, ['--eval', playwrightScript], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NODE_NO_WARNINGS: '1' }
     })
