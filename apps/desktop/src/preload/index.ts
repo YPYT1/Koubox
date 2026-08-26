@@ -10,7 +10,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...init?.headers }
   })
   const payload = await response.json() as T & { error?: string; detail?: string }
-  if (!response.ok) throw new Error(payload.error ?? `本地服务错误 (${response.status})`)
+  if (!response.ok) {
+    // 优先显示 detail（包含真实错误信息），其次是 error
+    const message = payload.detail || payload.error || `本地服务错误 (${response.status})`
+    throw new Error(message)
+  }
   return payload
 }
 
