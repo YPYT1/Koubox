@@ -222,9 +222,12 @@ async function resolvePrimaryPublicMedia(
   request: VideoDownloadRequest,
   platform: DownloadableVideoPlatform
 ): Promise<PublicMediaResolution> {
-  // YouTube 不使用公开解析，强制走 yt-dlp 登录态
+  // YouTube 和 Instagram 不使用公开解析，强制走 yt-dlp 登录态
   if (platform === 'YouTube') {
     throw new Error('YouTube 需要登录后才能下载。')
+  }
+  if (platform === 'Instagram') {
+    throw new Error('Instagram 公开解析成功率低，建议配置登录后下载。')
   }
   if (platform === 'Facebook') {
     return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy)
@@ -393,8 +396,8 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
-  // YouTube 跳过公开解析，直接走登录态
-  if (checked.platform !== 'YouTube') {
+  // YouTube 和 Instagram 跳过公开解析，直接走登录态（公开解析成功率极低）
+  if (checked.platform !== 'YouTube' && checked.platform !== 'Instagram') {
     const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
     if (direct) return direct
 
@@ -408,7 +411,7 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   let ytdlpAuthenticationFailure: string | undefined
   if (request.resolveAuthenticatedCookies) {
     try {
-      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
+      request.updateProgress(4, checked.platform === 'YouTube' || checked.platform === 'Instagram' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
       const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
         authenticationResolved = cookieFile
