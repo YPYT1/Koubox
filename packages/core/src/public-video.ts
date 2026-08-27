@@ -114,7 +114,7 @@ function cookieHeaderFromResponse(headers: Record<string, string | string[] | un
 async function fetchPage(
   url: string,
   proxy: string,
-  timeoutMs = 30_000,  // 恢复为 30 秒
+  timeoutMs = 50_000,  // 慢速网络最多等待 50 秒
   userAgent = DEFAULT_USER_AGENT
 ): Promise<{ text: string; cookieHeader?: string }> {
   const normalizedProxy = normalizeProxyUrl(proxy)
@@ -143,11 +143,11 @@ async function fetchPage(
   }
 }
 
-async function fetchText(url: string, proxy: string, timeoutMs = 30_000, userAgent = DEFAULT_USER_AGENT): Promise<string> {
+async function fetchText(url: string, proxy: string, timeoutMs = 50_000, userAgent = DEFAULT_USER_AGENT): Promise<string> {
   return (await fetchPage(url, proxy, timeoutMs, userAgent)).text
 }
 
-async function fetchJson<T>(url: string, proxy: string, timeoutMs = 30_000): Promise<T> {
+async function fetchJson<T>(url: string, proxy: string, timeoutMs = 50_000): Promise<T> {
   return JSON.parse(await fetchText(url, proxy, timeoutMs)) as T
 }
 
@@ -474,12 +474,13 @@ const executablePath = process.env.KOUBOX_PLAYWRIGHT_EXECUTABLE || ${executableL
   });
 
   try {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 50_000 });
     const deadline = Date.now() + 20000;
     let firstVideoAt = 0;
     while (Date.now() < deadline) {
       if (bestVideo && !firstVideoAt) firstVideoAt = Date.now();
-      if (firstVideoAt && Date.now() - firstVideoAt >= 1500) break;
+      if (bestVideo && bestAudio) break;
+      if (firstVideoAt && Date.now() - firstVideoAt >= 8_000) break;
       await page.waitForTimeout(250);
     }
     if (!bestVideo || !bestVideo.url) throw new Error('Instagram 页面没有返回视频链接。');

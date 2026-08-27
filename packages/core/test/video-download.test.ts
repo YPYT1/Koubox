@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -173,6 +173,63 @@ describe('public video download pipeline', () => {
     expect(ytdlpArgs).toEqual([])
   })
 
+  it.each([
+    {
+      platform: 'Instagram',
+      url: 'https://www.instagram.com/reel/network-test',
+      overrides: {
+        resolvePublicMedia: async () => { throw new Error('Instagram 页面没有返回视频链接。') }
+      }
+    },
+    {
+      platform: 'TikTok',
+      url: 'https://www.tiktok.com/@creator/video/123',
+      overrides: {
+        downloadTikTokPublic: async () => { throw new Error('Connect Timeout Error') },
+        resolveTikTokBrowserMedia: async () => { throw new Error('匿名浏览器已打开页面，但没有观察到公开视频流（当前网络未返回媒体请求）。') }
+      }
+    },
+    {
+      platform: 'Facebook',
+      url: 'https://www.facebook.com/reel/1234567890',
+      overrides: {
+        resolveFacebookPublicMedia: async () => { throw new Error('Connect Timeout Error') },
+        resolveFacebookAnonymousMedia: async () => { throw new Error('Facebook 页面加载完成，但没有暴露可下载的视频流。') }
+      }
+    }
+  ])('reports a likely network problem for $platform instead of requiring Cookie', async ({ platform, url, overrides }) => {
+    const request = createRequest({
+      url,
+      ...overrides,
+      resolveAuthenticatedCookies: async () => {
+        throw new Error(`${platform} 已选「粘贴 Cookie」，但尚未粘贴内容。请到「全局设置 → 平台登录」配置。`)
+      }
+    })
+
+    const error = await downloadVideo(request).then(() => undefined, (reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain(`${platform} 公开视频获取失败：当前网络较慢或连接不稳定`)
+    expect((error as Error).message).not.toContain('请到【全局设置】→【平台登录配置】配置该平台')
+  })
+
+  it('keeps capturing Instagram responses long enough for slow audio streams', () => {
+    const source = readFileSync(join(import.meta.dirname, '..', 'src', 'public-video.ts'), 'utf8')
+
+    expect(source).toContain('if (bestVideo && bestAudio) break;')
+    expect(source).toContain('Date.now() - firstVideoAt >= 8_000')
+    expect(source).not.toContain('Date.now() - firstVideoAt >= 1500')
+  })
+
+  it('keeps the YouTube login-required message unchanged', async () => {
+    const request = createRequest({
+      url: 'https://www.youtube.com/watch?v=123',
+      resolveAuthenticatedCookies: async () => undefined
+    })
+
+    await expect(downloadVideo(request)).rejects.toThrow('YouTube 视频需要登录后才能下载')
+  })
+
   it('never forwards yt-dlp self-update flags from advanced arguments', async () => {
     let downloadArgs: string[] = []
     const request = createRequest({
@@ -280,6 +337,7 @@ describe('public video download pipeline', () => {
     expect(preflight).toEqual(expect.arrayContaining([
       '--skip-download', '--simulate', '--cookies', join(request.directory, 'youtube.cookies.txt'),
       '--user-agent', 'Mozilla/5.0 Browser Profile UA', '--proxy', 'http://127.0.0.1:7897',
+      '--socket-timeout', '50',
       '--js-runtimes', `deno:${join(request.directory, 'deno.exe')}`
     ]))
     expect(commands.map((command) => command.label)).toEqual(['yt-dlp 认证预检', 'yt-dlp'])

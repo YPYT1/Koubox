@@ -85,6 +85,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function looksLikePublicNetworkFailure(message: string): boolean {
+  if (/video unavailable|not available|已删除|已下架|私密|private|login required|需要登录|年龄限制|age-restricted|地区不可用|geo(?:graphic)?(?:ally)?\s*(?:restricted|blocked)/i.test(message)) {
+    return false
+  }
+  return /timed? ?out|timeout|connect timeout|ETIMEDOUT|ECONNRESET|ENETUNREACH|EAI_AGAIN|fetch failed|socket hang up|ERR_(?:TIMED_OUT|CONNECTION_|NETWORK_)|10060|10061|网络.*(?:超时|中断|失败|未返回)|连接.*(?:超时|重置|失败|中断)|页面没有返回视频链接|没有返回目标公开视频 playAddr|没有观察到公开视频流|没有暴露可下载的视频流|下载文件没有(?:视频流|原始音频流)|媒体直链已失效或中断|HTTP (?:408|429|5\d\d)/i.test(message)
+}
+
+function publicNetworkFailureMessage(
+  platform: DownloadableVideoPlatform,
+  failures: VideoDownloadResult['failures']
+): string | undefined {
+  const publicFailures = failures.filter((failure) => failure.strategy !== 'yt-dlp-authenticated')
+  if (!publicFailures.some((failure) => looksLikePublicNetworkFailure(failure.message))) return undefined
+  return `${platform} 公开视频获取失败：当前网络较慢或连接不稳定，平台页面可能没有完整返回媒体数据。请检查网络或代理后重试；无需先配置 Cookie。`
+}
+
 function splitExtraArgs(value: string): string[] {
   const args: string[] = []
   const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
@@ -192,7 +208,7 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
   const args = ['-hide_banner', '-loglevel', 'warning', '-y', '-progress', 'pipe:1']
   const addInput = (url: string) => {
     args.push(
-      '-rw_timeout', '30000000',
+      '-rw_timeout', '50000000',
       '-reconnect', '1',
       '-reconnect_at_eof', '1',
       '-reconnect_streamed', '1',
@@ -289,7 +305,7 @@ async function runYtdlpAuthenticated(request: VideoDownloadRequest, authenticati
 }
 
 function ytdlpAuthenticationArgs(request: VideoDownloadRequest, authentication?: AuthenticatedCookieFile): string[] {
-  const args: string[] = []
+  const args: string[] = ['--socket-timeout', '50']
   const proxy = normalizeProxyUrl(request.config.ytdlpProxy)
   if (proxy) args.push('--proxy', proxy)
   if (authentication?.path) args.push('--cookies', authentication.path)
@@ -502,6 +518,11 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
       throw new Error(`${checked.platform} ${authenticationSourceLabel(authenticationResolved.source)}，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
     }
     throw new Error(`${checked.platform} 公开视频解析失败；认证线路失败：${ytdlpAuthenticationFailure}`)
+  }
+
+  if (!authenticationResolved) {
+    const networkMessage = publicNetworkFailureMessage(checked.platform, failures)
+    if (networkMessage) throw new Error(networkMessage)
   }
 
   throw new Error(`${checked.platform} 公开视频解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请到【全局设置】→【平台登录配置】配置该平台。`)

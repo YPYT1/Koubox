@@ -97,39 +97,20 @@ function Remove-OldRelease {
 
 function Stop-ProcessesForRelease([string]$TargetDirectory) {
   if (-not (Test-Path -LiteralPath $TargetDirectory)) { return }
-  $needle = [regex]::Escape((Resolve-Path -LiteralPath $TargetDirectory).Path)
-  $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq '口播匣.exe' })
-  $matched = New-Object System.Collections.Generic.HashSet[int]
-  foreach ($process in $processes) {
-    if ([string]$process.CommandLine -match $needle) { $matched.Add([int]$process.ProcessId) | Out-Null }
-  }
-  if ($matched.Count -eq 0) { return }
-
-  foreach ($process in @($processes | Where-Object { $matched.Contains([int]$_.ProcessId) })) {
-    $parentId = [int]$process.ParentProcessId
-    while ($parentId -gt 0) {
-      $parent = $processes | Where-Object { [int]$_.ProcessId -eq $parentId } | Select-Object -First 1
-      if (-not $parent -or $parent.Name -ne '口播匣.exe') { break }
-      $matched.Add($parentId) | Out-Null
-      $parentId = [int]$parent.ParentProcessId
+  $targetPrefix = (Resolve-Path -LiteralPath $TargetDirectory).Path.TrimEnd('\') + '\'
+  for ($attempt = 1; $attempt -le 5; $attempt += 1) {
+    $processes = @(Get-CimInstance Win32_Process | Where-Object {
+      $executablePath = [string]$_.ExecutablePath
+      $executablePath -and $executablePath.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($processes.Count -eq 0) { return }
+    foreach ($process in ($processes | Sort-Object ProcessId -Descending)) {
+      Write-Host "结束占用旧发布目录的进程：$($process.Name) PID $($process.ProcessId)"
+      Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
     }
+    Start-Sleep -Milliseconds 500
   }
-
-  $changed = $true
-  while ($changed) {
-    $changed = $false
-    foreach ($process in $processes) {
-      if ($matched.Contains([int]$process.ParentProcessId) -and $matched.Add([int]$process.ProcessId)) {
-        $changed = $true
-      }
-    }
-  }
-
-  foreach ($process in ($processes | Where-Object { $matched.Contains([int]$_.ProcessId) } | Sort-Object ProcessId -Descending)) {
-    Write-Host "结束占用旧发布目录的进程：PID $($process.ProcessId)"
-    Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
-  }
-  Start-Sleep -Milliseconds 500
+  throw "无法结束旧发布目录中的残留进程：$TargetDirectory"
 }
 
 function Invoke-Preflight {

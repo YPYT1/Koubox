@@ -64,7 +64,7 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
   })
   try {
     await window.loadURL(canonicalUrl, { userAgent: TIKTOK_BROWSER_USER_AGENT })
-    const deadline = Date.now() + 30_000
+    const deadline = Date.now() + 50_000
     let firstMediaAt = 0
     while (Date.now() < deadline) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {

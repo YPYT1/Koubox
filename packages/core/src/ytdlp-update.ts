@@ -20,7 +20,7 @@ type ActiveMetadata = { version: string; sha256: string; filename: string; insta
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
 
 function commandOutput(executable: string, args: string[]): { status: number | null; output: string } {
-  const result = spawnSync(executable, args, { encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+  const result = spawnSync(executable, args, { encoding: 'utf8', windowsHide: true, timeout: 50_000 })
   return { status: result.status, output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim() }
 }
 
