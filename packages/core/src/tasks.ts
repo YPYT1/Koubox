@@ -29,6 +29,7 @@ type TaskManagerOptions = {
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
   taskIndexFile: string
+  downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
   resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
   resolvePlatformAuthentication?(
@@ -608,6 +609,7 @@ export class TaskManager {
       updateProgress: (percent, message) => this.update(record, { percent, message }),
       runCommand: (command, args, onLine, commandLabel) =>
         this.runCommand(record, command, args, onLine, commandLabel),
+      downloadTikTokPublic: this.options.downloadTikTokPublic,
       resolveTikTokBrowserMedia: this.options.resolveTikTokBrowserMedia,
       resolveFacebookAnonymousMedia: this.options.resolveFacebookAnonymousMedia,
       resolveAuthenticatedCookies: async (platform) => {

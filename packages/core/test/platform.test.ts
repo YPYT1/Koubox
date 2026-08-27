@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { detectPlatform } from '@koubox/shared'
+import { normalizeTikTokVideoUrl } from '../src/public-video'
 
 describe('shared platform detection', () => {
   it.each([
@@ -9,5 +10,14 @@ describe('shared platform detection', () => {
     ['https://www.facebook.com/watch/?v=abc', 'Facebook'],
   ])('detects %s as %s', (url, expected) => {
     expect(detectPlatform(url)).toBe(expected)
+  })
+})
+
+describe('TikTok URL normalization', () => {
+  it.each([
+    'https://www.tiktok.com/@user706133680727/video/7678178992146386194?q=%23%E6%97%A5%E6%9C%AC%E6%A0%AA&t=1787717576834',
+    'https://www.tiktok.com/@uxlfbh5sz7/video/7678178246583684372?q=%23%E6%97%A5%E6%9C%AC%E6%A0%AA&t=1787717576834#share'
+  ])('strips query and hash from shared video URLs', (url) => {
+    expect(normalizeTikTokVideoUrl(url)).toMatch(/^https:\/\/www\.tiktok\.com\/@[^/]+\/video\/\d+$/)
   })
 })

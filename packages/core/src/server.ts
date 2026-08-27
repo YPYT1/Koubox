@@ -17,6 +17,7 @@ type ServerOptions = {
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
+  downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
   pinBundledPaths?: boolean
   selectDirectory(title: string, defaultPath?: string): Promise<string | undefined>
   selectAudioFile(title: string, defaultPath?: string): Promise<string | undefined>
@@ -161,6 +162,7 @@ export async function startLocalApi(options: ServerOptions) {
     projectDirectory: options.projectDirectory,
     pythonProjectDirectory: options.pythonProjectDirectory,
     bundledPythonExecutable: options.bundledPythonExecutable,
+    downloadTikTokPublic: options.downloadTikTokPublic,
     taskIndexFile: join(dirname(options.configFile), 'tasks.json'),
     resolveTikTokBrowserMedia: options.resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: options.resolveFacebookAnonymousMedia,

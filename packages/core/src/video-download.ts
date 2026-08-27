@@ -18,6 +18,7 @@ export type { PublicMediaResolution } from './public-video.js'
 
 export type VideoDownloadStrategy =
   | 'public-page'
+  | 'tiktok-reference'
   | 'tiktok-browser'
   | 'facebook-browser'
   | 'yt-dlp-authenticated'
@@ -73,6 +74,7 @@ export type VideoDownloadRequest = {
   runCommand: RunCommand
   resolvePublicMedia?: typeof resolvePublicMedia
   resolveFacebookPublicMedia?: typeof resolveFacebookPublicMedia
+  downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
   resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
   resolveAuthenticatedCookies?(platform: DownloadableVideoPlatform): Promise<AuthenticatedCookieFile | undefined>
@@ -390,6 +392,16 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
       }
       let firstResolution: PublicMediaResolution | undefined
       let resolutionError: unknown
+      const resolverLabel = strategy === 'public-page'
+        ? '正在解析公开页面最高质量媒体流'
+        : '正在使用匿名浏览器捕获公开媒体流'
+      const startedAt = Date.now()
+      let heartbeat = 0
+      const heartbeatTimer = setInterval(() => {
+        heartbeat += 1
+        const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+        request.updateProgress(Math.min(7, 4 + heartbeat), `${resolverLabel}（已等待 ${elapsedSeconds} 秒）…`)
+      }, 5_000)
       for (let attempt = 1; attempt <= resolveAttempts; attempt += 1) {
         try {
           firstResolution = await resolver()
@@ -401,6 +413,7 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
           }
         }
       }
+      clearInterval(heartbeatTimer)
       if (!firstResolution) throw resolutionError ?? new Error('解析器没有返回媒体流。')
       try {
         return await attemptResolution(firstResolution)
@@ -416,8 +429,27 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
   }
 
-  // YouTube 跳过公开解析，直接走登录态
-  if (checked.platform !== 'YouTube') {
+  // YouTube 直接走登录态；TikTok 优先使用复制进来的参考下载器，再回退匿名浏览器。
+  if (checked.platform === 'TikTok') {
+    if (request.downloadTikTokPublic) {
+      request.updateProgress(4, '正在使用 TikTok 无 Cookie 下载器…')
+      try {
+        const path = await request.downloadTikTokPublic(request.url, request.directory, request.fileStem, (line) => {
+          const percent = line.match(/(\d+(?:\.\d+)?)%/)
+          if (percent) request.updateProgress(Math.min(28, Math.max(8, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
+          else if (/Downloading webpage|Solving JS challenge/i.test(line)) request.updateProgress(5, '正在解析 TikTok 视频信息…')
+        })
+        return await verifyResult(request, path, checked.platform, 'tiktok-reference', failures)
+      } catch (error) {
+        failures.push({ strategy: 'tiktok-reference', message: errorMessage(error) })
+      }
+    }
+    const browserFallback = publicFallbacks(request, checked.platform).find((item) => item.strategy === 'tiktok-browser')
+    if (browserFallback) {
+      const result = await tryResolved(browserFallback.strategy, browserFallback.resolve, browserFallback.resolveAttempts)
+      if (result) return result
+    }
+  } else if (checked.platform !== 'YouTube') {
     const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
     if (direct) return direct
 

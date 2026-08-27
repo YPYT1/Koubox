@@ -11,6 +11,7 @@ import { SrtPreview } from '../components/SrtPreview'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
 
 type RequirementTwoPageProps = {
@@ -279,7 +280,7 @@ export function RequirementTwoPage({
                 </Badge>
               )}
             </div>
-            {task && <span className="task-percent-tag tag-blue">{task.percent}%</span>}
+            {task && <span className="task-percent-tag tag-blue">{formatTaskPercent(task.percent)}</span>}
           </div>
 
           <PipelineStepper

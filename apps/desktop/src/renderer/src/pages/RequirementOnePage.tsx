@@ -24,6 +24,7 @@ import {
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
 import { VideoUrlField, startMaterialsPipeline, cancelDownloadTask } from '../components/download'
 import { TARGET_LANGUAGE_OPTIONS } from './SettingsPage'
@@ -432,7 +433,7 @@ export function RequirementOnePage({
               )}
             </div>
             {task && (
-              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{task.percent}%</span>
+              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{formatTaskPercent(task.percent)}</span>
             )}
           </div>
 

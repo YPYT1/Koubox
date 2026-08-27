@@ -1,8 +1,56 @@
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { ProxyAgent, request } from 'undici'
 import { normalizeProxyUrl } from '@koubox/shared'
+import { createLogger } from '@koubox/shared/logger'
 
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'
 const MOBILE_USER_AGENT = 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/140.0.0.0 Mobile Safari/537.36'
+const log = createLogger('public-video')
+
+type ElectronProcess = NodeJS.Process & { resourcesPath?: string }
+
+function currentResourcesPath(): string | undefined {
+  return (process as ElectronProcess).resourcesPath
+}
+
+function findPackagedChromium(resourcesPath: string): string | undefined {
+  const browserRoot = join(resourcesPath, 'playwright-browsers')
+  if (!existsSync(browserRoot)) return undefined
+  const revisions = readdirSync(browserRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^chromium-/i.test(entry.name))
+    .sort((a, b) => b.name.localeCompare(a.name, undefined, { numeric: true }))
+  for (const revision of revisions) {
+    for (const candidate of [
+      join(browserRoot, revision.name, 'chrome-win64', 'chrome.exe'),
+      join(browserRoot, revision.name, 'chrome-win', 'chrome.exe')
+    ]) {
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return undefined
+}
+
+function findPackagedPlaywrightModule(resourcesPath: string): string | undefined {
+  for (const candidate of [
+    join(resourcesPath, 'app.asar', 'node_modules', 'playwright'),
+    join(resourcesPath, 'app.asar.unpacked', 'node_modules', 'playwright')
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
+export function resolvePackagedPlaywrightRuntime(resourcesPath?: string): {
+  modulePath?: string
+  executablePath?: string
+} {
+  if (!resourcesPath) return {}
+  return {
+    modulePath: findPackagedPlaywrightModule(resourcesPath),
+    executablePath: findPackagedChromium(resourcesPath)
+  }
+}
 
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
@@ -105,6 +153,14 @@ async function fetchJson<T>(url: string, proxy: string, timeoutMs = 30_000): Pro
 
 function isTikTokShortHost(hostname: string): boolean {
   return /^(?:vm|vt)\.tiktok\.com$/i.test(hostname)
+}
+
+/** Remove share/search context so TikTok always loads the canonical video page. */
+export function normalizeTikTokVideoUrl(inputUrl: string): string {
+  const canonical = new URL(inputUrl)
+  canonical.search = ''
+  canonical.hash = ''
+  return canonical.toString()
 }
 
 async function expandTikTokUrl(inputUrl: string, proxy: string): Promise<string> {
@@ -272,9 +328,8 @@ export function selectPipedStreams(data: PipedResponse, maxHeight: number): { vi
 async function resolveTikTok(url: string, proxy: string): Promise<PublicMediaResolution> {
   const input = new URL(url)
   const expandedUrl = isTikTokShortHost(input.hostname) ? await expandTikTokUrl(url, proxy) : url
-  const canonical = new URL(expandedUrl)
-  canonical.search = ''
-  canonical.hash = ''
+  const canonicalUrl = normalizeTikTokVideoUrl(expandedUrl)
+  const canonical = new URL(canonicalUrl)
   const videoId = canonical.pathname.match(/\/video\/(\d+)/)?.[1]
   if (!videoId) throw new Error('TikTok 链接中没有视频 ID。')
   const endpoints = [`https://www.tiktok.com/@i/video/${videoId}`, canonical.toString()]
@@ -365,116 +420,135 @@ async function resolveInstagram(url: string, proxy: string): Promise<PublicMedia
   const info = extractInstagramInfo(url)
   if (!info) throw new Error('Instagram 链接格式不正确。仅支持 /reels/ 和 /p/ 格式。')
 
-  // 规范化代理 URL（可选）
   const normalizedProxy = normalizeProxyUrl(proxy)
-
-  // 使用 Playwright 捕获网络请求来获取视频 URL
   const { spawn } = await import('node:child_process')
-
-  return new Promise<PublicMediaResolution>((resolve, reject) => {
-    // 代理配置：如果有代理则使用，否则不配置
-    const proxyConfig = normalizedProxy ? `proxy: { server: '${normalizedProxy}' },` : ''
-    const playwrightScript = `
-const { chromium } = require('playwright');
+  const resourcesPath = currentResourcesPath()
+  const packagedRuntime = resolvePackagedPlaywrightRuntime(resourcesPath)
+  const modulePath = packagedRuntime.modulePath
+  const executablePath = packagedRuntime.executablePath
+  const proxyLiteral = normalizedProxy ? JSON.stringify(normalizedProxy) : 'undefined'
+  const urlLiteral = JSON.stringify(url)
+  const moduleLiteral = modulePath ? JSON.stringify(modulePath) : 'undefined'
+  const executableLiteral = executablePath ? JSON.stringify(executablePath) : 'undefined'
+  const playwrightScript = `
+const path = require('node:path');
+const playwright = require(process.env.KOUBOX_PLAYWRIGHT_MODULE || ${moduleLiteral} || 'playwright');
+const { chromium } = playwright;
+const targetUrl = ${urlLiteral};
+const proxy = ${proxyLiteral};
+const executablePath = process.env.KOUBOX_PLAYWRIGHT_EXECUTABLE || ${executableLiteral};
 
 (async () => {
   const browser = await chromium.launch({
     headless: true,
-    ${proxyConfig}
+    ...(executablePath ? { executablePath } : {}),
+    ...(proxy ? { proxy: { server: proxy } } : {})
   });
-  const context = await browser.newContext({ userAgent: '${DEFAULT_USER_AGENT}' });
+  const context = await browser.newContext({ userAgent: ${JSON.stringify(DEFAULT_USER_AGENT)} });
   const page = await context.newPage();
+  let bestVideo = null;
+  let bestAudio = '';
 
-  let videoUrl = null;
-  let audioUrl = null;
-
-  page.on('response', async (response) => {
-    const url = response.url();
+  page.on('response', (response) => {
+    const responseUrl = response.url();
     const contentType = response.headers()['content-type'] || '';
-
-    if (!contentType.includes('video/mp4')) return;
-    if (!url.includes('cdninstagram.com')) return;
-
+    if (!contentType.includes('video/mp4') || !responseUrl.includes('cdninstagram.com')) return;
     try {
-      const urlObj = new URL(url);
-      const efg = urlObj.searchParams.get('efg');
+      const urlObject = new URL(responseUrl);
+      const efg = urlObject.searchParams.get('efg');
       if (!efg) return;
-
       const decoded = JSON.parse(Buffer.from(efg, 'base64').toString());
-
-      urlObj.searchParams.delete('bytestart');
-      urlObj.searchParams.delete('byteend');
-      const cleanUrl = urlObj.toString();
-
-      if (decoded.vencode_tag && decoded.vencode_tag.includes('audio')) {
-        audioUrl = cleanUrl;
-      } else if (decoded.vencode_tag && decoded.bitrate) {
-        const bitrate = decoded.bitrate;
-        if (!videoUrl || bitrate > videoUrl.bitrate) {
-          videoUrl = { url: cleanUrl, bitrate };
-        }
+      urlObject.searchParams.delete('bytestart');
+      urlObject.searchParams.delete('byteend');
+      const cleanUrl = urlObject.toString();
+      const tag = String(decoded.vencode_tag || '').toLowerCase();
+      if (tag.includes('audio')) {
+        bestAudio = cleanUrl;
+        return;
       }
-    } catch (e) {
-      // 忽略解析错误
-    }
+      const bitrate = Number(decoded.bitrate || 0);
+      if (bitrate > 0 && (!bestVideo || bitrate > bestVideo.bitrate)) {
+        bestVideo = { url: cleanUrl, bitrate };
+      }
+    } catch {}
   });
 
-  await page.goto('${url}', { waitUntil: 'networkidle', timeout: 30000 });
-  await page.waitForTimeout(3000);
-
-  await browser.close();
-
-  if (videoUrl && videoUrl.url) {
-    console.log('VIDEO_URL=' + videoUrl.url);
-    if (audioUrl) {
-      console.log('AUDIO_URL=' + audioUrl);
+  try {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const deadline = Date.now() + 20000;
+    let firstVideoAt = 0;
+    while (Date.now() < deadline) {
+      if (bestVideo && !firstVideoAt) firstVideoAt = Date.now();
+      if (firstVideoAt && Date.now() - firstVideoAt >= 1500) break;
+      await page.waitForTimeout(250);
     }
+    if (!bestVideo || !bestVideo.url) throw new Error('Instagram 页面没有返回视频链接。');
+    process.stdout.write('VIDEO_URL=' + bestVideo.url + '\\n');
+    if (bestAudio) process.stdout.write('AUDIO_URL=' + bestAudio + '\\n');
+  } finally {
+    await context.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
   }
-})().catch(err => {
-  console.error(err.message);
-  process.exit(1);
+})().catch((error) => {
+  process.stderr.write(String(error && error.message ? error.message : error));
+  process.exitCode = 1;
 });
 `.trim()
 
-    // 打包后使用 process.execPath（Electron），开发模式使用 node
+  return new Promise<PublicMediaResolution>((resolve, reject) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_NO_WARNINGS: '1' }
+    if (process.versions.electron) {
+      env.ELECTRON_RUN_AS_NODE = '1'
+    }
+    if (modulePath) env.KOUBOX_PLAYWRIGHT_MODULE = modulePath
+    if (executablePath) env.KOUBOX_PLAYWRIGHT_EXECUTABLE = executablePath
+    if (resourcesPath && executablePath) env.PLAYWRIGHT_BROWSERS_PATH = join(resourcesPath, 'playwright-browsers')
+
+    log.info('Instagram 匿名解析启动', {
+      packaged: Boolean(resourcesPath),
+      browserPath: executablePath ?? 'playwright-default',
+      proxy: normalizedProxy ? 'configured' : 'none'
+    })
+
     const child = spawn(process.execPath, ['--eval', playwrightScript], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, NODE_NO_WARNINGS: '1' }
+      windowsHide: true,
+      env
     })
-
     let stdout = ''
     let stderr = ''
+    let settled = false
+    const finishError = (error: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      reject(error)
+    }
+    const timeout = setTimeout(() => {
+      child.kill()
+      finishError(new Error('Instagram 匿名解析超时（60 秒）。'))
+    }, 60_000)
 
-    child.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    child.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
-
-    child.on('close', (code: number) => {
-      if (code !== 0) {
-        reject(new Error(`Instagram 页面解析失败：${stderr || stdout || 'Playwright 进程异常退出'}`))
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+    child.on('error', (error) => finishError(new Error(`Instagram 匿名解析进程启动失败：${error.message}`)))
+    child.on('close', (code) => {
+      if (settled) return
+      const videoUrl = stdout.split(/\r?\n/).find((line) => line.startsWith('VIDEO_URL='))?.slice('VIDEO_URL='.length).trim() ?? ''
+      const audioUrl = stdout.split(/\r?\n/).find((line) => line.startsWith('AUDIO_URL='))?.slice('AUDIO_URL='.length).trim() ?? ''
+      if (code !== 0 || !videoUrl) {
+        const detail = stderr.trim() || stdout.trim() || `子进程退出码：${code ?? 'unknown'}`
+        log.error('Instagram 匿名解析失败', { code, detail: detail.slice(0, 500) })
+        finishError(new Error(detail.includes('Executable doesn\'t exist')
+          ? `Instagram 浏览器运行环境缺失：${detail}`
+          : detail.includes('Instagram 页面没有返回视频链接')
+            ? 'Instagram 页面没有返回视频链接。'
+            : `Instagram 匿名解析失败：${detail}`))
         return
       }
-
-      let videoUrl = ''
-      let audioUrl = ''
-
-      for (const line of stdout.split('\n')) {
-        if (line.startsWith('VIDEO_URL=')) {
-          videoUrl = line.slice('VIDEO_URL='.length).trim()
-        } else if (line.startsWith('AUDIO_URL=')) {
-          audioUrl = line.slice('AUDIO_URL='.length).trim()
-        }
-      }
-
-      if (!videoUrl) {
-        reject(new Error('Instagram 页面没有返回视频链接。'))
-        return
-      }
-
+      settled = true
+      clearTimeout(timeout)
+      log.info('Instagram 匿名解析完成', { hasAudio: Boolean(audioUrl) })
       resolve({
         source: 'instagram-page',
         videoUrl,

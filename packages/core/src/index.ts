@@ -12,6 +12,7 @@ export {
 } from './ytdlp-update.js'
 export { createTemporaryPlatformCookieFile } from './platform-auth.js'
 export { extractFacebookMedia, extractFacebookVideoId, resolveFacebookPublicMedia } from './facebook.js'
+export { normalizeTikTokVideoUrl } from './public-video.js'
 export type { PublicMediaResolution } from './public-video.js'
 export {
   downloadVideo,

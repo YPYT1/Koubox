@@ -7,7 +7,6 @@
 #   ... -SkipPackage            只预检，不真正打包（给你手动打包前验证）
 #   ... -Version 0.2.0          指定发布版本（写入 apps/desktop/package.json，目录名 Koubox-0.2.0）
 #   ... -ProxyPort 7897         代理端口，默认 7897
-#   ... -KeepRelease            打包前不删旧产物（默认会删）
 #
 # 说明：
 # - 不打包 python/wheels（2.6GB 的 torch.whl）
@@ -19,8 +18,7 @@ param(
   [string]$Version = '',
   [int]$ProxyPort = 7897,
   [switch]$CleanOnly,
-  [switch]$SkipPackage,
-  [switch]$KeepRelease
+  [switch]$SkipPackage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,8 +90,46 @@ function Remove-OldRelease {
     Write-Host "无旧产物：$releaseDir"
     return
   }
+  Stop-ProcessesForRelease $releaseDir
   Write-Host "删除旧打包产物：$releaseDir"
   Remove-Item -LiteralPath $releaseDir -Recurse -Force
+}
+
+function Stop-ProcessesForRelease([string]$TargetDirectory) {
+  if (-not (Test-Path -LiteralPath $TargetDirectory)) { return }
+  $needle = [regex]::Escape((Resolve-Path -LiteralPath $TargetDirectory).Path)
+  $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq '口播匣.exe' })
+  $matched = New-Object System.Collections.Generic.HashSet[int]
+  foreach ($process in $processes) {
+    if ([string]$process.CommandLine -match $needle) { $matched.Add([int]$process.ProcessId) | Out-Null }
+  }
+  if ($matched.Count -eq 0) { return }
+
+  foreach ($process in @($processes | Where-Object { $matched.Contains([int]$_.ProcessId) })) {
+    $parentId = [int]$process.ParentProcessId
+    while ($parentId -gt 0) {
+      $parent = $processes | Where-Object { [int]$_.ProcessId -eq $parentId } | Select-Object -First 1
+      if (-not $parent -or $parent.Name -ne '口播匣.exe') { break }
+      $matched.Add($parentId) | Out-Null
+      $parentId = [int]$parent.ParentProcessId
+    }
+  }
+
+  $changed = $true
+  while ($changed) {
+    $changed = $false
+    foreach ($process in $processes) {
+      if ($matched.Contains([int]$process.ParentProcessId) -and $matched.Add([int]$process.ProcessId)) {
+        $changed = $true
+      }
+    }
+  }
+
+  foreach ($process in ($processes | Where-Object { $matched.Contains([int]$_.ProcessId) } | Sort-Object ProcessId -Descending)) {
+    Write-Host "结束占用旧发布目录的进程：PID $($process.ProcessId)"
+    Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Milliseconds 500
 }
 
 function Invoke-Preflight {
@@ -108,6 +144,7 @@ function Invoke-Preflight {
   }
 
   $desktopPkg = Get-Content -LiteralPath (Join-Path $root 'apps\desktop\package.json') -Raw
+  Assert-Path (Join-Path $root 'scripts\prepare-playwright-browsers.mjs') 'Playwright 浏览器准备脚本'
   Assert-NotPacked $desktopPkg 'wheels' 'extraResources 里出现了 wheels，whl 不应打进安装包。'
   Assert-NotPacked $desktopPkg '"from":\s*"\.\./\.\./models"' 'extraResources 不应复制开发机 models；便携包只保留空 models 目录。'
   if ($desktopPkg -notmatch '"from":\s*"../../python/\.venv"') {
@@ -121,8 +158,12 @@ function Invoke-Preflight {
   Assert-Path (Join-Path $root 'vendor\deno\deno.exe') 'Deno'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffmpeg.exe') 'ffmpeg'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffprobe.exe') 'ffprobe'
+  Assert-Path (Join-Path $root 'node_modules\.pnpm\playwright@1.62.1\node_modules\playwright\package.json') 'Playwright Node 依赖'
   Assert-Path (Join-Path $root 'python\.venv\Scripts\python.exe') 'Python 虚拟环境'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\torch') '已安装的 torch'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\yt_dlp') '参考 TikTok 下载器 yt-dlp 依赖'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\curl_cffi') '参考 TikTok 下载器 curl_cffi 依赖'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '复制的 TikTok 下载器源码'
 
   $freeGb = [math]::Round((Get-PSDrive -Name D).Free / 1GB, 2)
   if ($freeGb -lt 25) {
@@ -151,6 +192,11 @@ function Invoke-Preflight {
     Set-Item -Path "Env:$name" -Value $proxy
   }
   Write-Host "代理已固定为 $proxy"
+
+  node (Join-Path $root 'scripts\prepare-playwright-browsers.mjs')
+  if ($LASTEXITCODE -ne 0) {
+    throw "预检失败：Playwright 浏览器准备失败，退出码 $LASTEXITCODE"
+  }
 
   Write-Host '预检通过。'
 }
@@ -189,6 +235,8 @@ function Invoke-Postflight {
   Assert-Path (Join-Path $resources 'vendor\yt-dlp\yt-dlp.exe') '包内 yt-dlp'
   Assert-Path (Join-Path $resources 'vendor\deno\deno.exe') '包内 Deno'
   Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffmpeg.exe') '包内 ffmpeg'
+  Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffprobe.exe') '包内 ffprobe'
+  Assert-Path (Join-Path $resources 'app.asar') '包内 Electron 应用'
   $packedModels = Join-Path $resources 'models'
   Assert-Path $packedModels '包内空 models 目录'
   $packedModelEntries = @(Get-ChildItem -LiteralPath $packedModels -Force -ErrorAction SilentlyContinue)
@@ -200,7 +248,16 @@ function Invoke-Postflight {
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\c10.dll') '包内 torch c10.dll'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\MSVCP140.dll') '包内 VC++ MSVCP140（WinError 126 依赖）'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\VCRUNTIME140.dll') '包内 VC++ VCRUNTIME140'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\yt_dlp') '包内参考 TikTok yt-dlp'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\curl_cffi') '包内参考 TikTok curl_cffi'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime') '包内 Python 源码'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '包内复制的 TikTok 下载器源码'
+
+  $playwrightChrome = Get-ChildItem -LiteralPath (Join-Path $resources 'playwright-browsers') -Recurse -Filter 'chrome.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $playwrightChrome) {
+    throw "校验失败：包内缺少 Playwright Chromium：$(Join-Path $resources 'playwright-browsers')"
+  }
+  Write-Host "Playwright Chromium：$($playwrightChrome.FullName)"
 
   Repair-PackedPyvenvHome
 
@@ -263,9 +320,7 @@ if ($SkipPackage) {
   exit 0
 }
 
-if (-not $KeepRelease) {
-  Remove-OldRelease
-}
+Remove-OldRelease
 
 Write-Host "开始 electron-builder（dir），完成后将目录改名为 $distFolderName ..."
 pnpm --filter @koubox/desktop package

@@ -1,4 +1,5 @@
 node_modules/
+.pack/
 dist/
 dist-electron/
 out/

@@ -1,6 +1,6 @@
 {
   "name": "koubox",
-  "version": "0.7.3",
+  "version": "0.8.1",
   "private": true,
   "description": "口播匣 — 本地桌面工具箱",
   "type": "module",

@@ -11,7 +11,9 @@ dependencies = [
   "demucs>=4.0.1",
   "faster-whisper>=1.2.1",
   "soundfile>=0.12.1",
-  "transformers>=5.6.0"
+  "transformers>=5.6.0",
+  "yt-dlp>=2026.7.4",
+  "curl_cffi>=0.16,<1.0"
 ]
 
 [build-system]

@@ -5,6 +5,7 @@ import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { Badge } from '../components/common/Badge'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { formatTaskPercent } from '../utils/progress'
 import { VideoUrlField, VideoPreviewSlot, useVideoDownloadTask } from '../components/download'
 
 type VideoDownloaderPageProps = {
@@ -131,7 +132,7 @@ export function VideoDownloaderPage({
               )}
             </div>
             {task && (
-              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{task.percent}%</span>
+              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{formatTaskPercent(task.percent)}</span>
             )}
           </div>
 

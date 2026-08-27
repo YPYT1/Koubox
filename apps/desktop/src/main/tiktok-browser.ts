@@ -1,6 +1,8 @@
 import { BrowserWindow, session } from 'electron'
-import type { PublicMediaResolution } from '@koubox/core'
+import { normalizeTikTokVideoUrl, type PublicMediaResolution } from '@koubox/core'
 import { normalizeProxyUrl } from '@koubox/shared'
+
+const TIKTOK_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'
 
 type CapturedMedia = {
   url: string
@@ -23,6 +25,7 @@ function rankCapturedMedia(candidates: CapturedMedia[], videoId: string | undefi
 
 /** Anonymous, isolated Chromium fallback for public TikTok media. */
 export async function resolveTikTokBrowserMedia(url: string, proxy: string): Promise<PublicMediaResolution> {
+  const canonicalUrl = normalizeTikTokVideoUrl(url)
   const partition = `koubox-public-media-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const isolatedSession = session.fromPartition(partition, { cache: false })
   const normalizedProxy = normalizeProxyUrl(proxy)
@@ -41,7 +44,7 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
   })
   window.webContents.setAudioMuted(true)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  const videoId = new URL(url).pathname.match(/\/video\/(\d+)/)?.[1]
+  const videoId = new URL(canonicalUrl).pathname.match(/\/video\/(\d+)/)?.[1]
   const mediaRequests = new Map<string, CapturedMedia>()
   const rememberMedia = (candidate: string, requestHeaders?: Record<string, string>) => {
     if (!/^https?:\/\//i.test(candidate) || !isTikTokMediaUrl(candidate)) return
@@ -60,7 +63,7 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
     if (!disposing) event.preventDefault()
   })
   try {
-    await window.loadURL(url, { userAgent: isolatedSession.getUserAgent() })
+    await window.loadURL(canonicalUrl, { userAgent: TIKTOK_BROWSER_USER_AGENT })
     const deadline = Date.now() + 30_000
     let firstMediaAt = 0
     while (Date.now() < deadline) {
@@ -88,13 +91,13 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
     }
     const candidates = rankCapturedMedia([...mediaRequests.values()], videoId)
     const selected = candidates[0]
-    if (!selected) throw new Error('匿名浏览器已打开页面，但没有观察到公开视频流。')
+    if (!selected) throw new Error('匿名浏览器已打开页面，但没有观察到公开视频流（页面可能被 TikTok 风控或当前网络未返回媒体请求）。')
     const cookies = await isolatedSession.cookies.get({ url: selected.url })
     return {
       source: 'browser',
       videoUrl: selected.url,
       alternateVideoUrls: candidates.slice(1).map((candidate) => candidate.url),
-      referer: selected.requestHeaders?.Referer ?? selected.requestHeaders?.referer ?? url,
+      referer: selected.requestHeaders?.Referer ?? selected.requestHeaders?.referer ?? canonicalUrl,
       userAgent: selected.requestHeaders?.['User-Agent']
         ?? selected.requestHeaders?.['user-agent']
         ?? isolatedSession.getUserAgent(),

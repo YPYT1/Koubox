@@ -1,4 +1,5 @@
 import { CheckCircle, CircleNotch, WarningCircle } from '@phosphor-icons/react'
+import { formatTaskPercent } from '../../utils/progress'
 
 export interface StepItemDef {
   stage: string
@@ -57,7 +58,7 @@ export function PipelineStepper({
                 <div className="step-title">{step.label}</div>
                 <div className="step-status-text">
                   {state === 'current'
-                    ? `${message || '处理中'} · ${percent}%`
+                    ? `${message || '处理中'} · ${formatTaskPercent(percent)}`
                     : state === 'done'
                     ? '已完成'
                     : state === 'error'
@@ -68,7 +69,7 @@ export function PipelineStepper({
                   <div className={`step-progress-track ${status === 'running' ? 'working' : ''}`}>
                     {status === 'running' && <div className="step-progress-indeterminate" />}
                     {percent > 0 && (
-                      <div className="step-progress-fill" style={{ width: `${Math.max(8, percent)}%` }} />
+                      <div className="step-progress-fill" style={{ width: `${Math.max(8, Math.min(100, Number.isFinite(percent) ? percent : 0))}%` }} />
                     )}
                   </div>
                 )}

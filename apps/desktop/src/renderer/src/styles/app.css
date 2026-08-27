@@ -1745,6 +1745,11 @@ button:disabled {
   font-weight: 650;
   font-family: var(--font-mono);
   color: var(--accent-teal);
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .task-percent-tag.pulsing {

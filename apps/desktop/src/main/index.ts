@@ -8,6 +8,7 @@ import { buildLoginCookieStatus, applyLoginSessionProxy, resolvePlatformAuthenti
 import { resolveFacebookAnonymousWithChromium } from './facebook-browser'
 import { clearAppCache, resolveAppDataRoots, applyPendingDiskClear } from './clear-cache'
 import { resolveTikTokBrowserMedia } from './tiktok-browser'
+import { downloadTikTokWithReference } from './tiktok-reference'
 
 let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
@@ -207,6 +208,15 @@ async function createWindow(): Promise<void> {
     projectDirectory,
     pythonProjectDirectory: findPythonProjectDirectory(),
     bundledPythonExecutable: findBundledPythonExecutable(),
+    downloadTikTokPublic: (url, directory, fileStem, onLine) => downloadTikTokWithReference({
+      url,
+      directory,
+      fileStem,
+      onLine,
+      pythonExecutable: findBundledPythonExecutable() ?? join(findPythonProjectDirectory(), '.venv', 'Scripts', 'python.exe'),
+      pythonSourceDirectory: join(findPythonProjectDirectory(), 'src'),
+      ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin')
+    }),
     pinBundledPaths: app.isPackaged,
     resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: resolveFacebookAnonymousWithChromium,
@@ -302,6 +312,30 @@ async function createWindow(): Promise<void> {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
+    const editShortcut = input.control || input.meta
+    if (editShortcut) {
+      const key = input.key.toLowerCase()
+      if (key === 'c') {
+        event.preventDefault()
+        mainWindow?.webContents.copy()
+        return
+      }
+      if (key === 'x') {
+        event.preventDefault()
+        mainWindow?.webContents.cut()
+        return
+      }
+      if (key === 'v') {
+        event.preventDefault()
+        mainWindow?.webContents.paste()
+        return
+      }
+      if (key === 'a') {
+        event.preventDefault()
+        mainWindow?.webContents.selectAll()
+        return
+      }
+    }
     const isF12 = input.key === 'F12' || input.code === 'F12'
     const isDevShortcut = (input.control || input.meta) && input.shift && (input.key === 'I' || input.key === 'i' || input.code === 'KeyI')
     if (!isF12 && !isDevShortcut) return

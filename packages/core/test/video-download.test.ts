@@ -47,9 +47,31 @@ const directResolution: PublicMediaResolution = {
 }
 
 describe('public video download pipeline', () => {
+  it('uses the copied reference TikTok downloader before browser fallback', async () => {
+    const calls: string[] = []
+    const request = createRequest({
+      downloadTikTokPublic: async (_url, directory, fileStem) => {
+        calls.push('reference')
+        const path = join(directory, `${fileStem}.mp4`)
+        writeFileSync(path, 'media')
+        return path
+      },
+      resolveTikTokBrowserMedia: async () => {
+        calls.push('browser')
+        return { ...directResolution, source: 'browser' }
+      }
+    })
+
+    const result = await downloadVideo(request)
+
+    expect(result.strategy).toBe('tiktok-reference')
+    expect(calls).toEqual(['reference'])
+  })
+
   it('uses a directly resolved public stream before browser or yt-dlp fallbacks', async () => {
     const calls: string[] = []
     const request = createRequest({
+      url: 'https://www.instagram.com/p/abc',
       resolvePublicMedia: async () => {
         calls.push('direct')
         return directResolution
@@ -71,13 +93,9 @@ describe('public video download pipeline', () => {
     expect(calls).toEqual(['direct', '公开媒体下载'])
   })
 
-  it('falls back to the anonymous TikTok browser after direct page resolution fails', async () => {
+  it('starts TikTok with the anonymous browser before any authenticated fallback', async () => {
     const calls: string[] = []
     const request = createRequest({
-      resolvePublicMedia: async () => {
-        calls.push('direct')
-        throw new Error('challenge')
-      },
       resolveTikTokBrowserMedia: async () => {
         calls.push('browser')
         return { ...directResolution, source: 'browser' }
@@ -92,12 +110,13 @@ describe('public video download pipeline', () => {
     const result = await downloadVideo(request)
 
     expect(result.strategy).toBe('tiktok-browser')
-    expect(calls).toEqual(['direct', 'browser', '公开媒体下载'])
+    expect(calls).toEqual(['browser', '公开媒体下载'])
   })
 
   it('tries alternate public media URLs before leaving the public-page strategy', async () => {
     const attemptedInputs: string[] = []
     const request = createRequest({
+      url: 'https://www.instagram.com/p/abc',
       resolvePublicMedia: async () => ({
         ...directResolution,
         videoUrl: 'https://cdn.example/expired.mp4',
@@ -150,7 +169,7 @@ describe('public video download pipeline', () => {
 
     await expect(downloadVideo(request)).rejects.toThrow('TikTok 公开视频解析失败')
 
-    expect(calls).toEqual(['direct', 'browser', 'browser', 'browser'])
+    expect(calls).toEqual(['browser', 'browser', 'browser'])
     expect(ytdlpArgs).toEqual([])
   })
 
@@ -288,6 +307,7 @@ describe('public video download pipeline', () => {
     const calls: string[] = []
     let mediaAttempts = 0
     const request = createRequest({
+      url: 'https://www.instagram.com/p/abc',
       resolvePublicMedia: async () => {
         calls.push('direct')
         return directResolution
