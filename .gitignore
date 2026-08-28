@@ -18,6 +18,7 @@ python/asr-smoke.wav
 python/smoke-output/
 model/
 models/
+models
 vendor/**/*
 !vendor/.gitkeep
 *.local

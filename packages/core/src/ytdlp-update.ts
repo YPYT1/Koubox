@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { basename, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { YtdlpUpdateStatus } from '@koubox/shared'
+import { createLogger } from '@koubox/shared/logger'
+
+const log = createLogger('ytdlp')
 
 export const BUNDLED_YTDLP_VERSION = '2026.08.25.233329'
 export const BUNDLED_YTDLP_SHA256 = '05d3bd5d2ae149256ebf9f2840b5a8daf6e6f1a2f9a346eb60e1fd906ba06ba8'
@@ -20,8 +23,20 @@ type ActiveMetadata = { version: string; sha256: string; filename: string; insta
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
 
 function commandOutput(executable: string, args: string[]): { status: number | null; output: string } {
+  const startedAt = Date.now()
+  log.debug('外部命令开始', { executable, args })
   const result = spawnSync(executable, args, { encoding: 'utf8', windowsHide: true, timeout: 50_000 })
-  return { status: result.status, output: `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim() }
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
+  log.debug('外部命令完成', {
+    executable,
+    args,
+    durationMs: Date.now() - startedAt,
+    exitCode: result.status,
+    signal: result.signal,
+    outputBytes: output.length,
+    timedOut: result.error?.message?.includes('ETIMEDOUT') ?? false
+  })
+  return { status: result.status, output }
 }
 
 function defaultVersionOf(executable: string): string | undefined {
@@ -41,20 +56,35 @@ function fileDigest(path: string): string {
 export type YtdlpRuntimeInspection = {
   version?: string
   ejsVersion?: string
+  denoVersion?: string
   jsRuntimeVersion?: string
   providerReady: boolean
   output: string
 }
 
-export function inspectYtdlpRuntime(
+export type ActiveYtdlpRuntime = {
+  executable: string
+  source: 'bundled' | 'user-update'
+  channel: 'nightly'
+  runtimeInspection?: YtdlpRuntimeInspection
+}
+
+function inspectYtdlpRuntimeWithKnownVersion(
   executable: string,
   denoExecutable: string,
-  probeProvider = false
+  probeProvider = false,
+  knownVersion?: string
 ): YtdlpRuntimeInspection {
-  const version = defaultVersionOf(executable)
+  const startedAt = Date.now()
+  log.debug('yt-dlp 运行时检查开始', { executable, denoExecutable, probeProvider })
+  const version = knownVersion ?? defaultVersionOf(executable)
   const deno = existsSync(denoExecutable) ? commandOutput(denoExecutable, ['--version']) : { status: null, output: '' }
-  const jsRuntimeVersion = deno.status === 0 ? deno.output.match(/^deno\s+([^\s]+)/m)?.[1] : undefined
-  if (!version) return { version, jsRuntimeVersion, providerReady: false, output: '' }
+  const denoVersion = deno.status === 0 ? deno.output.split(/\r?\n/)[0]?.trim() || undefined : undefined
+  const jsRuntimeVersion = denoVersion?.match(/^deno\s+([^\s]+)/)?.[1]
+  if (!version) {
+    log.debug('yt-dlp 运行时检查结束：版本不可用', { durationMs: Date.now() - startedAt, executable, denoExecutable })
+    return { version, denoVersion, jsRuntimeVersion, providerReady: false, output: '' }
+  }
   const diagnostics = commandOutput(executable, [
     '--ignore-config', '--verbose', '--js-runtimes', `deno:${denoExecutable}`,
     ...(probeProvider ? ['--simulate', '--skip-download', EJS_PROBE_URL] : ['--list-extractors'])
@@ -64,13 +94,34 @@ export function inspectYtdlpRuntime(
   const providerReady = probeProvider
     ? /JS Challenge Providers:[^\r\n]*\bdeno\b/i.test(diagnostics.output)
     : Boolean(runtimeDetected)
-  return {
+  const result = {
     version,
     ejsVersion,
+    denoVersion,
     jsRuntimeVersion: runtimeDetected ?? jsRuntimeVersion,
     providerReady,
     output: diagnostics.output
   }
+  log.debug('yt-dlp 运行时检查结束', {
+    durationMs: Date.now() - startedAt,
+    executable,
+    denoExecutable,
+    version: result.version,
+    ejsVersion: result.ejsVersion,
+    denoVersion: result.denoVersion,
+    jsRuntimeVersion: result.jsRuntimeVersion,
+    providerReady: result.providerReady,
+    diagnosticsBytes: result.output.length
+  })
+  return result
+}
+
+export function inspectYtdlpRuntime(
+  executable: string,
+  denoExecutable: string,
+  probeProvider = false
+): YtdlpRuntimeInspection {
+  return inspectYtdlpRuntimeWithKnownVersion(executable, denoExecutable, probeProvider)
 }
 
 function releaseAsset(release: Release): { version: string; url: string; sha256: string } {
@@ -92,20 +143,25 @@ export function createYtdlpUpdateManager(options: {
   denoSha256?: string
   fetcher?: Fetcher
   versionOf?: (executable: string) => string | undefined
-  validateExecutable?: (executable: string, expectedVersion: string, probeProvider: boolean) => void
+  validateExecutable?: (
+    executable: string,
+    expectedVersion: string,
+    probeProvider: boolean,
+    knownVersion?: string
+  ) => YtdlpRuntimeInspection | void
 }) {
   const fetcher = options.fetcher ?? fetch
   const versionOf = options.versionOf ?? defaultVersionOf
   const bundledSha256 = options.bundledSha256 ?? BUNDLED_YTDLP_SHA256
   const denoSha256 = options.denoSha256 ?? BUNDLED_DENO_SHA256
   const metadataFile = join(options.updateDirectory, 'active.json')
-  const validationCache = new Set<string>()
+  const validationCache = new Map<string, YtdlpRuntimeInspection | undefined>()
 
-  const validateExecutable = options.validateExecutable ?? ((executable: string, expectedVersion: string, probeProvider: boolean): void => {
+  const validateExecutable = options.validateExecutable ?? ((executable: string, expectedVersion: string, probeProvider: boolean, knownVersion?: string): YtdlpRuntimeInspection => {
     if (!existsSync(options.denoExecutable)) throw new Error(`Deno 运行时不存在：${options.denoExecutable}`)
     const actualDenoHash = fileDigest(options.denoExecutable)
     if (actualDenoHash !== denoSha256) throw new Error(`Deno SHA-256 校验失败：${actualDenoHash}`)
-    const inspected = inspectYtdlpRuntime(executable, options.denoExecutable, probeProvider)
+    const inspected = inspectYtdlpRuntimeWithKnownVersion(executable, options.denoExecutable, probeProvider, knownVersion)
     if (inspected.version !== expectedVersion) {
       throw new Error(`yt-dlp 版本校验失败：期望 ${expectedVersion}，实际 ${inspected.version ?? '无法运行'}`)
     }
@@ -118,21 +174,29 @@ export function createYtdlpUpdateManager(options: {
       if (!inspected.ejsVersion) throw new Error('yt-dlp 可执行文件未检测到内置 yt-dlp-ejs。')
       if (!inspected.providerReady) throw new Error('yt-dlp 未能启用 Deno JS Challenge Provider。')
     }
+    return inspected
   })
 
-  const validateCandidate = (executable: string, expectedVersion: string, expectedHash: string, probeProvider = false): void => {
+  const validateCandidate = (executable: string, expectedVersion: string, expectedHash: string, probeProvider = false): YtdlpRuntimeInspection | undefined => {
     if (!existsSync(executable)) throw new Error(`yt-dlp 文件不存在：${executable}`)
     const stat = statSync(executable)
-    const cacheKey = `${executable}|${stat.size}|${stat.mtimeMs}|${expectedVersion}|${expectedHash}|${probeProvider}`
-    if (validationCache.has(cacheKey)) return
+    const denoIdentity = existsSync(options.denoExecutable)
+      ? (() => {
+          const denoStat = statSync(options.denoExecutable)
+          return `${denoStat.size}|${denoStat.mtimeMs}|${denoStat.ctimeMs}`
+        })()
+      : 'missing'
+    const cacheKey = `${executable}|${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}|${expectedVersion}|${expectedHash}|${probeProvider}|${options.denoExecutable}|${denoIdentity}|${denoSha256}`
+    if (validationCache.has(cacheKey)) return validationCache.get(cacheKey)
     const actualHash = fileDigest(executable)
     if (actualHash !== expectedHash) throw new Error(`yt-dlp SHA-256 校验失败：${actualHash}`)
     const actualVersion = versionOf(executable)
     if (actualVersion !== expectedVersion) {
       throw new Error(`yt-dlp 版本校验失败：期望 ${expectedVersion}，实际 ${actualVersion ?? '无法运行'}`)
     }
-    validateExecutable(executable, expectedVersion, probeProvider)
-    validationCache.add(cacheKey)
+    const runtimeInspection = validateExecutable(executable, expectedVersion, probeProvider, actualVersion) ?? undefined
+    validationCache.set(cacheKey, runtimeInspection)
+    return runtimeInspection
   }
 
   const readActiveMetadata = (): ActiveMetadata | undefined => {
@@ -145,18 +209,18 @@ export function createYtdlpUpdateManager(options: {
     }
   }
 
-  const bundled = (): { executable: string; source: 'bundled'; channel: 'nightly' } => {
-    validateCandidate(options.bundledExecutable, BUNDLED_YTDLP_VERSION, bundledSha256)
-    return { executable: options.bundledExecutable, source: 'bundled', channel: 'nightly' }
+  const bundled = (): ActiveYtdlpRuntime => {
+    const runtimeInspection = validateCandidate(options.bundledExecutable, BUNDLED_YTDLP_VERSION, bundledSha256)
+    return { executable: options.bundledExecutable, source: 'bundled', channel: 'nightly', runtimeInspection }
   }
 
-  const resolveActive = (): { executable: string; source: 'bundled' | 'user-update'; channel: 'nightly' } => {
+  const resolveActive = (): ActiveYtdlpRuntime => {
     const metadata = readActiveMetadata()
     if (metadata) {
       const executable = join(options.updateDirectory, metadata.filename)
       try {
-        validateCandidate(executable, metadata.version, metadata.sha256)
-        return { executable, source: 'user-update', channel: 'nightly' }
+        const runtimeInspection = validateCandidate(executable, metadata.version, metadata.sha256)
+        return { executable, source: 'user-update', channel: 'nightly', runtimeInspection }
       } catch {
         rmSync(options.updateDirectory, { recursive: true, force: true })
       }
@@ -169,7 +233,7 @@ export function createYtdlpUpdateManager(options: {
     const active = resolveActive()
     return {
       channel: 'nightly',
-      currentVersion: versionOf(active.executable) ?? BUNDLED_YTDLP_VERSION,
+      currentVersion: active.runtimeInspection?.version ?? versionOf(active.executable) ?? BUNDLED_YTDLP_VERSION,
       currentSource: active.source,
       updateAvailable: false
     }

@@ -9,6 +9,7 @@ declare global {
       del<T>(path: string): Promise<T>
       mediaUrl(filePath: string): string
       openDevTools(): Promise<boolean>
+      logDebug(message: string, detail?: unknown): Promise<void>
       logError(message: string, detail?: unknown): Promise<void>
       logWarn(message: string, detail?: unknown): Promise<void>
       logInfo(message: string, detail?: unknown): Promise<void>

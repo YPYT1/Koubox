@@ -171,6 +171,7 @@ export function SettingsPage({
   onChooseFile,
   onShowToast
 }: SettingsPageProps) {
+  const initialRefreshStartedRef = useRef(false)
   const [guide, setGuide] = useState<GuideKind | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [openingLogin, setOpeningLogin] = useState<YtdlpCookiePlatformId | null>(null)
@@ -250,10 +251,9 @@ export function SettingsPage({
   }
 
   useEffect(() => {
+    if (initialRefreshStartedRef.current) return
+    initialRefreshStartedRef.current = true
     void refreshCookieStatus()
-  }, [])
-
-  useEffect(() => {
     void window.koubox.get<AppDataRoots>('/system/data-roots')
       .then((roots) => setAppDataRoots(roots))
       .catch(() => setAppDataRoots(null))

@@ -7,6 +7,7 @@ import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, 
 import { assertDownloadableVideoUrl, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
+import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
 
 type FileFilter = { name: string; extensions: string[] }
@@ -28,7 +29,7 @@ type ServerOptions = {
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
   resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
   resolvePlatformAuthentication?(platformId: YtdlpCookiePlatformId, auth: PlatformAuthEntry): Promise<import('./video-download.js').AuthenticatedCookieFile>
-  resolveActiveYtdlp(): { executable: string; source: 'bundled' | 'user-update'; channel: 'nightly' }
+  resolveActiveYtdlp(): ActiveYtdlpRuntime
   checkYtdlpUpdate(): Promise<YtdlpUpdateStatus>
   installYtdlpUpdate(version: string): Promise<YtdlpUpdateStatus>
   restoreBundledYtdlp(): Promise<YtdlpUpdateStatus>
@@ -111,6 +112,31 @@ function asPlatformAuth(value: unknown, fallback: PlatformAuthConfig): PlatformA
   return next
 }
 
+function summarizeRequestBody(body: unknown): Record<string, unknown> | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return undefined
+  const record = body as Record<string, unknown>
+  const stringLengths: Record<string, number> = {}
+  const arrayLengths: Record<string, number> = {}
+  const objectKeyCounts: Record<string, number> = {}
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === 'string') stringLengths[key] = value.length
+    else if (Array.isArray(value)) arrayLengths[key] = value.length
+    else if (value && typeof value === 'object') objectKeyCounts[key] = Object.keys(value).length
+  }
+  return { keys: Object.keys(record), stringLengths, arrayLengths, objectKeyCounts }
+}
+
+function safeRequestUrl(requestUrl: string | undefined): string | undefined {
+  if (!requestUrl) return requestUrl
+  try {
+    const url = new URL(requestUrl, 'http://127.0.0.1')
+    url.searchParams.delete('token')
+    return `${url.pathname}${url.search}`
+  } catch {
+    return requestUrl.split('?')[0]
+  }
+}
+
 function readVideoPipelineInput(body: Record<string, unknown>, defaultOutputDirectory: string): {
   url: string
   outputDirectory: string
@@ -151,6 +177,7 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
 
 export async function startLocalApi(options: ServerOptions) {
   const apiLog = createLogger('api')
+  let requestSequence = 0
   const store = new RuntimeStore(options.configFile, options.defaults, Boolean(options.pinBundledPaths))
   const resolveVendor = () => {
     const base = resolveVendorPaths(store.read())
@@ -172,24 +199,33 @@ export async function startLocalApi(options: ServerOptions) {
   const token = randomBytes(24).toString('hex')
   const server = createServer(async (request, response) => {
     const startTime = Date.now()
+    const requestId = ++requestSequence
     let requestBody: unknown = undefined
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const method = request.method ?? 'GET'
-      apiLog.info(`→ ${method} ${url.pathname}${url.search}`)
+      response.once('finish', () => {
+        apiLog.debug('API 请求完成', {
+          requestId,
+          method,
+          path: url.pathname,
+          status: response.statusCode,
+          durationMs: Date.now() - startTime
+        })
+      })
+      apiLog.info(`→ ${method} ${url.pathname}${url.searchParams.has('token') ? '?token=<redacted>' : url.search}`, { requestId })
       if (method === 'OPTIONS') {
         response.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
+          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          'Access-Control-Max-Age': '600'
         })
         return response.end()
       }
       if (request.headers.authorization !== `Bearer ${token}` && url.searchParams.get('token') !== token) {
         return json(response, 401, { error: 'Unauthorized local request' })
       }
-      const config = store.read()
-
       if (method === 'GET' && url.pathname === '/health') return json(response, 200, { ok: true })
       if (method === 'GET' && url.pathname === '/media') {
         const filePath = normalizeOsPath(url.searchParams.get('path') ?? '')
@@ -243,12 +279,41 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'GET' && url.pathname === '/tools') return json(response, 200, tools)
       if (method === 'GET' && url.pathname === '/tasks') return json(response, 200, tasks.list())
-      if (method === 'GET' && url.pathname === '/runtime/status') return json(response, 200, getRuntimeStatus(config, options.resolveActiveYtdlp()))
-      if (method === 'GET' && url.pathname === '/config') return json(response, 200, config)
+
+      const configStartedAt = Date.now()
+      const config = store.read()
+      apiLog.debug('请求配置读取完成', {
+        requestId,
+        path: url.pathname,
+        durationMs: Date.now() - configStartedAt,
+        modelsDirectory: config.modelsDirectory,
+        ytdlpDirectory: config.ytdlpDirectory,
+        ffmpegDirectory: config.ffmpegDirectory,
+        denoDirectory: config.denoDirectory
+      })
+
+      if (method === 'GET' && url.pathname === '/runtime/status') {
+        const activeStartedAt = Date.now()
+        const activeYtdlp = options.resolveActiveYtdlp()
+        apiLog.debug('活动 yt-dlp 解析完成', {
+          requestId,
+          durationMs: Date.now() - activeStartedAt,
+          source: activeYtdlp.source,
+          channel: activeYtdlp.channel
+        })
+        const statusStartedAt = Date.now()
+        const status = getRuntimeStatus(config, activeYtdlp)
+        apiLog.debug('运行时状态响应准备完成', { requestId, durationMs: Date.now() - statusStartedAt })
+        return json(response, 200, status)
+      }
+      if (method === 'GET' && url.pathname === '/config') {
+        apiLog.debug('配置响应准备完成', { requestId, configFile: options.configFile })
+        return json(response, 200, config)
+      }
       if (method === 'PUT' && url.pathname === '/config') {
         const body = await readJson(request)
         requestBody = body
-        apiLog.info('更新配置', { keys: Object.keys(body) })
+        apiLog.info('更新配置', { requestId, keys: Object.keys(body), bodySummary: summarizeRequestBody(body) })
         const next = mergeConfig(body, config)
         mkdirSync(next.outputDirectory, { recursive: true })
         const result = store.write(next)
@@ -270,7 +335,10 @@ export async function startLocalApi(options: ServerOptions) {
         })
         return json(response, 200, next)
       }
-      if (method === 'POST' && url.pathname === '/runtime/refresh') return json(response, 200, getRuntimeStatus(config, options.resolveActiveYtdlp()))
+      if (method === 'POST' && url.pathname === '/runtime/refresh') {
+        const activeYtdlp = options.resolveActiveYtdlp()
+        return json(response, 200, getRuntimeStatus(config, activeYtdlp))
+      }
       if (method === 'POST' && url.pathname === '/runtime/ytdlp/check-update') {
         return json(response, 200, await options.checkYtdlpUpdate())
       }
@@ -455,11 +523,12 @@ export async function startLocalApi(options: ServerOptions) {
       const errorMessage = error instanceof Error ? error.message : String(error)
       const errorStack = error instanceof Error ? error.stack : undefined
       apiLog.error(`✗ 请求失败`, {
+        requestId,
         method: request.method,
-        url: request.url,
+        url: safeRequestUrl(request.url),
         error: errorMessage,
         stack: errorStack,
-        body: requestBody,
+        bodySummary: summarizeRequestBody(requestBody),
         duration: `${Date.now() - startTime}ms`
       })
       return json(response, 400, { error: 'Bad request', detail: errorMessage })

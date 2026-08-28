@@ -40,6 +40,24 @@ function defaults(modelsDirectory: string): KouboxConfig {
 }
 
 describe('Faster-Whisper ASR configuration', () => {
+  it('isolates cached snapshots and reloads when runtime.json changes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-cache-'))
+    temporaryRoots.push(root)
+    const modelsDirectory = join(root, 'models')
+    const runtimeFile = join(root, 'runtime.json')
+    const initial = defaults(modelsDirectory)
+    writeFileSync(runtimeFile, JSON.stringify(initial), 'utf8')
+    const store = new RuntimeStore(runtimeFile, initial)
+
+    const first = store.read()
+    first.outputDirectory = 'mutated-outside-store'
+    expect(store.read().outputDirectory).toBe(initial.outputDirectory)
+
+    const changed = { ...initial, outputDirectory: join(root, 'changed-output-directory') }
+    writeFileSync(runtimeFile, JSON.stringify(changed), 'utf8')
+    expect(store.read().outputDirectory).toBe(changed.outputDirectory)
+  })
+
   it('migrates the legacy Turbo path to the Faster-Whisper Large-v3 directory', () => {
     const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-asr-'))
     temporaryRoots.push(root)
@@ -84,7 +102,7 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.ytdlpDirectory).toBe(bundledDefaults.ytdlpDirectory)
     expect(config.ffmpegDirectory).toBe(bundledDefaults.ffmpegDirectory)
     expect(config.denoDirectory).toBe(bundledDefaults.denoDirectory)
-    expect(config.asrModelDirectory).toBe(bundledDefaults.asrModelDirectory)
+    expect(config.asrModelDirectory).toBe(join(userModels, 'faster-whisper-large-v3'))
     expect(config.ytdlpPlatformAuth.instagram.cookies).toBe('sessionid=should-stay')
     expect(config.debugMode).toBe(true)
   })
@@ -126,6 +144,52 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
     expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
     expect(JSON.parse(readFileSync(runtimeFile, 'utf8')).ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
+  })
+
+  it('migrates the experimental worktree FFmpeg path to this checkout defaults', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-exp-vendor-'))
+    temporaryRoots.push(root)
+    const runtimeFile = join(root, 'runtime.json')
+    const configured = defaults(join(root, 'models'))
+    const currentDefaults = {
+      ...configured,
+      ytdlpDirectory: join(root, 'current-vendor', 'yt-dlp'),
+      ffmpegDirectory: join(root, 'current-vendor', 'ffmpeg', 'bin')
+    }
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...configured,
+      ytdlpDirectory: 'D:\\Project\\Koubox-exp-platform-fetch\\vendor\\yt-dlp',
+      ffmpegDirectory: 'D:\\Project\\Koubox-exp-platform-fetch\\vendor\\ffmpeg\\bin'
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, currentDefaults).read()
+
+    expect(config.ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
+    expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
+  })
+
+  it('migrates old Koubox model paths to the current checkout models directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-model-paths-'))
+    temporaryRoots.push(root)
+    const runtimeFile = join(root, 'runtime.json')
+    const currentModels = join(root, 'models')
+    const configured = defaults(currentModels)
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...configured,
+      modelsDirectory: 'D:\\Project\\Koubox\\models',
+      asrModelDirectory: 'D:\\Project\\Koubox\\models\\faster-whisper-large-v3',
+      translationModelDirectory: 'D:\\Project\\Koubox\\models\\HYMT21.8B',
+      demucsModelDirectory: 'D:\\Project\\Koubox\\models\\demucs'
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, configured).read()
+
+    expect(config.modelsDirectory).toBe(currentModels)
+    expect(config.asrModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3'))
+    expect(config.translationModelDirectory).toBe(join(currentModels, 'HYMT21.8B'))
+    expect(config.demucsModelDirectory).toBe(join(currentModels, 'demucs'))
+    const persisted = JSON.parse(readFileSync(runtimeFile, 'utf8')) as KouboxConfig
+    expect(persisted.modelsDirectory).toBe(currentModels)
   })
 
   it('preserves existing per-platform modes and pasted cookie contents', () => {

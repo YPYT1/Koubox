@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createYtdlpUpdateManager, startLocalApi } from '@koubox/core'
 import { defaultPlatformAuth, PLATFORM_HOMEPAGES, type YtdlpCookiePlatformId } from '@koubox/shared'
-import { initLogger, createLogger } from '@koubox/shared/logger'
+import { closeLogger, initLogger, createLogger } from '@koubox/shared/logger'
 import { buildLoginCookieStatus, applyLoginSessionProxy, resolvePlatformAuthentication } from './cookies'
 import { resolveFacebookAnonymousWithChromium } from './facebook-browser'
 import { clearAppCache, resolveAppDataRoots, applyPendingDiskClear } from './clear-cache'
@@ -13,6 +13,7 @@ import { downloadTikTokWithReference } from './tiktok-reference'
 let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
 let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
+let quitCleanupStarted = false
 
 /** 便携包：用户数据与 Cookie 放在 exe 旁 userdata，不共用开发机 AppData。 */
 function usePortableUserData(): void {
@@ -151,7 +152,10 @@ async function createWindow(): Promise<void> {
   // entry_impl.cc "No file for …" freezes after a mid-run cache clear.
   await applyPendingDiskClear(projectDirectory)
   // Dev logs → repo/logs；打包便携包 logs → exe 旁 userdata/logs
-  initLogger(app.isPackaged ? userData : projectDirectory)
+  initLogger(app.isPackaged ? userData : projectDirectory, {
+    defaultLevel: app.isPackaged ? 'info' : 'debug',
+    defaultVerbose: !app.isPackaged
+  })
   const mainLog = createLogger('main')
   mainLog.info('========== 应用启动 ==========')
   mainLog.info('环境信息', {
@@ -279,7 +283,24 @@ async function createWindow(): Promise<void> {
   })
 
   mainLog.info('本地 API 已启动', { baseUrl: localApi.baseUrl })
-  mainLog.info('初始配置', localApi.getConfig())
+  const initialConfig = localApi.getConfig()
+  mainLog.debug('初始配置已加载', {
+    modelsDirectory: initialConfig.modelsDirectory,
+    asrModelDirectory: initialConfig.asrModelDirectory,
+    translationModelDirectory: initialConfig.translationModelDirectory,
+    demucsModelDirectory: initialConfig.demucsModelDirectory,
+    ytdlpDirectory: initialConfig.ytdlpDirectory,
+    ffmpegDirectory: initialConfig.ffmpegDirectory,
+    denoDirectory: initialConfig.denoDirectory,
+    outputDirectory: initialConfig.outputDirectory,
+    ytdlpProxyConfigured: Boolean(initialConfig.ytdlpProxy),
+    platformAuth: Object.fromEntries(Object.entries(initialConfig.ytdlpPlatformAuth).map(([id, auth]) => [id, {
+      mode: auth.mode,
+      cookiesLength: auth.cookies.length,
+      cookiesConfigured: Boolean(auth.cookies.trim())
+    }])),
+    debugMode: initialConfig.debugMode
+  })
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -363,6 +384,11 @@ ipcMain.handle('log:error', (_event, message: string, detail?: unknown) => {
   frontendLog.error(message, detail)
 })
 
+ipcMain.handle('log:debug', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.debug(message, detail)
+})
+
 ipcMain.handle('log:warn', (_event, message: string, detail?: unknown) => {
   const frontendLog = createLogger('frontend')
   frontendLog.warn(message, detail)
@@ -376,7 +402,14 @@ ipcMain.handle('log:info', (_event, message: string, detail?: unknown) => {
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', () => {
-  void localApi?.close()
+  void localApi?.close().catch(() => undefined)
 })
-app.on('will-quit', () => { globalShortcut.unregisterAll() })
+app.on('will-quit', (event) => {
+  globalShortcut.unregisterAll()
+  if (quitCleanupStarted) return
+  quitCleanupStarted = true
+  event.preventDefault()
+  createLogger('main').info('========== 应用退出 ==========')
+  void closeLogger().finally(() => app.quit())
+})
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow() })

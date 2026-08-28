@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, type WriteStream } from 'node:fs'
 import { join } from 'node:path'
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -14,6 +14,12 @@ let projectRoot = ''
 let minLevel: LogLevel = 'info'
 let verbose = false
 let logFilePath = ''
+let logStream: WriteStream | undefined
+
+export type LoggerInitOptions = {
+  defaultLevel?: LogLevel
+  defaultVerbose?: boolean
+}
 
 function parseLevel(value: string | undefined): LogLevel {
   const level = (value ?? 'info').toLowerCase()
@@ -73,24 +79,36 @@ function writeLog(level: LogLevel, component: string, message: string, detail?: 
   if (level === 'error') console.error(line)
   else if (level === 'warn') console.warn(line)
   else console.log(line)
-  if (!logFilePath) return
-  appendFileSync(logFilePath, `${line}\n`, 'utf8')
+  logStream?.write(`${line}\n`)
 }
 
-export function initLogger(root: string): void {
+export function initLogger(root: string, options: LoggerInitOptions = {}): void {
   projectRoot = root
   const envFile = loadEnvFile(root)
-  // 打包后默认使用 info 级别，确保记录所有重要操作
-  minLevel = parseLevel(process.env.KOUBOX_LOG_LEVEL ?? envFile.KOUBOX_LOG_LEVEL)
-  // 打包后默认启用详细日志
-  verbose = parseBool(process.env.KOUBOX_LOG_VERBOSE ?? envFile.KOUBOX_LOG_VERBOSE) || minLevel === 'debug'
+  minLevel = parseLevel(process.env.KOUBOX_LOG_LEVEL ?? envFile.KOUBOX_LOG_LEVEL ?? options.defaultLevel)
+  const configuredVerbose = process.env.KOUBOX_LOG_VERBOSE ?? envFile.KOUBOX_LOG_VERBOSE
+  verbose = configuredVerbose === undefined
+    ? minLevel === 'debug' || Boolean(options.defaultVerbose)
+    : parseBool(configuredVerbose)
   const logDir = join(root, 'logs', todayDir())
   mkdirSync(logDir, { recursive: true })
   logFilePath = join(logDir, 'koubox.log')
+  logStream?.end()
+  logStream = createWriteStream(logFilePath, { flags: 'a', encoding: 'utf8' })
+  logStream.on('error', (error) => {
+    console.error(`[logger] 写入日志文件失败: ${error.message}`)
+  })
   const startupMsg = `日志系统已初始化 | 级别: ${minLevel} | 详细: ${verbose} | 文件: ${logFilePath}`
   writeLog('info', 'logger', startupMsg)
   // 记录环境信息
   writeLog('info', 'logger', `平台: ${process.platform} | Node: ${process.version} | 架构: ${process.arch}`)
+}
+
+export function closeLogger(): Promise<void> {
+  const stream = logStream
+  logStream = undefined
+  if (!stream || stream.destroyed || stream.writableEnded) return Promise.resolve()
+  return new Promise((resolve) => stream.end(resolve))
 }
 
 export function getLoggerEnv(): Record<string, string> {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { tools as toolCatalog, type KouboxConfig, type RuntimeStatus, type TaskStatus, type ToolId, type ToolManifest } from '@koubox/shared'
 import { Sidebar } from './components/Sidebar'
 import { Toast, type ToastMessage } from './components/common/Toast'
@@ -30,26 +30,75 @@ export function App() {
   const [toolStatuses, setToolStatuses] = useState<Partial<Record<ToolId, TaskStatus>>>({})
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const refreshSequence = useRef(0)
+  const startupRefreshStarted = useRef(false)
 
   const showToast = (text: string, type: ToastMessage['type'] = 'info') => {
     setToast({ id: String(Date.now()), text, type })
   }
 
-  const refreshRuntimeAndConfig = async () => {
+  const refreshRuntimeAndConfig = async (reason = 'manual') => {
+    const refreshId = ++refreshSequence.current
+    const startedAt = performance.now()
+    void window.koubox.logDebug('renderer 状态刷新开始', { refreshId, reason })
+    let firstError: unknown
     try {
-      const [nextRuntime, nextConfig] = await Promise.all([
-        window.koubox.get<RuntimeStatus>('/runtime/status'),
-        window.koubox.get<KouboxConfig>('/config')
-      ])
-      setRuntime(nextRuntime)
+      const nextConfig = await window.koubox.get<KouboxConfig>('/config')
       setConfig(nextConfig)
+      void window.koubox.logDebug('renderer 配置收到', {
+        refreshId,
+        durationMs: Math.round(performance.now() - startedAt),
+        modelsDirectory: nextConfig.modelsDirectory,
+        outputDirectory: nextConfig.outputDirectory
+      })
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '无法连接本地服务', 'error')
+      firstError = error
+      void window.koubox.logDebug('renderer 配置刷新失败', {
+        refreshId,
+        durationMs: Math.round(performance.now() - startedAt),
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+
+    try {
+      const nextRuntime = await window.koubox.get<RuntimeStatus>('/runtime/status')
+      setRuntime(nextRuntime)
+      void window.koubox.logDebug('renderer 运行时状态收到', {
+        refreshId,
+        durationMs: Math.round(performance.now() - startedAt),
+        healthy: nextRuntime.healthy,
+        modelCount: nextRuntime.models.length
+      })
+    } catch (error) {
+      firstError ??= error
+      void window.koubox.logDebug('renderer 运行时状态刷新失败', {
+        refreshId,
+        durationMs: Math.round(performance.now() - startedAt),
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+
+    if (!firstError) {
+      void window.koubox.logDebug('renderer 状态刷新完成', {
+        refreshId,
+        reason,
+        durationMs: Math.round(performance.now() - startedAt)
+      })
+    } else {
+      void window.koubox.logDebug('renderer 状态刷新失败', {
+        refreshId,
+        reason,
+        durationMs: Math.round(performance.now() - startedAt),
+        error: firstError instanceof Error ? firstError.message : String(firstError)
+      })
+      showToast(firstError instanceof Error ? firstError.message : '无法连接本地服务', 'error')
     }
   }
 
   useEffect(() => {
-    void refreshRuntimeAndConfig()
+    if (startupRefreshStarted.current) return
+    startupRefreshStarted.current = true
+    void refreshRuntimeAndConfig('startup')
   }, [])
 
   const handleOpenTool = (tool: ToolManifest) => {
@@ -141,7 +190,7 @@ export function App() {
       const updated = await window.koubox.put<KouboxConfig>('/config', config)
       setConfig(updated)
       showToast('全局配置已保存', 'success')
-      await refreshRuntimeAndConfig()
+      await refreshRuntimeAndConfig('config-save')
     } catch (error) {
       showToast(error instanceof Error ? error.message : '保存失败', 'error')
     }
@@ -177,7 +226,7 @@ export function App() {
             <ModelsPage
               runtime={runtime}
               config={config}
-              onRefresh={() => void refreshRuntimeAndConfig()}
+              onRefresh={() => void refreshRuntimeAndConfig('models-page')}
               onChooseDirectory={handleChooseDirectory}
               onShowToast={showToast}
               onConfigChange={setConfig}

@@ -24,6 +24,8 @@ function fixture(options?: { badDigest?: boolean; rejectVersion?: string }) {
   writeFileSync(bundled, 'bundled')
   writeFileSync(deno, 'deno')
   let latest = '2026.08.26.120000'
+  let versionChecks = 0
+  let runtimeValidations = 0
   const binaries = new Map<string, Uint8Array>()
   binaries.set(latest, new TextEncoder().encode(`binary-${latest}`))
 
@@ -55,26 +57,67 @@ function fixture(options?: { badDigest?: boolean; rejectVersion?: string }) {
     denoSha256: hash(new TextEncoder().encode('deno')),
     fetcher,
     versionOf: (path) => {
+      versionChecks += 1
       if (path === bundled) return BUNDLED_YTDLP_VERSION
       if (!existsSync(path)) return undefined
       const contents = readFileSync(path, 'utf8')
       return contents.match(/^binary-(.+)$/)?.[1]
     },
     validateExecutable: (_path, version) => {
+      runtimeValidations += 1
       if (version === options?.rejectVersion) throw new Error('validation rejected')
+      return {
+        version,
+        denoVersion: 'deno 2.9.5 (stable, release, x86_64-pc-windows-msvc)',
+        jsRuntimeVersion: '2.9.5',
+        providerReady: true,
+        output: 'fixture runtime inspection'
+      }
     }
   })
 
   return {
     manager,
+    deno,
     setLatest(version: string) {
       latest = version
       binaries.set(version, new TextEncoder().encode(`binary-${version}`))
+    },
+    counters() {
+      return { versionChecks, runtimeValidations }
     }
   }
 }
 
 describe('yt-dlp nightly update manager', () => {
+  it('reuses the validated runtime inspection while the active binary is unchanged', () => {
+    const { manager, counters } = fixture()
+
+    const first = manager.resolveActive()
+    const second = manager.resolveActive()
+    const status = manager.status()
+
+    expect(first.runtimeInspection).toEqual(second.runtimeInspection)
+    expect(first.runtimeInspection).toMatchObject({
+      version: BUNDLED_YTDLP_VERSION,
+      denoVersion: 'deno 2.9.5 (stable, release, x86_64-pc-windows-msvc)',
+      jsRuntimeVersion: '2.9.5',
+      providerReady: true
+    })
+    expect(status.currentVersion).toBe(BUNDLED_YTDLP_VERSION)
+    expect(counters()).toEqual({ versionChecks: 1, runtimeValidations: 1 })
+  })
+
+  it('invalidates the runtime inspection when the Deno executable changes', () => {
+    const { manager, deno, counters } = fixture()
+
+    manager.resolveActive()
+    writeFileSync(deno, 'changed-deno-runtime')
+    manager.resolveActive()
+
+    expect(counters()).toEqual({ versionChecks: 2, runtimeValidations: 2 })
+  })
+
   it('checks the nightly channel only when requested', async () => {
     const { manager } = fixture()
     expect(manager.status()).toMatchObject({ currentVersion: BUNDLED_YTDLP_VERSION, updateAvailable: false })

@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId } from '@koubox/shared'
 import { defaultPlatformAuth, normalizeKouboxConfigPaths } from '@koubox/shared'
-import { inspectYtdlpRuntime } from './ytdlp-update.js'
+import { createLogger } from '@koubox/shared/logger'
+import { inspectYtdlpRuntime, type ActiveYtdlpRuntime } from './ytdlp-update.js'
+
+const log = createLogger('runtime')
+const executableVersionCache = new Map<string, string>()
 
 const asrModelFiles = [
   'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
@@ -36,10 +40,19 @@ const ffmpegExpectedFiles = [
 
 function isLegacyDevelopmentVendorPath(directory: string, suffix: 'yt-dlp' | 'ffmpeg/bin'): boolean {
   const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  return normalized.endsWith(`/koubox/vendor/${suffix}`)
+  return normalized.endsWith(`/koubox/vendor/${suffix}`) || normalized.endsWith(`/koubox-exp-platform-fetch/vendor/${suffix}`)
+}
+
+function migrateLegacyDevelopmentModelPath(directory: string, modelsDirectory: string): string {
+  const match = directory.match(/^d:[\\/]project[\\/]koubox[\\/]models(?:[\\/](.*))?$/i)
+  if (!match) return directory
+  if (!match[1]) return modelsDirectory
+  return join(modelsDirectory, ...match[1].split(/[\\/]+/))
 }
 
 export class RuntimeStore {
+  private cached?: { signature: string; config: KouboxConfig }
+
   constructor(
     private readonly file: string,
     private readonly defaults: KouboxConfig,
@@ -62,12 +75,51 @@ export class RuntimeStore {
     }
   }
 
+  private fileSignature(): string | undefined {
+    if (!existsSync(this.file)) return undefined
+    const stat = statSync(this.file)
+    return `${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`
+  }
+
+  private remember(config: KouboxConfig): KouboxConfig {
+    const signature = this.fileSignature()
+    const snapshot = structuredClone(config)
+    if (signature) this.cached = { signature, config: snapshot }
+    else this.cached = undefined
+    return structuredClone(snapshot)
+  }
+
   read(): KouboxConfig {
-    if (!existsSync(this.file)) return this.write(this.defaults)
+    const startedAt = Date.now()
+    const fileExists = existsSync(this.file)
+    const signature = fileExists ? this.fileSignature() : undefined
+    if (signature && this.cached?.signature === signature) {
+      log.debug('配置读取命中缓存', { file: this.file, durationMs: Date.now() - startedAt })
+      return structuredClone(this.cached.config)
+    }
+    log.debug('配置读取开始', { file: this.file, fileExists, pinBundledPaths: this.pinBundledPaths })
+    if (!fileExists) {
+      const created = this.write(this.defaults)
+      log.debug('配置读取完成', { file: this.file, durationMs: Date.now() - startedAt, created: true })
+      return created
+    }
     const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<KouboxConfig>
     const legacy = parsed as Partial<KouboxConfig> & Record<string, unknown>
     const hasLegacyBrowserAuthFields = 'ytdlpCookieSource' in legacy || 'ytdlpCookiesPath' in legacy || 'platformBrowserProfiles' in legacy
     const config = { ...this.defaults, ...parsed }
+    const migratedModelsDirectory = migrateLegacyDevelopmentModelPath(config.modelsDirectory, this.defaults.modelsDirectory)
+    const migratedAsrModelDirectory = migrateLegacyDevelopmentModelPath(config.asrModelDirectory, this.defaults.modelsDirectory)
+    const migratedTranslationModelDirectory = migrateLegacyDevelopmentModelPath(config.translationModelDirectory, this.defaults.modelsDirectory)
+    const migratedDemucsModelDirectory = migrateLegacyDevelopmentModelPath(config.demucsModelDirectory, this.defaults.modelsDirectory)
+    const migratedLegacyModelPaths =
+      migratedModelsDirectory !== config.modelsDirectory ||
+      migratedAsrModelDirectory !== config.asrModelDirectory ||
+      migratedTranslationModelDirectory !== config.translationModelDirectory ||
+      migratedDemucsModelDirectory !== config.demucsModelDirectory
+    config.modelsDirectory = migratedModelsDirectory
+    config.asrModelDirectory = migratedAsrModelDirectory
+    config.translationModelDirectory = migratedTranslationModelDirectory
+    config.demucsModelDirectory = migratedDemucsModelDirectory
     if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
       config.modelsDirectory = this.defaults.modelsDirectory
     }
@@ -118,24 +170,41 @@ export class RuntimeStore {
     delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookieSource
     delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookiesPath
     delete (normalized as KouboxConfig & Record<string, unknown>).platformBrowserProfiles
-    if (usesLegacyAsrModel || migratedLegacyVendorPaths || hasLegacyBrowserAuthFields || downloadRuntimePathsChanged || this.pinBundledPaths) return this.write(normalized)
-    return normalized
+    if (usesLegacyAsrModel || migratedLegacyModelPaths || migratedLegacyVendorPaths || hasLegacyBrowserAuthFields || downloadRuntimePathsChanged || this.pinBundledPaths) {
+      const persisted = this.write(normalized)
+      log.debug('配置读取完成并回写迁移结果', {
+        file: this.file,
+        durationMs: Date.now() - startedAt,
+        migratedLegacyModelPaths,
+        migratedLegacyVendorPaths,
+        hasLegacyBrowserAuthFields,
+        downloadRuntimePathsChanged,
+        pinBundledPaths: this.pinBundledPaths
+      })
+      return persisted
+    }
+    log.debug('配置读取完成', { file: this.file, durationMs: Date.now() - startedAt })
+    return this.remember(normalized)
   }
 
   write(next: KouboxConfig): KouboxConfig {
     const pinned = normalizeKouboxConfigPaths(this.applyPinned(next))
     mkdirSync(dirname(this.file), { recursive: true })
     writeFileSync(this.file, JSON.stringify(pinned, null, 2), 'utf8')
-    return pinned
+    return this.remember(pinned)
   }
 }
 
 export function detectGpu(): GpuStatus {
+  const startedAt = Date.now()
+  log.debug('GPU 检测开始')
   const result = spawnSync('nvidia-smi', ['--query-gpu=name,memory.total,memory.used,memory.free', '--format=csv,noheader,nounits'], { encoding: 'utf8', windowsHide: true })
   if (result.status !== 0 || !result.stdout.trim()) {
+    log.debug('GPU 检测完成', { durationMs: Date.now() - startedAt, available: false, exitCode: result.status })
     return { available: false, message: '未检测到可用的 NVIDIA GPU；下载和抽音可继续，ASR 与翻译需要 GPU。' }
   }
   const [name, total, used, free] = result.stdout.trim().split('\n')[0].split(',').map((item) => item.trim())
+  log.debug('GPU 检测完成', { durationMs: Date.now() - startedAt, available: true, name, totalMemoryMiB: Number(total), freeMemoryMiB: Number(free) })
   return {
     available: true,
     name,
@@ -153,8 +222,10 @@ function inspectModel(
   requiredFiles: string[],
   format: ModelCheck['format'] = 'transformers'
 ): ModelCheck {
+  const startedAt = Date.now()
   const missingFiles = requiredFiles.filter((file) => !existsSync(join(directory, file)))
   const configured = existsSync(directory)
+  log.debug('模型检查完成', { id, directory, durationMs: Date.now() - startedAt, configured, ready: configured && missingFiles.length === 0, foundFiles: requiredFiles.length - missingFiles.length, expectedFiles: requiredFiles.length })
   return {
     id,
     label,
@@ -169,22 +240,38 @@ function inspectModel(
 }
 
 function executableVersion(executable: string, versionArgument: string): string | undefined {
-  if (!existsSync(executable)) return undefined
+  const startedAt = Date.now()
+  if (!existsSync(executable)) {
+    log.debug('工具版本检测跳过：文件不存在', { executable, versionArgument, durationMs: Date.now() - startedAt })
+    return undefined
+  }
+  const stat = statSync(executable)
+  const cacheKey = `${executable}|${versionArgument}|${stat.size}|${stat.mtimeMs}|${stat.ctimeMs}`
+  const cached = executableVersionCache.get(cacheKey)
+  if (cached) {
+    log.debug('工具版本检测命中缓存', { executable, versionArgument, durationMs: Date.now() - startedAt, version: cached })
+    return cached
+  }
   const probe = spawnSync(executable, [versionArgument], { encoding: 'utf8', windowsHide: true })
-  if (probe.status !== 0) return undefined
-  return (probe.stdout || probe.stderr).trim().split(/\r?\n/)[0] || undefined
+  const version = probe.status === 0 ? (probe.stdout || probe.stderr).trim().split(/\r?\n/)[0] || undefined : undefined
+  if (version) executableVersionCache.set(cacheKey, version)
+  log.debug('工具版本检测完成', { executable, versionArgument, durationMs: Date.now() - startedAt, exitCode: probe.status, version })
+  return version
 }
 
 function inspectVendorTool(
   directory: string,
   executableName: string,
   versionArgument: string,
-  expectedFiles: string[]
+  expectedFiles: string[],
+  knownVersion?: string
 ): VendorToolCheck {
+  const startedAt = Date.now()
   const executable = join(directory, executableName)
-  const version = executableVersion(executable, versionArgument)
+  const version = knownVersion ?? executableVersion(executable, versionArgument)
   const foundFiles = expectedFiles.filter((file) => existsSync(join(directory, file)))
   const missingFiles = expectedFiles.filter((file) => !existsSync(join(directory, file)))
+  log.debug('运行工具检查完成', { executable, directory, durationMs: Date.now() - startedAt, ready: Boolean(version), foundFiles: foundFiles.length, expectedFiles: expectedFiles.length, missingFiles })
   return {
     ready: Boolean(version),
     directory,
@@ -197,6 +284,7 @@ function inspectVendorTool(
 }
 
 function inspectDemucs(directory: string): ModelCheck {
+  const startedAt = Date.now()
   const configured = Boolean(directory)
   const expected = ['955717e8-8726e21a.th']
   const missingFiles = expected.filter((name) => {
@@ -211,6 +299,7 @@ function inspectDemucs(directory: string): ModelCheck {
     }
     return !walk(directory)
   })
+  log.debug('Demucs 模型检查完成', { directory, durationMs: Date.now() - startedAt, ready: missingFiles.length === 0, missingFiles })
   return {
     id: 'demucs',
     label: 'Demucs htdemucs',
@@ -287,39 +376,36 @@ function normalizePlatformAuth(
 
 export function getRuntimeStatus(
   config: KouboxConfig,
-  activeYtdlp?: { executable: string; source: 'bundled' | 'user-update'; channel: 'nightly' }
+  activeYtdlp?: ActiveYtdlpRuntime
 ): RuntimeStatus {
+  const startedAt = Date.now()
+  log.debug('运行时状态检测开始', { modelsDirectory: config.modelsDirectory, asrModelDirectory: config.asrModelDirectory, translationModelDirectory: config.translationModelDirectory, demucsModelDirectory: config.demucsModelDirectory, ytdlpDirectory: config.ytdlpDirectory, ffmpegDirectory: config.ffmpegDirectory, denoDirectory: config.denoDirectory })
   const modelPaths = resolveModelPaths(config)
   const vendorPaths = resolveVendorPaths(config)
   const activeYtdlpExecutable = activeYtdlp?.executable ?? vendorPaths.ytdlpExecutable
-  const ytdlpRuntime = inspectYtdlpRuntime(activeYtdlpExecutable, vendorPaths.denoExecutable)
-  return {
-    healthy: true,
-    startedAt: new Date().toISOString(),
-    gpu: detectGpu(),
-    models: [
-      inspectModel('asr', 'Faster-Whisper Large v3（FP16）', modelPaths.asr, asrModelFiles, 'ctranslate2'),
-      inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
-      inspectDemucs(modelPaths.demucs)
-    ],
-    vendor: {
-      ytdlp: {
-        ...inspectVendorTool(
-          dirname(activeYtdlpExecutable),
-          'yt-dlp.exe',
-          '--version',
-          ytdlpExpectedFiles
-        ),
-        channel: activeYtdlp?.channel ?? 'nightly',
-        source: activeYtdlp?.source ?? 'bundled',
-        ejsVersion: ytdlpRuntime.ejsVersion,
-        jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion,
-        // 只要 version 和 jsRuntimeVersion 存在就认为 ready
-        // ejsVersion 只在用 --simulate 时才能检测到，不作为 ready 的必要条件
-        ready: Boolean(ytdlpRuntime.version && ytdlpRuntime.jsRuntimeVersion)
-      },
-      ffmpeg: inspectVendorTool(vendorPaths.ffmpegDirectory, 'ffmpeg.exe', '-version', ffmpegExpectedFiles),
-      deno: inspectVendorTool(config.denoDirectory, 'deno.exe', '--version', denoExpectedFiles)
-    }
+  const ytdlpStartedAt = Date.now()
+  const ytdlpRuntime = activeYtdlp?.runtimeInspection
+    ?? inspectYtdlpRuntime(activeYtdlpExecutable, vendorPaths.denoExecutable)
+  log.debug('yt-dlp 运行时诊断完成', { durationMs: Date.now() - ytdlpStartedAt, cached: Boolean(activeYtdlp?.runtimeInspection), executable: activeYtdlpExecutable, denoExecutable: vendorPaths.denoExecutable, version: ytdlpRuntime.version, ejsVersion: ytdlpRuntime.ejsVersion, jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion, providerReady: ytdlpRuntime.providerReady })
+  const gpu = detectGpu()
+  const models = [
+    inspectModel('asr', 'Faster-Whisper Large v3（FP16）', modelPaths.asr, asrModelFiles, 'ctranslate2'),
+    inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
+    inspectDemucs(modelPaths.demucs)
+  ]
+  const vendor = {
+    ytdlp: {
+      ...inspectVendorTool(dirname(activeYtdlpExecutable), 'yt-dlp.exe', '--version', ytdlpExpectedFiles, ytdlpRuntime.version),
+      channel: activeYtdlp?.channel ?? 'nightly',
+      source: activeYtdlp?.source ?? 'bundled',
+      ejsVersion: ytdlpRuntime.ejsVersion,
+      jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion,
+      ready: Boolean(ytdlpRuntime.version && ytdlpRuntime.jsRuntimeVersion)
+    },
+    ffmpeg: inspectVendorTool(vendorPaths.ffmpegDirectory, 'ffmpeg.exe', '-version', ffmpegExpectedFiles),
+    deno: inspectVendorTool(config.denoDirectory, 'deno.exe', '--version', denoExpectedFiles, ytdlpRuntime.denoVersion)
   }
+  const result = { healthy: true, startedAt: new Date().toISOString(), gpu, models, vendor }
+  log.debug('运行时状态检测完成', { durationMs: Date.now() - startedAt, healthy: result.healthy, modelsReady: models.filter((model) => model.ready).length, vendorReady: Object.values(vendor).filter((tool) => tool.ready).length })
+  return result
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ClipboardText, Clock, FileText, FolderOpen, Trash, X, Copy, Check } from '@phosphor-icons/react'
 import { detectPlatform, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
@@ -46,6 +46,7 @@ function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
 }
 
 export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHistoryPageProps) {
+  const lastLoadedKindRef = useRef<TaskKind | null>(null)
   const [tasks, setTasks] = useState<TaskSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
@@ -68,6 +69,8 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
   }
 
   useEffect(() => {
+    if (lastLoadedKindRef.current === kind) return
+    lastLoadedKindRef.current = kind
     void loadTasks()
   }, [kind])
 

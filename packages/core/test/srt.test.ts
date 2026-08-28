@@ -6,8 +6,8 @@ describe('subtitle contracts', () => {
     expect(formatSrtTime(3661.25)).toBe('01:01:01,250')
   })
 
-  it('exports timestamped segments as SRT', () => {
-    expect(transcriptToSrt({ segments: [{ text: '你好', start: 0, end: 1.2 }] })).toBe('1\n00:00:00,000 --> 00:00:01,200\n你好')
+  it('exports timestamped segments as UTF-8 BOM SRT with a trailing newline', () => {
+    expect(transcriptToSrt({ segments: [{ text: '你好', start: 0, end: 1.2 }] })).toBe('\uFEFF1\n00:00:00,000 --> 00:00:01,200\n你好\n')
   })
 
   it('preserves supplied text during baseline alignment', () => {
