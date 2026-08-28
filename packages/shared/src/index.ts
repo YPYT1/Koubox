@@ -232,21 +232,12 @@ export type YtdlpMaxHeight = 0 | 1080 | 720 | 480
 export type YtdlpCookiePlatformId = 'youtube' | 'tiktok' | 'instagram' | 'facebook'
 export type PlatformAuthMode = 'builtin' | 'paste'
 
-export function isYtdlpCookiePlatformId(value: unknown): value is YtdlpCookiePlatformId {
-  return value === 'youtube' || value === 'tiktok' || value === 'instagram' || value === 'facebook'
-}
-
 export type PlatformAuthEntry = {
   mode: PlatformAuthMode
   cookies: string
 }
 
 export type PlatformAuthConfig = Record<YtdlpCookiePlatformId, PlatformAuthEntry>
-
-export type PlatformAuthContext = {
-  platformId: YtdlpCookiePlatformId
-  mode: PlatformAuthMode
-}
 
 export function defaultPlatformAuth(): PlatformAuthConfig {
   return {
@@ -357,7 +348,7 @@ export function pastedPlatformCookiesReady(platformId: YtdlpCookiePlatformId, te
   try {
     assertPastedPlatformCookies(platformId, text)
     const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)!
-    return { ok: true, detail: `Cookie 格式完整，含 ${rule.requiredNames.length} 个关键字段；实际任务链接尚未验证` }
+    return { ok: true, detail: `粘贴的 Cookie 含 ${rule.requiredNames.length} 个关键字段` }
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : String(error) }
   }
@@ -400,12 +391,7 @@ export function platformAuthMissingMessage(
 export type YtdlpCookiePlatformStatus = {
   id: YtdlpCookiePlatformId
   label: string
-  mode: PlatformAuthMode
   loggedIn: boolean
-  liveVerified: boolean
-  saved: boolean
-  savedAt?: string
-  cookieCount: number
   detail: string
 }
 
@@ -482,7 +468,7 @@ export function normalizeProxyUrl(proxy: string): string | null {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`
 }
 
-export function toUserTaskMessage(raw: string, auth?: PlatformAuthContext): string {
+export function toUserTaskMessage(raw: string): string {
   const text = raw.trim()
   if (!text) return '任务失败，请重试。'
 
@@ -522,19 +508,9 @@ export function toUserTaskMessage(raw: string, auth?: PlatformAuthContext): stri
   if (/尚未保存登录状态/i.test(text)) {
     return text
   }
-  // YouTube 常见：带 Cookie 时 tv_downgraded 客户端返回 UNPLAYABLE / The page needs to be reloaded
-  if (/the page needs to be reloaded|tv_downgraded.*UNPLAYABLE|player response playability status:\s*UNPLAYABLE/i.test(text)) {
-    const platform = auth?.platformId ?? detectAuthPlatformFromText(text) ?? 'youtube'
-    const label = platformLabel(platform)
-    if (auth?.mode === 'builtin') {
-      return `${label} 当前应用内登录请求被平台拒绝。请到「全局设置 → 平台登录」打开 ${label} 登录窗口，确认账号可正常访问后重新保存应用内登录。`
-    }
-    return `${label} 当前粘贴 Cookie 被平台拒绝。请用「口播匣 Cookie 导出」插件重新导出 ${label} Cookie，粘贴并保存后重试。`
-  }
   const authPlatform = detectAuthPlatformFromText(text)
   if (/\[Instagram\]|instagram\.com/i.test(text) && /login required|rate-limit|not available|Please wait|challenge|cookie/i.test(text)) {
-    const mode = auth?.platformId === 'instagram' ? auth.mode : 'paste'
-    return platformAuthMissingMessage('instagram', mode, 'login-required')
+    return platformAuthMissingMessage('instagram', 'paste', 'login-required')
   }
   if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
     if (authPlatform) {
@@ -559,11 +535,6 @@ export function toUserTaskMessage(raw: string, auth?: PlatformAuthContext): stri
   }
   if (/HTTP Error 403|Forbidden/i.test(text)) {
     return '下载被拒绝。请检查登录和代理设置后重试。'
-  }
-  if (/\[TikTok\]|tiktok\.com/i.test(text) && /Unable to extract universal data for rehydration|Unexpected response from webpage request|Unable to extract challenge data/i.test(text)) {
-    const mode = auth?.platformId === 'tiktok' ? auth.mode : 'paste'
-    const source = mode === 'paste' ? '粘贴 Cookie' : '应用内登录'
-    return `TikTok 页面验证未通过：yt-dlp 已读取${source}并启用浏览器模拟，但平台仍未返回可解析的视频数据。请刷新 TikTok 登录状态后重试。`
   }
   if (/Unsupported URL|No video formats|Requested format is not available/i.test(text)) {
     return '无法解析该链接，或没有可下载的清晰度。请确认链接完整，并检查清晰度限制。'

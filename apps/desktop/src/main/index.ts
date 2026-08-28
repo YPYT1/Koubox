@@ -101,12 +101,9 @@ async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
     return
   }
   const proxy = localApi?.getConfig().ytdlpProxy ?? ''
-  await applyLoginSessionProxy(platformId, proxy)
-  const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
-  const title = `${rule?.label ?? platformId} 应用内登录`
-  const partition = loginPartition(platformId)
+  await applyLoginSessionProxy(proxy)
 
-  const nextLoginWindow = new BrowserWindow({
+  loginWindow = new BrowserWindow({
     width: 1100,
     height: 780,
     minWidth: 900,
@@ -121,18 +118,17 @@ async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
       sandbox: false
     }
   })
-  loginWindow = nextLoginWindow
-  nextLoginWindow.setMenuBarVisibility(false)
-  nextLoginWindow.webContents.setWindowOpenHandler(({ url }) => {
+  loginWindow.setMenuBarVisibility(false)
+  loginWindow.webContents.setWindowOpenHandler(({ url }) => {
     const child = new BrowserWindow({
       width: 1100,
       height: 780,
-      parent: nextLoginWindow,
+      parent: loginWindow,
       title: '登录',
       icon: findWindowIcon(),
       autoHideMenuBar: true,
       webPreferences: {
-        partition,
+        partition: 'persist:koubox-ytdlp-login',
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false

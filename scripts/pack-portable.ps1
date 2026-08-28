@@ -16,7 +16,7 @@
 
 param(
   [string]$Version = '',
-  [int]$ProxyPort = 0,
+  [int]$ProxyPort = 7897,
   [switch]$CleanOnly,
   [switch]$SkipPackage
 )
@@ -65,9 +65,6 @@ if ($Version.Trim()) {
 $appEnglishName = 'Koubox'
 $appVersion = [string]$desktopPkgJson.version
 Write-Host "打包版本：$appVersion"
-if ($SkipModels) {
-  Write-Host '模式：不含 models（增量更新包）'
-}
 $distFolderName = "$appEnglishName-$appVersion"
 
 $releaseDir = Join-Path $root 'apps\desktop\release'
@@ -171,18 +168,11 @@ function Invoke-Preflight {
   $electronDist = Join-Path $root 'node_modules\.pnpm\electron@33.4.11\node_modules\electron\dist\electron.exe'
   Assert-Path $electronDist '本地 Electron（避免打包时再下载）'
 
+  $proxy = "http://127.0.0.1:$ProxyPort"
   foreach ($name in @('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy')) {
-    if ($ProxyPort -gt 0) {
-      Set-Item -Path "Env:$name" -Value "http://127.0.0.1:$ProxyPort"
-    } elseif (Test-Path -LiteralPath "Env:$name") {
-      Remove-Item -LiteralPath "Env:$name"
-    }
+    Set-Item -Path "Env:$name" -Value $proxy
   }
-  if ($ProxyPort -gt 0) {
-    Write-Host "代理已设置为 http://127.0.0.1:$ProxyPort"
-  } else {
-    Write-Host '代理：留空（未设置）'
-  }
+  Write-Host "代理已固定为 $proxy"
 
   node (Join-Path $root 'scripts\prepare-playwright-browsers.mjs')
   if ($LASTEXITCODE -ne 0) {
@@ -298,11 +288,6 @@ function Invoke-Postflight {
 }
 
 # ---- main ----
-if ($VerifyOnly) {
-  Write-Host '打包脚本不生成校验文件。请用 E:\kubox\compare-sha256.cmd 自行对比源文件与副本。'
-  exit 0
-}
-
 if ($CleanOnly) {
   Remove-OldRelease
   Write-Host '已清理旧打包产物。'
@@ -319,34 +304,9 @@ if ($SkipPackage) {
 Remove-OldRelease
 
 Write-Host "开始 electron-builder（dir），完成后将目录改名为 $distFolderName ..."
-$desktopPkgBackup = $null
-if ($SkipModels) {
-  $desktopPkgBackup = Get-Content -LiteralPath $desktopPkgPath -Raw
-  if ($desktopPkgBackup -notmatch '"from":\s*"\.\./\.\./models"') {
-    throw '预检失败：apps/desktop/package.json 未找到 models extraResources，无法剥离。'
-  }
-  $patched = [regex]::Replace(
-    $desktopPkgBackup,
-    '\s*\{\s*"from":\s*"\.\./\.\./models"\s*,\s*"to":\s*"models"\s*\}\s*,?',
-    ''
-  )
-  if ($patched -eq $desktopPkgBackup) {
-    throw '未能从 package.json 去掉 models extraResources。'
-  }
-  [System.IO.File]::WriteAllText($desktopPkgPath, $patched)
-  Write-Host '已临时从 electron-builder 配置中移除 models。'
-}
-
-try {
-  pnpm --filter @koubox/desktop package
-  if ($LASTEXITCODE -ne 0) {
-    throw "electron-builder 失败，退出码 $LASTEXITCODE"
-  }
-} finally {
-  if ($null -ne $desktopPkgBackup) {
-    [System.IO.File]::WriteAllText($desktopPkgPath, $desktopPkgBackup)
-    Write-Host '已恢复 apps/desktop/package.json。'
-  }
+pnpm --filter @koubox/desktop package
+if ($LASTEXITCODE -ne 0) {
+  throw "electron-builder 失败，退出码 $LASTEXITCODE"
 }
 
 if (-not (Test-Path -LiteralPath $builderUnpacked)) {

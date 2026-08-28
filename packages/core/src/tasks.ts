@@ -14,39 +14,13 @@ import type {
   TaskEvent,
   TaskSnapshot,
   Transcript,
-  TranslationTargetLanguage,
-  YtdlpCookiePlatformId
+  TranslationTargetLanguage
 } from '@koubox/shared'
 import { detectPlatform, platformAuthIdFromUrlPlatform, toUserTaskMessage, normalizeOsPath, normalizeProxyUrl } from '@koubox/shared'
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 import type { AuthenticatedCookieFile } from './video-download.js'
 
 const log = createLogger('tasks')
-
-export function platformYtdlpCompatibilityAttempts(platformId?: YtdlpCookiePlatformId): string[][] {
-  if (platformId !== 'tiktok') return [[]]
-  return [
-    ['--impersonate', 'Chrome-145:Macos-26'],
-    ['--impersonate', 'Chrome-131:Macos-14'],
-    ['--impersonate', 'Edge-101:Windows-10']
-  ]
-}
-
-export function canonicalPlatformDownloadUrl(url: string, platformId?: YtdlpCookiePlatformId): string {
-  if (platformId !== 'tiktok') return url
-  try {
-    const parsed = new URL(url)
-    parsed.search = ''
-    parsed.hash = ''
-    return parsed.toString()
-  } catch {
-    return url
-  }
-}
-
-export function selectedPlatformCookieFilename(platformId: YtdlpCookiePlatformId, mode: 'builtin' | 'paste'): string {
-  return mode === 'paste' ? `${platformId}-cookies.txt` : platformBuiltinCookiesFilename(platformId)
-}
 
 type TaskManagerOptions = {
   getConfig(): KouboxConfig
@@ -130,7 +104,7 @@ function splitProcessLines(text: string): string[] {
 function formatCommandError(stderr: string, commandName: string): string {
   const text = stderr.trim()
   if (!text) return `${commandName} 执行失败。`
-  return text
+  return toUserTaskMessage(text)
 }
 
 function dateStamp(value = new Date()): string {
@@ -832,12 +806,7 @@ export class TaskManager {
   }
 
   private fail(record: TaskRecord, code: string, message: string): void {
-    const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
-    const config = this.options.getConfig()
-    const auth = platformId
-      ? { platformId, mode: config.ytdlpPlatformAuth?.[platformId]?.mode ?? 'builtin' as const }
-      : undefined
-    const userMessage = toUserTaskMessage(message, auth)
+    const userMessage = toUserTaskMessage(message)
     log.error('任务阶段失败', { taskId: record.task.taskId, code, message: userMessage })
     this.update(record, { status: 'error', stage: 'error', message: userMessage, error: { code, message: userMessage } })
   }

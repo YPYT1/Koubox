@@ -620,14 +620,14 @@ export function SettingsPage({
                     {cookieStatus!.platforms.map((platform) => (
                       <div
                         key={platform.id}
-                        className={`cookie-status-item ${platform.liveVerified ? 'ok' : platform.loggedIn ? 'pending' : 'warn'}`}
+                        className={`cookie-status-item ${platform.loggedIn ? 'ok' : 'warn'}`}
                       >
-                        {platform.liveVerified
+                        {platform.loggedIn
                           ? <CheckCircle size={15} weight="fill" />
                           : <Warning size={15} weight="fill" />}
                         <div>
                           <strong>{platform.label}</strong>
-                          <span>{platform.mode === 'builtin' ? '应用内登录' : '粘贴 Cookie'} · {platform.detail}</span>
+                          <span>{platform.detail}</span>
                         </div>
                       </div>
                     ))}
@@ -654,7 +654,7 @@ export function SettingsPage({
                             {entry.mode === 'paste'
                               ? (entry.cookies.trim() ? '粘贴 Cookie · 已填写' : '粘贴 Cookie · 待粘贴')
                               : '应用内登录'}
-                            {status ? ` · ${status.liveVerified ? '已验证' : status.loggedIn ? '格式完整' : '未就绪'}` : ''}
+                            {status ? ` · ${status.loggedIn ? '就绪' : '未就绪'}` : ''}
                           </small>
                         </span>
                         <CaretDown size={16} weight="bold" className={open ? 'rotated' : ''} />
@@ -706,28 +706,6 @@ export function SettingsPage({
                                 placeholder={'# Netscape HTTP Cookie File\n...'}
                                 spellCheck={false}
                               />
-                              <div className="platform-auth-actions">
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="md"
-                                  loading={platformAction === `${platform.id}:config`}
-                                  icon={<FloppyDiskBack size={16} weight="bold" />}
-                                  onClick={() => void handleSavePlatformAuth(platform.id)}
-                                >
-                                  保存 {platform.label} 粘贴 Cookie
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="md"
-                                  loading={checkingCookies}
-                                  icon={<ArrowsClockwise size={16} weight="bold" />}
-                                  onClick={() => void refreshCookieStatus()}
-                                >
-                                  检测
-                                </Button>
-                              </div>
                             </>
                           ) : (
                             <>
