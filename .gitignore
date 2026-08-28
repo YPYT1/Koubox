@@ -1,4 +1,5 @@
 node_modules/
+.pack/
 dist/
 dist-electron/
 out/
@@ -23,3 +24,17 @@ vendor/**/*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+tests/
+packages/core/test/
+链接.txt
+verification
+apps/desktop/release-test-20260826.deleted.fail
+apps/desktop/release-test-20260826/win-unpacked/resources/app.asar
+apps/desktop/release-test-20260826/win-unpacked/resources/default_app.asar
+data/state_store.db/mem%3Aaudit.bin
+data/state_store.db/mem%3Ahealth.bin
+docs/技术分析/并发下载优化方案.md
+docs/技术分析/并发下载优化方案.md
+链接.txt
+链接 copy.txt
+链接.txt

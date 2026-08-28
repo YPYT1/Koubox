@@ -6,33 +6,19 @@
 #   ... -CleanOnly              只删除旧 release 产物（含 Koubox-*）
 #   ... -SkipPackage            只预检，不真正打包（给你手动打包前验证）
 #   ... -Version 0.2.0          指定发布版本（写入 apps/desktop/package.json，目录名 Koubox-0.2.0）
-#   ... -ProxyPort 7897         打包时临时设置代理（默认留空，不注入代理）
-#   ... -KeepRelease            打包前不删旧产物（默认会删）
-#   ... -SkipModels             不打包 models（增量更新包；用户自备 / 外置模型）
-#
-# 压缩包请用 WinRAR 手动打（推荐「最好」）。脚本只产出目录，不压缩，不生成 .sha256 / COPY。
-# SHA256 对比请自行用 E:\kubox\compare-sha256.cmd（或 scripts\compare-sha256.cmd）。
-#
-# 推荐流程：
-#   1. pnpm pack:portable -- -Version 0.4.0          → 生成 Koubox-0.4.0 目录
-#   2. WinRAR 压缩该目录为 Koubox-0.4.0.rar（最好）
-#   不含 models 的增量包：
-#   pnpm pack:portable:nomodels -- -Version 0.4.0
+#   ... -ProxyPort 7897         代理端口，默认 7897
 #
 # 说明：
 # - 不打包 python/wheels（2.6GB 的 torch.whl）
 # - 不打包 AppData 登录态 / Cookie；便携版用 exe 旁 userdata（空目录）
-# - 完整包：resources 含 models / vendor / python / python-home
-# - -SkipModels：不打模型权重，只保留空 resources\models + README
+# - 打包版强制使用 resources 内的 vendor / python
+# - resources/models 只创建空目录，模型由用户手动放入
 
 param(
   [string]$Version = '',
   [int]$ProxyPort = 0,
   [switch]$CleanOnly,
-  [switch]$SkipPackage,
-  [switch]$KeepRelease,
-  [switch]$VerifyOnly,
-  [switch]$SkipModels
+  [switch]$SkipPackage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,8 +93,27 @@ function Remove-OldRelease {
     Write-Host "无旧产物：$releaseDir"
     return
   }
+  Stop-ProcessesForRelease $releaseDir
   Write-Host "删除旧打包产物：$releaseDir"
   Remove-Item -LiteralPath $releaseDir -Recurse -Force
+}
+
+function Stop-ProcessesForRelease([string]$TargetDirectory) {
+  if (-not (Test-Path -LiteralPath $TargetDirectory)) { return }
+  $targetPrefix = (Resolve-Path -LiteralPath $TargetDirectory).Path.TrimEnd('\') + '\'
+  for ($attempt = 1; $attempt -le 5; $attempt += 1) {
+    $processes = @(Get-CimInstance Win32_Process | Where-Object {
+      $executablePath = [string]$_.ExecutablePath
+      $executablePath -and $executablePath.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($processes.Count -eq 0) { return }
+    foreach ($process in ($processes | Sort-Object ProcessId -Descending)) {
+      Write-Host "结束占用旧发布目录的进程：$($process.Name) PID $($process.ProcessId)"
+      Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  throw "无法结束旧发布目录中的残留进程：$TargetDirectory"
 }
 
 function Invoke-Preflight {
@@ -123,7 +128,9 @@ function Invoke-Preflight {
   }
 
   $desktopPkg = Get-Content -LiteralPath (Join-Path $root 'apps\desktop\package.json') -Raw
+  Assert-Path (Join-Path $root 'scripts\prepare-playwright-browsers.mjs') 'Playwright 浏览器准备脚本'
   Assert-NotPacked $desktopPkg 'wheels' 'extraResources 里出现了 wheels，whl 不应打进安装包。'
+  Assert-NotPacked $desktopPkg '"from":\s*"\.\./\.\./models"' 'extraResources 不应复制开发机 models；便携包只保留空 models 目录。'
   if ($desktopPkg -notmatch '"from":\s*"../../python/\.venv"') {
     throw '预检失败：打包没有包含 python/.venv。'
   }
@@ -132,17 +139,15 @@ function Invoke-Preflight {
   }
 
   Assert-Path (Join-Path $root 'vendor\yt-dlp\yt-dlp.exe') 'yt-dlp'
+  Assert-Path (Join-Path $root 'vendor\deno\deno.exe') 'Deno'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffmpeg.exe') 'ffmpeg'
   Assert-Path (Join-Path $root 'vendor\ffmpeg\bin\ffprobe.exe') 'ffprobe'
-  if (-not $SkipModels) {
-    Assert-Path (Join-Path $root 'models\faster-whisper-large-v3\model.bin') 'Whisper 模型'
-    Assert-Path (Join-Path $root 'models\HYMT21.8B\model.safetensors') '翻译模型'
-    Assert-Path (Join-Path $root 'models\demucs') 'Demucs 模型目录'
-  } else {
-    Write-Host '跳过本机 models 预检（本包不打入 models）。'
-  }
+  Assert-Path (Join-Path $root 'node_modules\.pnpm\playwright@1.62.1\node_modules\playwright\package.json') 'Playwright Node 依赖'
   Assert-Path (Join-Path $root 'python\.venv\Scripts\python.exe') 'Python 虚拟环境'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\torch') '已安装的 torch'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\yt_dlp') '参考 TikTok 下载器 yt-dlp 依赖'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\curl_cffi') '参考 TikTok 下载器 curl_cffi 依赖'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '复制的 TikTok 下载器源码'
 
   $freeGb = [math]::Round((Get-PSDrive -Name D).Free / 1GB, 2)
   if ($freeGb -lt 25) {
@@ -177,6 +182,11 @@ function Invoke-Preflight {
     Write-Host "代理已设置为 http://127.0.0.1:$ProxyPort"
   } else {
     Write-Host '代理：留空（未设置）'
+  }
+
+  node (Join-Path $root 'scripts\prepare-playwright-browsers.mjs')
+  if ($LASTEXITCODE -ne 0) {
+    throw "预检失败：Playwright 浏览器准备失败，退出码 $LASTEXITCODE"
   }
 
   Write-Host '预检通过。'
@@ -214,35 +224,31 @@ function Invoke-Postflight {
   Write-Host '== 打包结果校验 =='
   Assert-Path $exe '口播匣.exe'
   Assert-Path (Join-Path $resources 'vendor\yt-dlp\yt-dlp.exe') '包内 yt-dlp'
+  Assert-Path (Join-Path $resources 'vendor\deno\deno.exe') '包内 Deno'
   Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffmpeg.exe') '包内 ffmpeg'
+  Assert-Path (Join-Path $resources 'vendor\ffmpeg\bin\ffprobe.exe') '包内 ffprobe'
+  Assert-Path (Join-Path $resources 'app.asar') '包内 Electron 应用'
+  $packedModels = Join-Path $resources 'models'
+  Assert-Path $packedModels '包内空 models 目录'
+  $packedModelEntries = @(Get-ChildItem -LiteralPath $packedModels -Force -ErrorAction SilentlyContinue)
+  if ($packedModelEntries.Count -ne 0) {
+    throw ("校验失败：resources\models 必须为空，发现：`n" + ($packedModelEntries.FullName -join "`n"))
+  }
+  Write-Host 'resources\models 已验证为空；模型需由用户手动放入。'
   Assert-Path (Join-Path $resources 'python\Scripts\python.exe') '包内 Python'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\c10.dll') '包内 torch c10.dll'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\MSVCP140.dll') '包内 VC++ MSVCP140（WinError 126 依赖）'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\VCRUNTIME140.dll') '包内 VC++ VCRUNTIME140'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\yt_dlp') '包内参考 TikTok yt-dlp'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\curl_cffi') '包内参考 TikTok curl_cffi'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime') '包内 Python 源码'
-  Assert-Path (Join-Path $resources 'python-home\python.exe') '包内 python-home'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '包内复制的 TikTok 下载器源码'
 
-  if ($SkipModels) {
-    $modelsDir = Join-Path $resources 'models'
-    New-Item -ItemType Directory -Path $modelsDir -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $modelsDir 'README.txt') -Encoding UTF8 -Value @(
-      '本包未内置模型（增量更新包）。'
-      ''
-      '请把旧版 Koubox 的 resources\models 整目录拷到这里，或在「模型与环境」里选择外置 models 目录。'
-      '拷贝 / 外置后的 models 下需含：demucs、faster-whisper-large-v3、HYMT21.8B。'
-    )
-    $leaked = @(
-      Get-ChildItem -LiteralPath $modelsDir -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne 'README.txt' }
-    )
-    if ($leaked.Count -gt 0) {
-      throw ("校验失败：-SkipModels 包内不应出现模型文件：`n" + ($leaked.FullName -join "`n"))
-    }
-    Write-Host 'models：仅空目录 + README（未打入权重与子目录）。'
-  } else {
-    Assert-Path (Join-Path $resources 'models\faster-whisper-large-v3\model.bin') '包内 Whisper'
-    Assert-Path (Join-Path $resources 'models\HYMT21.8B\model.safetensors') '包内翻译模型'
+  $playwrightChrome = Get-ChildItem -LiteralPath (Join-Path $resources 'playwright-browsers') -Recurse -Filter 'chrome.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $playwrightChrome) {
+    throw "校验失败：包内缺少 Playwright Chromium：$(Join-Path $resources 'playwright-browsers')"
   }
+  Write-Host "Playwright Chromium：$($playwrightChrome.FullName)"
 
   Repair-PackedPyvenvHome
 
@@ -287,28 +293,8 @@ function Invoke-Postflight {
   Write-Host ''
   Write-Host '便携目录已生成（解压即用）：'
   Write-Host $distDir
-  if ($SkipModels) {
-    Write-Host '本包不含模型权重。请拷贝旧版 resources\models，或在「模型与环境」选择外置 models。'
-  } else {
-    Write-Host '双击 口播匣.exe。工具/模型路径会指向 resources\；登录需用户自己完成。'
-  }
-  Assert-NoReparsePoints $distDir
-  Write-Host "把整个 $distFolderName 用 WinRAR 打成 $distFolderName.rar（压缩方式：最好）。"
-  Write-Host '复制后用 E:\kubox\compare-sha256.cmd 自行对比 SHA256（脚本不生成校验文件）。'
-}
-
-function Get-ReparsePoints([string] $Root) {
-  return @(Get-ChildItem -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue |
-    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint })
-}
-
-function Assert-NoReparsePoints([string] $Root) {
-  $links = Get-ReparsePoints $Root
-  if ($links.Count -gt 0) {
-    $sample = ($links | Select-Object -First 5 | ForEach-Object { $_.FullName }) -join "`n"
-    throw "校验失败：便携目录内仍有 $($links.Count) 个软链接/Junction，压缩或复制后可能变空目录：`n$sample"
-  }
-  Write-Host "软链接检查通过（0 个 ReparsePoint）。"
+  Write-Host '双击 口播匣.exe。工具路径会指向 resources\；请把模型手动放入 resources\models，登录需用户自己完成。'
+  Write-Host "把整个 $distFolderName（含空 userdata）打成 7z/zip 发给用户即可。"
 }
 
 # ---- main ----
@@ -330,9 +316,7 @@ if ($SkipPackage) {
   exit 0
 }
 
-if (-not $KeepRelease) {
-  Remove-OldRelease
-}
+Remove-OldRelease
 
 Write-Host "开始 electron-builder（dir），完成后将目录改名为 $distFolderName ..."
 $desktopPkgBackup = $null

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import {
   DownloadSimple,
+  UploadSimple,
+  LinkSimple,
   X,
   Copy,
   FilmStrip,
@@ -11,11 +13,20 @@ import {
   ArrowsIn,
   Check
 } from '@phosphor-icons/react'
-import { toUserTaskMessage, type TaskEvent, type TaskSnapshot, type TranslationTargetLanguage } from '@koubox/shared'
+import {
+  LOCAL_VIDEO_EXTENSIONS,
+  toUserTaskMessage,
+  type MaterialsSourceMode,
+  type TaskEvent,
+  type TaskSnapshot,
+  type TranslationTargetLanguage
+} from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
+import { VideoUrlField, startMaterialsPipeline, cancelDownloadTask } from '../components/download'
 import { TARGET_LANGUAGE_OPTIONS } from './SettingsPage'
 
 type RequirementOnePageProps = {
@@ -23,12 +34,21 @@ type RequirementOnePageProps = {
   translationTargetLanguage: TranslationTargetLanguage
   openOutputOnComplete: boolean
   onChooseDirectory: (title: string, defaultPath?: string) => Promise<string | undefined>
+  onChooseVideoFile: (title: string, defaultPath?: string) => Promise<string | undefined>
   onShowToast: (message: string, type?: 'success' | 'warning' | 'error' | 'info') => void
   onTaskStatus?: (status: TaskSnapshot['status'] | null) => void
 }
 
-const STEPS = [
+const STEPS_URL = [
   { stage: 'download', label: '下载视频', desc: '解析链接并拉取视频文件' },
+  { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
+  { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
+  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' },
+  { stage: 'translation', label: '翻译', desc: '按目标语种生成译文' }
+]
+
+const STEPS_LOCAL = [
+  { stage: 'download', label: '导入视频', desc: '复制本地视频到任务目录' },
   { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
   { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
   { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' },
@@ -40,10 +60,13 @@ export function RequirementOnePage({
   translationTargetLanguage,
   openOutputOnComplete,
   onChooseDirectory,
+  onChooseVideoFile,
   onShowToast,
   onTaskStatus
 }: RequirementOnePageProps) {
+  const [sourceMode, setSourceMode] = useState<MaterialsSourceMode>('url')
   const [url, setUrl] = useState('')
+  const [videoPath, setVideoPath] = useState('')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
   const [targetLanguage, setTargetLanguage] = useState<TranslationTargetLanguage>(translationTargetLanguage)
   const [task, setTask] = useState<TaskSnapshot | null>(null)
@@ -122,22 +145,16 @@ export function RequirementOnePage({
   }, [task, openOutputOnComplete, onShowToast])
 
   const handleStart = async () => {
-    if (!/^https?:\/\//i.test(url.trim())) {
-      return onShowToast('请输入合法的视频链接（如 YouTube / TikTok / Instagram 等）', 'warning')
-    }
-    if (!outputDirectory.trim()) {
-      return onShowToast('请选择输出保存目录', 'warning')
-    }
-
     setStarting(true)
     try {
-      const createdTask = await window.koubox.post<TaskSnapshot>('/pipelines/req1', {
-        url: url.trim(),
-        outputDirectory: outputDirectory.trim()
-      })
+      const createdTask = await startMaterialsPipeline(
+        sourceMode === 'local'
+          ? { videoPath, outputDirectory }
+          : { url, outputDirectory }
+      )
       setTask(createdTask)
       onTaskStatus?.(createdTask.status)
-      onShowToast('任务已启动…', 'info')
+      onShowToast(sourceMode === 'local' ? '本地视频任务已启动…' : '任务已启动…', 'info')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '任务启动失败', 'error')
     } finally {
@@ -148,9 +165,7 @@ export function RequirementOnePage({
   const handleCancel = async () => {
     if (!task) return
     try {
-      const cancelled = await window.koubox.post<TaskSnapshot>(
-        `/tasks/${encodeURIComponent(task.taskId)}/cancel`
-      )
+      const cancelled = await cancelDownloadTask(task.taskId)
       setTask(cancelled)
       onTaskStatus?.(cancelled.status)
       onShowToast('任务已取消', 'info')
@@ -255,6 +270,10 @@ export function RequirementOnePage({
   const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
   const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
+  const activeSourceMode: MaterialsSourceMode =
+    task?.sourceMode ?? (task && !/^https?:\/\//i.test(task.url) ? 'local' : sourceMode)
+  const pipelineSteps = activeSourceMode === 'local' ? STEPS_LOCAL : STEPS_URL
+  const videoFileName = videoPath.replace(/^.*[/\\]/, '')
 
   useEffect(() => {
     setVideoOrientation('unknown')
@@ -265,23 +284,67 @@ export function RequirementOnePage({
     <div className="page-container viral-page">
       <div className="page-header-block">
         <h1>爆款素材获取</h1>
+        <p>支持粘贴平台链接下载，或直接上传本地视频进入同一条素材管线</p>
       </div>
 
       <div className="viral-top-grid">
         <section className="panel-box viral-input-panel">
           <div className="panel-title">
-            <h3>视频链接</h3>
+            <h3>视频来源</h3>
           </div>
 
-          <FormField label="短视频 URL" hint="支持YouTube TikTok Instagram Facebook">
-            <input
-              className="input-text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://www.youtube.com/watch?v=..."
+          <div className="viral-source-mode" role="tablist" aria-label="视频来源">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sourceMode === 'url'}
+              className={`viral-source-mode-btn ${sourceMode === 'url' ? 'is-active' : ''}`}
               disabled={isTaskRunning}
+              onClick={() => setSourceMode('url')}
+            >
+              <LinkSimple size={16} weight="bold" />
+              链接下载
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sourceMode === 'local'}
+              className={`viral-source-mode-btn ${sourceMode === 'local' ? 'is-active' : ''}`}
+              disabled={isTaskRunning}
+              onClick={() => setSourceMode('local')}
+            >
+              <UploadSimple size={16} weight="bold" />
+              本地上传
+            </button>
+          </div>
+
+          {sourceMode === 'url' ? (
+            <VideoUrlField
+              value={url}
+              onChange={setUrl}
+              disabled={isTaskRunning}
+              label="短视频 URL"
             />
-          </FormField>
+          ) : (
+            <FormField label="本地视频" hint={`支持 ${LOCAL_VIDEO_EXTENSIONS.join(' / ')}`}>
+              <PathPicker
+                value={videoPath}
+                onChange={setVideoPath}
+                onBrowse={async () => {
+                  const picked = await onChooseVideoFile('选择本地视频', videoPath || outputDirectory)
+                  if (picked) setVideoPath(picked)
+                }}
+                disabled={isTaskRunning}
+                placeholder="选择要导入的视频文件…"
+              />
+              {videoFileName ? (
+                <p className="viral-local-file-hint">
+                  <FilmStrip size={14} />
+                  <span>{videoFileName}</span>
+                </p>
+              ) : null}
+            </FormField>
+          )}
 
           <FormField label="保存目录">
             <PathPicker
@@ -316,9 +379,13 @@ export function RequirementOnePage({
                 style={{ flex: 1 }}
                 onClick={handleStart}
                 loading={starting}
-                icon={<DownloadSimple size={18} weight="bold" />}
+                icon={
+                  sourceMode === 'local'
+                    ? <UploadSimple size={18} weight="bold" />
+                    : <DownloadSimple size={18} weight="bold" />
+                }
               >
-                {starting ? '正在启动…' : '开始提取'}
+                {starting ? '正在启动…' : sourceMode === 'local' ? '开始提取（本地）' : '开始提取'}
               </Button>
             ) : (
               <Button
@@ -366,12 +433,12 @@ export function RequirementOnePage({
               )}
             </div>
             {task && (
-              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{task.percent}%</span>
+              <span className={`task-percent-tag ${isTaskRunning ? 'pulsing' : ''}`}>{formatTaskPercent(task.percent)}</span>
             )}
           </div>
 
           <PipelineStepper
-            steps={STEPS}
+            steps={pipelineSteps}
             currentStage={task?.stage}
             status={task?.status}
             percent={task?.percent}
@@ -416,7 +483,7 @@ export function RequirementOnePage({
               </div>
             ) : (
               <div className="viral-phone-placeholder">
-                <span>下载完成后在此预览</span>
+                <span>{sourceMode === 'local' ? '导入完成后在此预览' : '下载完成后在此预览'}</span>
                 <small>9:16 竖屏</small>
               </div>
             )}

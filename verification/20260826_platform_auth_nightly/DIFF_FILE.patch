@@ -1,0 +1,109 @@
+diff --git a/packages/core/src/video-download.ts b/packages/core/src/video-download.ts
+index 78baaaa..ac1f46e 100644
+--- a/packages/core/src/video-download.ts
++++ b/packages/core/src/video-download.ts
+@@ -21,11 +21,12 @@ export type VideoDownloadStrategy =
+   | 'tiktok-browser'
+   | 'facebook-browser'
+   | 'yt-dlp-authenticated'
+-  | 'yt-dlp-public'
+
+ /** A per-task cookie file created by the desktop host and removed after yt-dlp exits. */
+ export type AuthenticatedCookieFile = {
+   path: string
++  platform: DownloadableVideoPlatform
++  source: 'paste' | 'builtin'
+   /** User-Agent from the browser session that supplied the cookie jar. */
+   userAgent?: string
+   cleanup(): Promise<void> | void
+@@ -66,7 +67,7 @@ export type VideoDownloadRequest = {
+   url: string
+   directory: string
+   fileStem: string
+-  vendor: { ytdlpExecutable: string; ffmpegExecutable: string }
++  vendor: { ytdlpExecutable: string; ffmpegExecutable: string; denoExecutable: string }
+   config: DownloadConfig
+   updateProgress(percent: number, message: string): void
+   runCommand: RunCommand
+@@ -102,10 +103,15 @@ function publicYtdlpExtraArgs(value: string): string[] {
+     '--netrc-location', '--config-locations', '--config-location', '-u', '-p'
+   ])
+   const blockedFlags = new Set(['--netrc', '-n'])
++  const updateOptions = new Set(['-U', '--update', '--no-update', '--update-to'])
+   const safe: string[] = []
+   for (let index = 0; index < args.length; index += 1) {
+     const argument = args[index]
+     const option = argument.split('=', 1)[0]
++    if (updateOptions.has(option)) {
++      if (option === '--update-to' && !argument.includes('=')) index += 1
++      continue
++    }
+     if (blockedWithValue.has(option)) {
+       if (!argument.includes('=')) index += 1
+       continue
+@@ -253,10 +259,6 @@ function publicFallbacks(
+   return fallbacks
+ }
+
+-async function runYtdlpPublic(request: VideoDownloadRequest): Promise<string> {
+-  return runYtdlp(request)
+-}
+-
+ async function runYtdlpAuthenticated(request: VideoDownloadRequest, authentication: AuthenticatedCookieFile): Promise<string> {
+   return runYtdlp(request, authentication)
+ }
+@@ -267,9 +269,14 @@ function ytdlpAuthenticationArgs(request: VideoDownloadRequest, authentication?:
+   if (proxy) args.push('--proxy', proxy)
+   if (authentication?.path) args.push('--cookies', authentication.path)
+   if (authentication?.userAgent?.trim()) args.push('--user-agent', authentication.userAgent.trim())
++  args.push('--js-runtimes', `deno:${request.vendor.denoExecutable}`)
+   return args
+ }
+
++function authenticationSourceLabel(source: AuthenticatedCookieFile['source']): string {
++  return source === 'paste' ? '粘贴 Cookie 已配置' : '应用内登录已保存'
++}
++
+@@ -397,20 +404,18 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
+-  let browserSessionExported = false
++  let authenticationResolved: AuthenticatedCookieFile | undefined
+   let ytdlpAuthenticationFailure: string | undefined
+-  if (checked.platform !== 'Facebook' && request.resolveAuthenticatedCookies) {
++  if (request.resolveAuthenticatedCookies) {
+     try {
+-      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取已登录浏览器会话…' : '公开解析失败，正在读取已登录浏览器会话…')
++      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
+       const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
+       if (cookieFile) {
+-        browserSessionExported = true
++        authenticationResolved = cookieFile
+@@ -427,45 +432,22 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
+-    if (!request.resolveAuthenticatedCookies || !browserSessionExported) {
++    if (!request.resolveAuthenticatedCookies || (!authenticationResolved && !ytdlpAuthenticationFailure)) {
+       throw new Error('YouTube 视频需要登录后才能下载。请在【全局设置】→【平台登录配置】中配置 YouTube 登录状态。')
+     }
+     if (ytdlpAuthenticationFailure) {
+-      throw new Error(`YouTube 浏览器登录有效，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
++      if (!authenticationResolved) throw new Error(ytdlpAuthenticationFailure)
++      throw new Error(`YouTube ${authenticationSourceLabel(authenticationResolved.source)}，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
+     }
+@@
+-  try {
+-    request.updateProgress(4, '公开直链解析失败，正在使用匿名 yt-dlp 兜底…')
+-    const path = await runYtdlpPublic(request)
+-    return await verifyResult(request, path, checked.platform, 'yt-dlp-public', failures)
+-  } catch (error) {
+-    failures.push({ strategy: 'yt-dlp-public', message: errorMessage(error) })
+-  }
+-
+   if (ytdlpAuthenticationFailure) {
+-    throw new Error(`${checked.platform} 浏览器登录有效，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
++    if (authenticationResolved) {
++      throw new Error(`${checked.platform} ${authenticationSourceLabel(authenticationResolved.source)}，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
++    }
++    throw new Error(`${checked.platform} 公开视频解析失败；认证线路失败：${ytdlpAuthenticationFailure}`)
+   }
+
+-  throw new Error(`公开视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}`)
++  throw new Error(`${checked.platform} 公开视频解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请到【全局设置】→【平台登录配置】配置该平台。`)
+ }

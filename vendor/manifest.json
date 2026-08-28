@@ -1,0 +1,14 @@
+{
+  "yt-dlp": {
+    "channel": "nightly",
+    "version": "2026.08.25.233329",
+    "file": "yt-dlp/yt-dlp.exe",
+    "sha256": "05d3bd5d2ae149256ebf9f2840b5a8daf6e6f1a2f9a346eb60e1fd906ba06ba8",
+    "ejsVersion": "0.8.0"
+  },
+  "deno": {
+    "version": "2.9.5",
+    "file": "deno/deno.exe",
+    "sha256": "98f8c2a2d470e4ccb04c935c86ff8050817d877762aec5eaeeb9e409ccb3b9fd"
+  }
+}

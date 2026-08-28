@@ -7,6 +7,7 @@ import { ModelsPage } from './pages/ModelsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { RequirementOnePage } from './pages/RequirementOnePage'
 import { RequirementTwoPage } from './pages/RequirementTwoPage'
+import { VideoDownloaderPage } from './pages/VideoDownloaderPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
 
 type FixedPage = 'home' | 'models' | 'settings'
@@ -108,6 +109,18 @@ export function App() {
     return result.path ?? undefined
   }
 
+  const handleChooseVideo = async (
+    title: string,
+    defaultPath?: string
+  ): Promise<string | undefined> => {
+    const result = await window.koubox.post<{ path: string | null }>('/dialog/select-file', {
+      title,
+      defaultPath,
+      filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv'] }]
+    })
+    return result.path ?? undefined
+  }
+
   const handleChooseFile = async (
     title: string,
     defaultPath?: string,
@@ -190,6 +203,7 @@ export function App() {
               translationTargetLanguage={config?.translationTargetLanguage ?? 'zh-Hans'}
               openOutputOnComplete={config?.openOutputOnComplete ?? false}
               onChooseDirectory={handleChooseDirectory}
+              onChooseVideoFile={handleChooseVideo}
               onShowToast={showToast}
               onTaskStatus={bindToolStatus('viral-materials')}
             />
@@ -207,9 +221,25 @@ export function App() {
             />
           )}
 
+          {opened.includes('video-downloader') && keepAlivePane(
+            focus.kind === 'tool' && focus.toolId === 'video-downloader' && focus.menu === 'run',
+            <VideoDownloaderPage
+              defaultOutputDirectory={config?.outputDirectory ?? ''}
+              onChooseDirectory={handleChooseDirectory}
+              onShowToast={showToast}
+              onTaskStatus={bindToolStatus('video-downloader')}
+            />
+          )}
+
           {focus.kind === 'tool' && focus.menu !== 'run' && (
             <TaskHistoryPage
-              kind={focus.toolId === 'precise-srt' ? 'req2' : 'req1'}
+              kind={
+                focus.toolId === 'precise-srt'
+                  ? 'req2'
+                  : focus.toolId === 'video-downloader'
+                    ? 'download'
+                    : 'req1'
+              }
               outputDirectory={config?.outputDirectory ?? ''}
               onShowToast={showToast}
             />

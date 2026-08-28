@@ -7,9 +7,11 @@ import {
 } from '@phosphor-icons/react'
 import { toUserTaskMessage, type TaskEvent, type TaskSnapshot } from '@koubox/shared'
 import { ResultPanel } from '../components/ResultPanel'
+import { SrtPreview } from '../components/SrtPreview'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
 
 type RequirementTwoPageProps = {
@@ -278,7 +280,7 @@ export function RequirementTwoPage({
                 </Badge>
               )}
             </div>
-            {task && <span className="task-percent-tag tag-blue">{task.percent}%</span>}
+            {task && <span className="task-percent-tag tag-blue">{formatTaskPercent(task.percent)}</span>}
           </div>
 
           <PipelineStepper
@@ -299,9 +301,18 @@ export function RequirementTwoPage({
         </div>
       </div>
 
-      {/* 成果交付区：SRT 时间轴与文本预览 */}
+      {/* 成果交付区：SRT 专业预览与文本面板 */}
       {task?.transcript && transcriptText && (
         <div className="results-stack">
+          {/* SRT 可视化预览面板 */}
+          <SrtPreview
+            transcript={task.transcript}
+            audioPath={task.artifacts?.audio}
+            onExport={handleExportFiles}
+            onCopy={() => onShowToast('SRT 内容已复制到剪贴板', 'success')}
+          />
+
+          {/* 原始文本面板（可选展开查看） */}
           <ResultPanel
             title={hasSourceText ? '精准对齐文案 (带毫秒时间戳)' : 'Faster-Whisper 语音识别字幕'}
             transcript={task.transcript}

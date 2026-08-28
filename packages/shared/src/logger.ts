@@ -80,12 +80,17 @@ function writeLog(level: LogLevel, component: string, message: string, detail?: 
 export function initLogger(root: string): void {
   projectRoot = root
   const envFile = loadEnvFile(root)
+  // 打包后默认使用 info 级别，确保记录所有重要操作
   minLevel = parseLevel(process.env.KOUBOX_LOG_LEVEL ?? envFile.KOUBOX_LOG_LEVEL)
-  verbose = parseBool(process.env.KOUBOX_LOG_VERBOSE ?? envFile.KOUBOX_LOG_VERBOSE)
+  // 打包后默认启用详细日志
+  verbose = parseBool(process.env.KOUBOX_LOG_VERBOSE ?? envFile.KOUBOX_LOG_VERBOSE) || minLevel === 'debug'
   const logDir = join(root, 'logs', todayDir())
   mkdirSync(logDir, { recursive: true })
   logFilePath = join(logDir, 'koubox.log')
-  writeLog('info', 'logger', '日志系统已初始化', { level: minLevel, verbose, logFilePath })
+  const startupMsg = `日志系统已初始化 | 级别: ${minLevel} | 详细: ${verbose} | 文件: ${logFilePath}`
+  writeLog('info', 'logger', startupMsg)
+  // 记录环境信息
+  writeLog('info', 'logger', `平台: ${process.platform} | Node: ${process.version} | 架构: ${process.arch}`)
 }
 
 export function getLoggerEnv(): Record<string, string> {

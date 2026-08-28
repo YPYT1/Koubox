@@ -1,11 +1,13 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve, delimiter } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { detectGpu } from './runtime.js'
 import { alignKnownText } from './align.js'
 import { transcriptToSrt } from './srt.js'
+import { downloadVideo, type PublicMediaResolution } from './video-download.js'
 import type {
   KouboxConfig,
+  PlatformAuthEntry,
   RequirementTwoMode,
   TaskArtifacts,
   TaskError,
@@ -15,18 +17,9 @@ import type {
   TranslationTargetLanguage,
   YtdlpCookiePlatformId
 } from '@koubox/shared'
-import {
-  assertPastedPlatformCookies,
-  detectPlatform,
-  pastedCookieNamesFromNetscape,
-  PLATFORM_COOKIE_RULES,
-  platformAuthMissingMessage,
-  platformBuiltinCookiesFilename,
-  toUserTaskMessage,
-  normalizeProxyUrl,
-  platformAuthIdFromUrlPlatform
-} from '@koubox/shared'
+import { detectPlatform, platformAuthIdFromUrlPlatform, toUserTaskMessage, normalizeOsPath, normalizeProxyUrl } from '@koubox/shared'
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
+import type { AuthenticatedCookieFile } from './video-download.js'
 
 const log = createLogger('tasks')
 
@@ -57,11 +50,18 @@ export function selectedPlatformCookieFilename(platformId: YtdlpCookiePlatformId
 
 type TaskManagerOptions = {
   getConfig(): KouboxConfig
-  resolveVendor(): { ytdlpExecutable: string; ffmpegExecutable: string }
+  resolveVendor(): { ytdlpExecutable: string; ffmpegExecutable: string; denoExecutable: string }
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
   taskIndexFile: string
+  downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
+  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
+  resolvePlatformAuthentication?(
+    platformId: 'youtube' | 'tiktok' | 'instagram' | 'facebook',
+    auth: PlatformAuthEntry
+  ): Promise<AuthenticatedCookieFile>
 }
 
 type ModelPaths = { asr: string; translation: string }
@@ -75,8 +75,8 @@ type TaskRecord = {
 
 type QueuedJob = {
   record: TaskRecord
-  modelPaths: ModelPaths
-  kind: 'req1' | 'req2'
+  modelPaths?: ModelPaths
+  kind: 'req1' | 'req2' | 'download'
 }
 
 type WorkerMessage = {
@@ -103,39 +103,6 @@ function killProcessTree(child: ChildProcess): void {
   if (!child.pid || child.killed) return
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true })
   else child.kill('SIGTERM')
-}
-
-function ytdlpVideoFormat(maxHeight: number): string {
-  const height = maxHeight > 0 ? `[height<=${maxHeight}]` : ''
-  return `bv*[vcodec^=avc1]${height}+ba/bv*[vcodec^=h264]${height}+ba/bv*${height}+ba/b${height}/best${height}`
-}
-
-function needsChromiumRemux(ffprobeExecutable: string, videoPath: string): boolean {
-  const result = spawnSync(
-    ffprobeExecutable,
-    ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,pix_fmt', '-of', 'csv=p=0', '-i', videoPath],
-    { encoding: 'utf8', windowsHide: true }
-  )
-  if (result.status !== 0) {
-    throw new Error(`ffprobe 失败：${(result.stderr || result.stdout || '').trim()}`)
-  }
-  const line = (result.stdout || '').trim().split(/\r?\n/)[0] ?? ''
-  const [codecRaw, pixRaw] = line.split(',')
-  const codec = (codecRaw ?? '').trim().toLowerCase()
-  const pixFmt = (pixRaw ?? '').trim().toLowerCase()
-  if (!codec) throw new Error(`ffprobe 没有读到视频流：${videoPath}`)
-  const chromiumCodec = codec === 'h264' || codec === 'vp8' || codec === 'vp9'
-  const eightBit420 = pixFmt === 'yuv420p' || pixFmt === 'yuvj420p'
-  return !chromiumCodec || !eightBit420
-}
-
-function splitExtraArgs(value: string): string[] {
-  const args: string[] = []
-  const pattern = /"([^"]*)"|'([^']*)'|(\S+)/g
-  for (const match of value.matchAll(pattern)) {
-    args.push(match[1] ?? match[2] ?? match[3])
-  }
-  return args
 }
 
 function shouldSkipTranslation(sourceLanguage: string | undefined, target: TranslationTargetLanguage): boolean {
@@ -189,8 +156,8 @@ function nextSequence(prefix: string, outputDirectory: string, existingIds: stri
   return max + 1
 }
 
-function allocateTaskId(kind: 'req1' | 'req2', url: string, outputDirectory: string, existingIds: string[]): string {
-  const detected = kind === 'req1' ? detectPlatform(url) : 'Audio'
+function allocateTaskId(kind: 'req1' | 'req2' | 'download', url: string, outputDirectory: string, existingIds: string[]): string {
+  const detected = kind === 'req1' || kind === 'download' ? detectPlatform(url) : 'Audio'
   // Keep the existing task-id casing for compatibility with saved output folders.
   const platform = detected === 'YouTube' ? 'Youtube' : detected === 'TikTok' ? 'Tiktok' : detected
   const prefix = `${platform}_${dateStamp()}_`
@@ -224,13 +191,13 @@ export class TaskManager {
     if (existsSync(this.options.taskIndexFile)) {
       try {
         const taskFiles = JSON.parse(readFileSync(this.options.taskIndexFile, 'utf8')) as string[]
-        for (const taskFile of taskFiles) this.restoreTask(taskFile)
+        for (const taskFile of taskFiles) this.restoreTask(normalizeOsPath(taskFile))
       } catch { /* A malformed index must not stop the desktop application. */ }
     }
-    const root = resolve(outputDirectory)
+    const root = resolve(normalizeOsPath(outputDirectory))
     if (!existsSync(root)) return
     for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || (!entry.name.startsWith('req1-') && !entry.name.startsWith('req2-'))) continue
+      if (!entry.isDirectory() || (!entry.name.startsWith('req1-') && !entry.name.startsWith('req2-') && !entry.name.startsWith('download-'))) continue
       try {
         const taskFile = join(root, entry.name, 'task.json')
         if (!existsSync(taskFile)) continue
@@ -241,20 +208,27 @@ export class TaskManager {
 
   list(): TaskSnapshot[] { return [...this.records.values()].map((record) => this.clone(record.task)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) }
 
-  startRequirementOne(url: string, outputDirectory: string, modelPaths: ModelPaths): TaskSnapshot {
-    const outputRoot = resolve(outputDirectory)
+  startRequirementOne(
+    source: string,
+    outputDirectory: string,
+    modelPaths: ModelPaths,
+    sourceMode: 'url' | 'local' = 'url'
+  ): TaskSnapshot {
+    const outputRoot = resolve(normalizeOsPath(outputDirectory))
     mkdirSync(outputRoot, { recursive: true })
-    const id = allocateTaskId('req1', url, outputRoot, [...this.records.keys()])
+    const resolvedSource = sourceMode === 'local' ? resolve(normalizeOsPath(source)) : source.trim()
+    const id = allocateTaskId('req1', resolvedSource, outputRoot, [...this.records.keys()])
     const taskDir = join(outputRoot, id)
     mkdirSync(taskDir, { recursive: true })
     const task: TaskSnapshot = {
       taskId: id,
       kind: 'req1',
+      sourceMode,
       status: 'queued',
       stage: 'queued',
       percent: 0,
-      message: '任务已排队',
-      url,
+      message: sourceMode === 'local' ? '本地视频任务已排队' : '任务已排队',
+      url: resolvedSource,
       outputDirectory: taskDir,
       taskDirectory: taskDir,
       artifacts: {},
@@ -269,9 +243,10 @@ export class TaskManager {
   }
 
   startRequirementTwo(audioPath: string, sourceText: string, outputDirectory: string, modelPaths: ModelPaths): TaskSnapshot {
-    const outputRoot = resolve(outputDirectory)
+    const outputRoot = resolve(normalizeOsPath(outputDirectory))
     mkdirSync(outputRoot, { recursive: true })
-    const id = allocateTaskId('req2', audioPath, outputRoot, [...this.records.keys()])
+    const resolvedAudio = resolve(normalizeOsPath(audioPath))
+    const id = allocateTaskId('req2', resolvedAudio, outputRoot, [...this.records.keys()])
     const taskDir = join(outputRoot, id)
     mkdirSync(taskDir, { recursive: true })
     const mode: RequirementTwoMode = sourceText.trim() ? 'align' : 'asr-only'
@@ -283,7 +258,7 @@ export class TaskManager {
       stage: 'queued',
       percent: 0,
       message: mode === 'align' ? '精准对齐任务已排队' : '音频识别任务已排队',
-      url: resolve(audioPath),
+      url: resolvedAudio,
       sourceText: sourceText.trim() || undefined,
       outputDirectory: taskDir,
       taskDirectory: taskDir,
@@ -295,6 +270,33 @@ export class TaskManager {
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, modelPaths, kind: 'req2' })
+    return this.clone(task)
+  }
+
+  startDownload(url: string, outputDirectory: string): TaskSnapshot {
+    const outputRoot = resolve(normalizeOsPath(outputDirectory))
+    mkdirSync(outputRoot, { recursive: true })
+    const id = allocateTaskId('download', url, outputRoot, [...this.records.keys()])
+    const taskDir = join(outputRoot, id)
+    mkdirSync(taskDir, { recursive: true })
+    const task: TaskSnapshot = {
+      taskId: id,
+      kind: 'download',
+      status: 'queued',
+      stage: 'queued',
+      percent: 0,
+      message: '下载任务已排队',
+      url,
+      outputDirectory: taskDir,
+      taskDirectory: taskDir,
+      artifacts: {},
+      createdAt: now(),
+      updatedAt: now()
+    }
+    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    this.records.set(id, record)
+    this.persist(record)
+    this.enqueue({ record, kind: 'download' })
     return this.clone(task)
   }
 
@@ -336,6 +338,34 @@ export class TaskManager {
     writeFileSync(this.options.taskIndexFile, JSON.stringify(files, null, 2), 'utf8')
   }
 
+  /** Wipe in-memory tasks and on-disk task index/records. Does not delete output media folders. */
+  clearAllRecords(): void {
+    for (const id of [...this.records.keys()]) {
+      const record = this.records.get(id)
+      if (!record) continue
+      if (record.task.status === 'running' || record.task.status === 'queued') {
+        record.cancelled = true
+        for (const child of record.processes) killProcessTree(child)
+      }
+    }
+    this.queue.length = 0
+    this.records.clear()
+    this.runningCount = 0
+    const recordsDir = this.recordsDirectory()
+    if (existsSync(recordsDir)) {
+      for (const name of readdirSync(recordsDir)) {
+        if (!name.endsWith('.json')) continue
+        try { unlinkSync(join(recordsDir, name)) } catch { /* ignore locked record */ }
+      }
+    }
+    mkdirSync(dirname(this.options.taskIndexFile), { recursive: true })
+    writeFileSync(this.options.taskIndexFile, '[]', 'utf8')
+  }
+
+  hasActiveTasks(): boolean {
+    return this.runningCount > 0 || this.queue.length > 0
+  }
+
   async translate(taskIdValue: string, modelPaths: ModelPaths, targetLanguage?: TranslationTargetLanguage): Promise<TaskSnapshot> {
     const record = this.records.get(taskIdValue)
     if (!record) throw new Error('任务不存在。')
@@ -373,7 +403,7 @@ export class TaskManager {
   export(taskIdValue: string, targetDirectory: string): TaskArtifacts {
     const record = this.records.get(taskIdValue)
     if (!record) throw new Error('任务不存在。')
-    const destination = join(resolve(targetDirectory), record.task.taskId)
+    const destination = join(resolve(normalizeOsPath(targetDirectory)), record.task.taskId)
     mkdirSync(destination, { recursive: true })
     const copied: TaskArtifacts = {}
     for (const [key, source] of Object.entries(record.task.artifacts) as Array<[keyof TaskArtifacts, string | undefined]>) {
@@ -398,8 +428,10 @@ export class TaskManager {
       if (!job || job.record.cancelled) continue
       this.runningCount += 1
       const run = job.kind === 'req1'
-        ? this.executeRequirementOne(job.record, job.modelPaths)
-        : this.executeRequirementTwo(job.record, job.modelPaths)
+        ? this.executeRequirementOne(job.record, job.modelPaths!)
+        : job.kind === 'req2'
+          ? this.executeRequirementTwo(job.record, job.modelPaths!)
+          : this.executeDownloadOnly(job.record)
       void run.finally(() => {
         this.runningCount = Math.max(0, this.runningCount - 1)
         this.pumpQueue()
@@ -411,10 +443,20 @@ export class TaskManager {
     const { task } = record
     const root = resolve(task.outputDirectory)
     mkdirSync(root, { recursive: true })
-    log.info('任务开始', { taskId: task.taskId, url: task.url })
+    const sourceMode = task.sourceMode ?? (/^https?:\/\//i.test(task.url) ? 'url' : 'local')
+    log.info('任务开始', { taskId: task.taskId, url: task.url, sourceMode })
     try {
-      this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在下载视频' })
-      const video = await this.download(record, root, task.taskId)
+      let video: string
+      if (sourceMode === 'local') {
+        this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在导入本地视频' })
+        if (!existsSync(task.url)) throw this.failWithCode(record, 'VIDEO_NOT_FOUND', '选择的本地视频不存在。')
+        const ext = extname(task.url).toLowerCase() || '.mp4'
+        video = join(root, `${task.taskId}${ext}`)
+        copyFileSync(task.url, video)
+      } else {
+        this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在下载视频' })
+        video = await this.download(record, root, task.taskId)
+      }
       record.task.artifacts.video = video
       this.persist(record)
       this.update(record, { stage: 'extract-audio', percent: 28, message: '正在提取原音频' })
@@ -440,6 +482,22 @@ export class TaskManager {
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
       else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
       log.error('任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
+    }
+  }
+
+  private async executeDownloadOnly(record: TaskRecord): Promise<void> {
+    const root = resolve(record.task.outputDirectory)
+    mkdirSync(root, { recursive: true })
+    try {
+      this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在解析并下载视频…' })
+      const video = await this.download(record, root, record.task.taskId)
+      record.task.artifacts.video = video
+      this.persist(record)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '视频下载完成（原始媒体流未转码）' })
+    } catch (error) {
+      if (record.cancelled) return
+      this.fail(record, 'DOWNLOAD_FAILED', errorMessage(error))
+      log.error('下载任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
     }
   }
 
@@ -567,191 +625,35 @@ export class TaskManager {
   }
 
   private async download(record: TaskRecord, directory: string, fileStem: string): Promise<string> {
-    const vendor = this.options.resolveVendor()
-    const executable = vendor.ytdlpExecutable
-    if (!existsSync(executable)) throw new Error(`yt-dlp 不存在：${executable}`)
-    if (!existsSync(vendor.ffmpegExecutable)) throw new Error(`ffmpeg 不存在：${vendor.ffmpegExecutable}`)
     const config = this.options.getConfig()
-    const tempStem = `_dl_${fileStem}`
-    const args = [
-      '--newline',
-      '--no-playlist',
-      '--no-warnings',
-      '--ffmpeg-location',
-      dirname(vendor.ffmpegExecutable),
-      '--merge-output-format',
-      'mp4',
-      '-o',
-      join(directory, `${tempStem}.%(ext)s`)
-    ]
-    if (config.ytdlpProxy.trim()) {
-      const proxy = normalizeProxyUrl(config.ytdlpProxy)
-      if (proxy) args.push('--proxy', proxy)
-    }
-    const platformId = platformAuthIdFromUrlPlatform(detectPlatform(record.task.url))
-    const platformAuth = platformId ? config.ytdlpPlatformAuth?.[platformId] : undefined
-    let cookieSourceText: string | undefined
-    let cookieWorkingFile: string | undefined
-    if (config.ytdlpCookieSource === 'none') {
-      // no cookies
-    } else if (config.ytdlpCookieSource === 'file') {
-      const cookiesPath = config.ytdlpCookiesPath.trim()
-      if (!cookiesPath) throw new Error('登录来源为 Cookies 文件，但未选择文件。请在「全局设置 → 下载（yt-dlp）」中选择 cookies.txt。')
-      if (!existsSync(cookiesPath)) throw new Error(`Cookies 文件不存在：${cookiesPath}`)
-      cookieSourceText = readFileSync(cookiesPath, 'utf8')
-      cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
-      writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
-      args.push('--cookies', cookieWorkingFile)
-    } else if (config.ytdlpCookieSource === 'builtin') {
-      if (platformId && platformAuth?.mode === 'paste') {
-        const pasted = platformAuth.cookies.trim()
-        if (!pasted) {
-          throw new Error(platformAuthMissingMessage(platformId, 'paste', 'empty-paste'))
-        }
-        assertPastedPlatformCookies(platformId, pasted)
-        cookieSourceText = pasted.endsWith('\n') ? pasted : `${pasted}\n`
-        cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
-        writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
-        log.info('下载使用粘贴的平台 Cookie', { taskId: record.task.taskId, platform: platformId, cookies: cookieWorkingFile })
-        args.push('--cookies', cookieWorkingFile)
-      } else {
-        const exportedCookies = platformId
-          ? join(dirname(this.options.taskIndexFile), selectedPlatformCookieFilename(platformId, 'builtin'))
-          : join(dirname(this.options.taskIndexFile), 'ytdlp-cookies.txt')
-        if (!existsSync(exportedCookies)) {
-          if (platformId) {
-            throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'no-builtin-export'))
-          }
-          throw new Error('尚未保存登录状态。请到「全局设置 → 平台登录」打开登录窗口，登录后点击「保存应用内登录」。')
-        }
-        if (platformId) {
-          const rule = PLATFORM_COOKIE_RULES.find((item) => item.id === platformId)
-          if (rule) {
-            const exportedText = readFileSync(exportedCookies, 'utf8')
-            const names = pastedCookieNamesFromNetscape(exportedText, rule.domainTest)
-            const missing = rule.requiredNames.filter((name) => !names.has(name))
-            if (missing.length > 0) {
-              throw new Error(platformAuthMissingMessage(platformId, 'builtin', 'builtin-incomplete'))
-            }
-          }
-        }
-        cookieSourceText = readFileSync(exportedCookies, 'utf8')
-        cookieWorkingFile = join(directory, `.${record.task.taskId}-cookies.txt`)
-        writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
-        args.push('--cookies', cookieWorkingFile)
+    const result = await downloadVideo({
+      url: record.task.url,
+      directory,
+      fileStem,
+      vendor: this.options.resolveVendor(),
+      config,
+      updateProgress: (percent, message) => this.update(record, { percent, message }),
+      runCommand: (command, args, onLine, commandLabel) =>
+        this.runCommand(record, command, args, onLine, commandLabel),
+      downloadTikTokPublic: this.options.downloadTikTokPublic,
+      resolveTikTokBrowserMedia: this.options.resolveTikTokBrowserMedia,
+      resolveFacebookAnonymousMedia: this.options.resolveFacebookAnonymousMedia,
+      resolveAuthenticatedCookies: async (platform) => {
+        const platformId = platformAuthIdFromUrlPlatform(platform)
+        if (!platformId || !this.options.resolvePlatformAuthentication) return undefined
+        return this.options.resolvePlatformAuthentication(platformId, config.ytdlpPlatformAuth[platformId])
       }
-    }
-    args.push('-f', ytdlpVideoFormat(config.ytdlpMaxHeight))
-    if (config.ytdlpExtraArgs.trim()) args.push(...splitExtraArgs(config.ytdlpExtraArgs.trim()))
-    const compatibilityAttempts = platformYtdlpCompatibilityAttempts(platformId)
-    const canonicalUrl = canonicalPlatformDownloadUrl(record.task.url, platformId)
-    const onLine = (line: string) => {
-      const percent = line.match(/(\d+(?:\.\d+)?)%/)
-      if (percent) {
-        this.update(record, {
-          percent: Math.min(28, Math.max(1, Number(percent[1]) * 0.28)),
-          message: `正在下载视频 ${percent[1]}%`
-        })
-        return
-      }
-      if (/Extracting URL/i.test(line)) {
-        this.update(record, { percent: 2, message: '正在解析视频链接…' })
-        return
-      }
-      if (/Downloading webpage|Downloading android|Downloading m3u8|Downloading player/i.test(line)) {
-        this.update(record, { percent: 4, message: '正在获取视频信息…' })
-        return
-      }
-      if (/\[download\]\s+Destination:/i.test(line)) {
-        this.update(record, { percent: 8, message: '开始下载视频文件…' })
-      }
-    }
-    try {
-      for (let index = 0; index < compatibilityAttempts.length; index += 1) {
-        if (cookieWorkingFile && cookieSourceText !== undefined) writeFileSync(cookieWorkingFile, cookieSourceText, 'utf8')
-        const compatibilityArgs = compatibilityAttempts[index]
-        if (compatibilityArgs.length > 0) {
-          log.info('下载启用平台兼容参数', {
-            taskId: record.task.taskId,
-            platform: platformId,
-            attempt: index + 1,
-            impersonate: compatibilityArgs.at(-1)
-          })
-        }
-        try {
-          await this.runCommand(record, executable, [...args, ...compatibilityArgs, canonicalUrl], onLine, 'yt-dlp')
-          break
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          const retryableTikTok = platformId === 'tiktok' && /Unable to extract universal data for rehydration|Unexpected response from webpage request|Unable to extract challenge data/i.test(message)
-          if (!retryableTikTok || index >= compatibilityAttempts.length - 1) throw error
-          log.warn('TikTok 页面验证失败，切换下一组浏览器兼容参数重试', {
-            taskId: record.task.taskId,
-            attempt: index + 1,
-            error: message
-          })
-        }
-      }
-    } finally {
-      if (cookieWorkingFile && existsSync(cookieWorkingFile)) unlinkSync(cookieWorkingFile)
-    }
-    const file = readdirSync(directory).find((name) => !name.endsWith('.part') && !name.endsWith('.ytdl') && name.startsWith(`${tempStem}.`))
-    if (!file) throw new Error('yt-dlp 已结束，但没有找到下载的视频文件。')
-    const downloaded = join(directory, file)
-    const finalExt = extname(file).toLowerCase() || '.mp4'
-    const finalPath = join(directory, `${fileStem}${finalExt === '.mp4' ? '.mp4' : finalExt}`)
-    if (downloaded !== finalPath) {
-      if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
-      renameSync(downloaded, finalPath)
-    }
-    return this.ensureChromiumPlayable(record, finalPath)
-  }
-
-  private async ensureChromiumPlayable(record: TaskRecord, videoPath: string): Promise<string> {
-    const ffmpeg = this.options.resolveVendor().ffmpegExecutable
-    const ffprobe = join(dirname(ffmpeg), 'ffprobe.exe')
-    if (!existsSync(ffprobe)) throw new Error(`ffprobe 不存在：${ffprobe}`)
-    if (!needsChromiumRemux(ffprobe, videoPath)) return videoPath
-    this.update(record, { percent: 26, message: '正在转码为应用内可预览格式…' })
-    log.info('视频编码 Electron 无法预览，开始转码 H.264', { taskId: record.task.taskId, videoPath })
-    const dir = dirname(videoPath)
-    const stem = basename(videoPath, extname(videoPath))
-    const tempPath = join(dir, `${stem}.playable.mp4`)
-    const finalPath = join(dir, `${stem}.mp4`)
-    await this.runCommand(record, ffmpeg, [
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-y',
-      '-i',
-      videoPath,
-      '-map',
-      '0:v:0',
-      '-map',
-      '0:a:0?',
-      '-c:v',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
-      '-preset',
-      'veryfast',
-      '-crf',
-      '18',
-      '-c:a',
-      'aac',
-      '-b:a',
-      '192k',
-      '-movflags',
-      '+faststart',
-      tempPath
-    ])
-    if (!existsSync(tempPath)) throw new Error('转码已结束，但没有找到可预览视频文件。')
-    if (videoPath !== tempPath && existsSync(videoPath)) unlinkSync(videoPath)
-    if (tempPath !== finalPath) {
-      if (existsSync(finalPath)) unlinkSync(finalPath)
-      renameSync(tempPath, finalPath)
-    }
-    return finalPath
+    })
+    log.info('公共下载层完成', {
+      taskId: record.task.taskId,
+      platform: result.platform,
+      strategy: result.strategy,
+      videoCodec: result.media.videoCodec,
+      audioCodec: result.media.audioCodec,
+      width: result.media.width,
+      height: result.media.height
+    })
+    return result.path
   }
 
   private async separateVocals(record: TaskRecord, audioPath: string, vocalsPath: string): Promise<string> {

@@ -1,5 +1,6 @@
 import React from 'react'
 import { FolderOpen } from '@phosphor-icons/react'
+import { normalizeOsPath } from '@koubox/shared'
 import { Button } from './Button'
 
 export interface FormFieldProps {
@@ -51,7 +52,7 @@ export function PathPicker({
       <input
         className="input-text"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => onChange(normalizeOsPath(e.target.value))}
         placeholder={placeholder}
         disabled={disabled}
       />

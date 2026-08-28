@@ -9,6 +9,9 @@ declare global {
       del<T>(path: string): Promise<T>
       mediaUrl(filePath: string): string
       openDevTools(): Promise<boolean>
+      logError(message: string, detail?: unknown): Promise<void>
+      logWarn(message: string, detail?: unknown): Promise<void>
+      logInfo(message: string, detail?: unknown): Promise<void>
       events<T>(path: string, onEvent: (event: T) => void): () => void
     }
   }

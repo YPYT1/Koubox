@@ -1,21 +1,18 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { startLocalApi } from '@koubox/core'
-import { PLATFORM_COOKIE_RULES, type YtdlpCookiePlatformId } from '@koubox/shared'
+import { createYtdlpUpdateManager, startLocalApi } from '@koubox/core'
+import { defaultPlatformAuth, PLATFORM_HOMEPAGES, type YtdlpCookiePlatformId } from '@koubox/shared'
 import { initLogger, createLogger } from '@koubox/shared/logger'
-import {
-  applyLoginSessionProxy,
-  buildLoginCookieStatus,
-  exportLoginCookies,
-  loginPartition,
-  migrateLegacyLoginCookies
-} from './cookies'
+import { buildLoginCookieStatus, applyLoginSessionProxy, resolvePlatformAuthentication } from './cookies'
+import { resolveFacebookAnonymousWithChromium } from './facebook-browser'
+import { clearAppCache, resolveAppDataRoots, applyPendingDiskClear } from './clear-cache'
+import { resolveTikTokBrowserMedia } from './tiktok-browser'
+import { downloadTikTokWithReference } from './tiktok-reference'
 
 let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
 let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
-let cookieDirectory = ''
 
 /** 便携包：用户数据与 Cookie 放在 exe 旁 userdata，不共用开发机 AppData。 */
 function usePortableUserData(): void {
@@ -96,16 +93,12 @@ function registerDebugShortcuts(): void {
   globalShortcut.register('CommandOrControl+Shift+I', open)
 }
 
-const PLATFORM_LOGIN_URLS: Record<YtdlpCookiePlatformId, string> = {
-  youtube: 'https://www.youtube.com/',
-  tiktok: 'https://www.tiktok.com/',
-  instagram: 'https://www.instagram.com/accounts/edit/',
-  facebook: 'https://www.facebook.com/'
-}
-
 async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void> {
   if (loginWindow && !loginWindow.isDestroyed()) {
-    loginWindow.close()
+    loginWindow.setTitle(`登录 ${platformId}`)
+    await loginWindow.loadURL(PLATFORM_HOMEPAGES[platformId])
+    loginWindow.focus()
+    return
   }
   const proxy = localApi?.getConfig().ytdlpProxy ?? ''
   await applyLoginSessionProxy(platformId, proxy)
@@ -118,11 +111,11 @@ async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
     height: 780,
     minWidth: 900,
     minHeight: 640,
-    title,
+    title: `登录 ${platformId}`,
     icon: findWindowIcon(),
     autoHideMenuBar: true,
     webPreferences: {
-      partition,
+      partition: 'persist:koubox-ytdlp-login',
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false
@@ -149,27 +142,46 @@ async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
     void child.loadURL(url)
     return { action: 'deny' }
   })
-  await nextLoginWindow.loadURL(PLATFORM_LOGIN_URLS[platformId])
-  nextLoginWindow.on('closed', () => {
-    if (loginWindow === nextLoginWindow) loginWindow = undefined
+  await loginWindow.loadURL(PLATFORM_HOMEPAGES[platformId])
+  loginWindow.on('closed', () => {
+    loginWindow = undefined
   })
 }
 
-ipcMain.handle('login:cookie-status', () => {
-  const config = localApi?.getConfig()
-  return buildLoginCookieStatus(cookieDirectory, config?.ytdlpPlatformAuth, config?.ytdlpProxy)
-})
-
 async function createWindow(): Promise<void> {
   const projectDirectory = findProjectDirectory()
-  initLogger(projectDirectory)
+  const userData = app.getPath('userData')
+  // Wipe disk caches before any BrowserWindow opens — avoids Chromium
+  // entry_impl.cc "No file for …" freezes after a mid-run cache clear.
+  await applyPendingDiskClear(projectDirectory)
+  // Dev logs → repo/logs；打包便携包 logs → exe 旁 userdata/logs
+  initLogger(app.isPackaged ? userData : projectDirectory)
   const mainLog = createLogger('main')
-  mainLog.info('应用启动', { projectDirectory })
+  mainLog.info('========== 应用启动 ==========')
+  mainLog.info('环境信息', {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version
+  })
+  mainLog.info('路径配置', {
+    projectDirectory,
+    userData,
+    documents: app.getPath('documents'),
+    logs: app.getPath('logs')
+  })
   patchBundledPythonHome()
 
-  const userData = app.getPath('userData')
-  cookieDirectory = userData
-  migrateLegacyLoginCookies(cookieDirectory)
+  const bundledYtdlp = join(findVendorDirectory(), 'yt-dlp', 'yt-dlp.exe')
+  const denoExecutable = join(findVendorDirectory(), 'deno', 'deno.exe')
+  const ytdlpUpdates = createYtdlpUpdateManager({
+    bundledExecutable: bundledYtdlp,
+    denoExecutable,
+    updateDirectory: join(userData, 'vendor-updates', 'yt-dlp')
+  })
 
   localApi = await startLocalApi({
     configFile: join(userData, 'runtime.json'),
@@ -181,18 +193,12 @@ async function createWindow(): Promise<void> {
       demucsModelDirectory: join(findModelsDirectory(), 'demucs'),
       ytdlpDirectory: join(findVendorDirectory(), 'yt-dlp'),
       ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin'),
+      denoDirectory: join(findVendorDirectory(), 'deno'),
       translationTargetLanguage: 'zh-Hans',
       asrLanguage: 'auto',
       openOutputOnComplete: false,
       ytdlpProxy: '',
-      ytdlpCookieSource: 'builtin',
-      ytdlpCookiesPath: '',
-      ytdlpPlatformAuth: {
-        youtube: { mode: 'builtin', cookies: '' },
-        tiktok: { mode: 'builtin', cookies: '' },
-        instagram: { mode: 'paste', cookies: '' },
-        facebook: { mode: 'builtin', cookies: '' }
-      },
+      ytdlpPlatformAuth: defaultPlatformAuth(),
       ytdlpMaxHeight: 0,
       ytdlpExtraArgs: '',
       maxConcurrentTasks: 1,
@@ -206,7 +212,31 @@ async function createWindow(): Promise<void> {
     projectDirectory,
     pythonProjectDirectory: findPythonProjectDirectory(),
     bundledPythonExecutable: findBundledPythonExecutable(),
+    downloadTikTokPublic: (url, directory, fileStem, onLine) => downloadTikTokWithReference({
+      url,
+      directory,
+      fileStem,
+      onLine,
+      pythonExecutable: findBundledPythonExecutable() ?? join(findPythonProjectDirectory(), '.venv', 'Scripts', 'python.exe'),
+      pythonSourceDirectory: join(findPythonProjectDirectory(), 'src'),
+      ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin')
+    }),
     pinBundledPaths: app.isPackaged,
+    resolveTikTokBrowserMedia,
+    resolveFacebookAnonymousMedia: resolveFacebookAnonymousWithChromium,
+    resolvePlatformAuthentication,
+    resolveActiveYtdlp: ytdlpUpdates.resolveActive,
+    checkYtdlpUpdate: ytdlpUpdates.check,
+    installYtdlpUpdate: ytdlpUpdates.install,
+    restoreBundledYtdlp: ytdlpUpdates.restore,
+    getAppDataRoots: async () => resolveAppDataRoots(projectDirectory),
+    clearAppCache: async () => clearAppCache({
+      projectDirectory,
+      parentWindow: mainWindow,
+      closeLoginWindow: () => {
+        if (loginWindow && !loginWindow.isDestroyed()) loginWindow.close()
+      }
+    }),
     selectDirectory: async (title, defaultPath) => {
       const dialogOptions: OpenDialogOptions = {
         title,
@@ -249,9 +279,11 @@ async function createWindow(): Promise<void> {
       if (error) throw new Error(error)
     },
     openLoginWindow,
-    exportLoginCookies: (platformId, platformAuth, proxy) => exportLoginCookies(cookieDirectory, platformId, platformAuth, proxy),
-    getLoginCookieStatus: (platformAuth, proxy) => buildLoginCookieStatus(cookieDirectory, platformAuth, proxy)
+    getLoginCookieStatus: (platformAuth, proxy, platformId) => buildLoginCookieStatus(platformAuth, proxy, platformId)
   })
+
+  mainLog.info('本地 API 已启动', { baseUrl: localApi.baseUrl })
+  mainLog.info('初始配置', localApi.getConfig())
 
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -261,6 +293,7 @@ async function createWindow(): Promise<void> {
     title: '口播匣',
     icon: findWindowIcon(),
     backgroundColor: '#f0f2f5',
+    show: false,  // 先不显示，等内容加载后再显示
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -272,12 +305,41 @@ async function createWindow(): Promise<void> {
   })
   mainWindow.setMenuBarVisibility(false)
 
+  // 内容加载完成后立即显示窗口
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+  })
+
   mainWindow.webContents.on('devtools-opened', () => {
     if (!isDebugModeEnabled()) mainWindow?.webContents.closeDevTools()
   })
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
+    const editShortcut = input.control || input.meta
+    if (editShortcut) {
+      const key = input.key.toLowerCase()
+      if (key === 'c') {
+        event.preventDefault()
+        mainWindow?.webContents.copy()
+        return
+      }
+      if (key === 'x') {
+        event.preventDefault()
+        mainWindow?.webContents.cut()
+        return
+      }
+      if (key === 'v') {
+        event.preventDefault()
+        mainWindow?.webContents.paste()
+        return
+      }
+      if (key === 'a') {
+        event.preventDefault()
+        mainWindow?.webContents.selectAll()
+        return
+      }
+    }
     const isF12 = input.key === 'F12' || input.code === 'F12'
     const isDevShortcut = (input.control || input.meta) && input.shift && (input.key === 'I' || input.key === 'i' || input.code === 'KeyI')
     if (!isF12 && !isDevShortcut) return
@@ -293,9 +355,27 @@ async function createWindow(): Promise<void> {
 
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   else await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+
+  mainLog.info('主窗口已创建')
 }
 
 ipcMain.handle('devtools:toggle', () => toggleDevTools())
+
+// 前端日志记录
+ipcMain.handle('log:error', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.error(message, detail)
+})
+
+ipcMain.handle('log:warn', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.warn(message, detail)
+})
+
+ipcMain.handle('log:info', (_event, message: string, detail?: unknown) => {
+  const frontendLog = createLogger('frontend')
+  frontendLog.info(message, detail)
+})
 
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })

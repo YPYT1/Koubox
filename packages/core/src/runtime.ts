@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId, YtdlpCookieSource } from '@koubox/shared'
-import { defaultPlatformAuth } from '@koubox/shared'
+import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId } from '@koubox/shared'
+import { defaultPlatformAuth, normalizeKouboxConfigPaths } from '@koubox/shared'
+import { inspectYtdlpRuntime } from './ytdlp-update.js'
 
 const asrModelFiles = [
   'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
@@ -18,6 +19,7 @@ const translationModelFiles = [
 ]
 
 const ytdlpExpectedFiles = ['yt-dlp.exe']
+const denoExpectedFiles = ['deno.exe']
 
 const ffmpegExpectedFiles = [
   'ffmpeg.exe',
@@ -32,6 +34,11 @@ const ffmpegExpectedFiles = [
   'swscale-9.dll'
 ]
 
+function isLegacyDevelopmentVendorPath(directory: string, suffix: 'yt-dlp' | 'ffmpeg/bin'): boolean {
+  const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  return normalized.endsWith(`/koubox/vendor/${suffix}`)
+}
+
 export class RuntimeStore {
   constructor(
     private readonly file: string,
@@ -40,11 +47,16 @@ export class RuntimeStore {
   ) {}
 
   private applyPinned(config: KouboxConfig): KouboxConfig {
-    if (!this.pinBundledPaths) return config
-    // 只锁定工具链路径；模型目录允许用户改到外置 models（增量更新包不含 models）
-    return {
+    // 总是锁定下载工具路径（yt-dlp、deno）
+    const bundledDownloadTools = {
       ...config,
       ytdlpDirectory: this.defaults.ytdlpDirectory,
+      denoDirectory: this.defaults.denoDirectory
+    }
+    // 打包后：额外锁定 ffmpeg 和 Python，但允许用户自定义模型路径
+    if (!this.pinBundledPaths) return bundledDownloadTools
+    return {
+      ...bundledDownloadTools,
       ffmpegDirectory: this.defaults.ffmpegDirectory,
       pythonExecutable: this.defaults.pythonExecutable
     }
@@ -53,6 +65,8 @@ export class RuntimeStore {
   read(): KouboxConfig {
     if (!existsSync(this.file)) return this.write(this.defaults)
     const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as Partial<KouboxConfig>
+    const legacy = parsed as Partial<KouboxConfig> & Record<string, unknown>
+    const hasLegacyBrowserAuthFields = 'ytdlpCookieSource' in legacy || 'ytdlpCookiesPath' in legacy || 'platformBrowserProfiles' in legacy
     const config = { ...this.defaults, ...parsed }
     if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
       config.modelsDirectory = this.defaults.modelsDirectory
@@ -65,18 +79,18 @@ export class RuntimeStore {
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
     if (!config.ffmpegDirectory) config.ffmpegDirectory = this.defaults.ffmpegDirectory
+    if (!config.denoDirectory) config.denoDirectory = this.defaults.denoDirectory
+    // Development builds used to persist tools from the sibling Koubox checkout.
+    // Migrate only that legacy vendor layout; keep any other user-selected path.
+    const migrateLegacyYtdlpPath = isLegacyDevelopmentVendorPath(config.ytdlpDirectory, 'yt-dlp')
+    const migrateLegacyFfmpegPath = isLegacyDevelopmentVendorPath(config.ffmpegDirectory, 'ffmpeg/bin')
+    const migratedLegacyVendorPaths = migrateLegacyYtdlpPath || migrateLegacyFfmpegPath
+    if (migrateLegacyYtdlpPath) config.ytdlpDirectory = this.defaults.ytdlpDirectory
+    if (migrateLegacyFfmpegPath) config.ffmpegDirectory = this.defaults.ffmpegDirectory
     if (!config.translationTargetLanguage) config.translationTargetLanguage = this.defaults.translationTargetLanguage
     if (!config.asrLanguage) config.asrLanguage = this.defaults.asrLanguage
     if (typeof config.openOutputOnComplete !== 'boolean') config.openOutputOnComplete = this.defaults.openOutputOnComplete
     if (typeof config.ytdlpProxy !== 'string') config.ytdlpProxy = this.defaults.ytdlpProxy
-    const parsedSource = parsed.ytdlpCookieSource as YtdlpCookieSource | 'chrome' | 'edge' | undefined
-    if (parsedSource === 'chrome' || parsedSource === 'edge') {
-      config.ytdlpCookieSource = 'builtin'
-    }
-    if (config.ytdlpCookieSource !== 'builtin' && config.ytdlpCookieSource !== 'none' && config.ytdlpCookieSource !== 'file') {
-      config.ytdlpCookieSource = this.defaults.ytdlpCookieSource
-    }
-    if (typeof config.ytdlpCookiesPath !== 'string') config.ytdlpCookiesPath = this.defaults.ytdlpCookiesPath
     config.ytdlpPlatformAuth = normalizePlatformAuth(
       (parsed as { ytdlpPlatformAuth?: unknown }).ytdlpPlatformAuth,
       this.defaults.ytdlpPlatformAuth,
@@ -99,13 +113,17 @@ export class RuntimeStore {
     }
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
-    const normalized = this.applyPinned(config)
-    if (usesLegacyAsrModel || this.pinBundledPaths) return this.write(normalized)
+    const normalized = normalizeKouboxConfigPaths(this.applyPinned(config))
+    const downloadRuntimePathsChanged = normalized.ytdlpDirectory !== config.ytdlpDirectory || normalized.denoDirectory !== config.denoDirectory
+    delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookieSource
+    delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookiesPath
+    delete (normalized as KouboxConfig & Record<string, unknown>).platformBrowserProfiles
+    if (usesLegacyAsrModel || migratedLegacyVendorPaths || hasLegacyBrowserAuthFields || downloadRuntimePathsChanged || this.pinBundledPaths) return this.write(normalized)
     return normalized
   }
 
   write(next: KouboxConfig): KouboxConfig {
-    const pinned = this.applyPinned(next)
+    const pinned = normalizeKouboxConfigPaths(this.applyPinned(next))
     mkdirSync(dirname(this.file), { recursive: true })
     writeFileSync(this.file, JSON.stringify(pinned, null, 2), 'utf8')
     return pinned
@@ -150,10 +168,11 @@ function inspectModel(
   }
 }
 
-function executableResponds(executable: string, versionArgument: string): boolean {
-  if (!existsSync(executable)) return false
+function executableVersion(executable: string, versionArgument: string): string | undefined {
+  if (!existsSync(executable)) return undefined
   const probe = spawnSync(executable, [versionArgument], { encoding: 'utf8', windowsHide: true })
-  return probe.status === 0
+  if (probe.status !== 0) return undefined
+  return (probe.stdout || probe.stderr).trim().split(/\r?\n/)[0] || undefined
 }
 
 function inspectVendorTool(
@@ -163,15 +182,17 @@ function inspectVendorTool(
   expectedFiles: string[]
 ): VendorToolCheck {
   const executable = join(directory, executableName)
+  const version = executableVersion(executable, versionArgument)
   const foundFiles = expectedFiles.filter((file) => existsSync(join(directory, file)))
   const missingFiles = expectedFiles.filter((file) => !existsSync(join(directory, file)))
   return {
-    ready: executableResponds(executable, versionArgument),
+    ready: Boolean(version),
     directory,
     executable,
     expectedFiles,
     foundFiles,
-    missingFiles
+    missingFiles,
+    version
   }
 }
 
@@ -216,12 +237,14 @@ export function resolveVendorPaths(config: KouboxConfig): {
   ffmpegDirectory: string
   ytdlpExecutable: string
   ffmpegExecutable: string
+  denoExecutable: string
 } {
   return {
     ytdlpDirectory: config.ytdlpDirectory,
     ffmpegDirectory: config.ffmpegDirectory,
     ytdlpExecutable: join(config.ytdlpDirectory, 'yt-dlp.exe'),
-    ffmpegExecutable: join(config.ffmpegDirectory, 'ffmpeg.exe')
+    ffmpegExecutable: join(config.ffmpegDirectory, 'ffmpeg.exe'),
+    denoExecutable: join(config.denoDirectory, 'deno.exe')
   }
 }
 
@@ -262,9 +285,14 @@ function normalizePlatformAuth(
   return next
 }
 
-export function getRuntimeStatus(config: KouboxConfig): RuntimeStatus {
+export function getRuntimeStatus(
+  config: KouboxConfig,
+  activeYtdlp?: { executable: string; source: 'bundled' | 'user-update'; channel: 'nightly' }
+): RuntimeStatus {
   const modelPaths = resolveModelPaths(config)
   const vendorPaths = resolveVendorPaths(config)
+  const activeYtdlpExecutable = activeYtdlp?.executable ?? vendorPaths.ytdlpExecutable
+  const ytdlpRuntime = inspectYtdlpRuntime(activeYtdlpExecutable, vendorPaths.denoExecutable)
   return {
     healthy: true,
     startedAt: new Date().toISOString(),
@@ -275,8 +303,23 @@ export function getRuntimeStatus(config: KouboxConfig): RuntimeStatus {
       inspectDemucs(modelPaths.demucs)
     ],
     vendor: {
-      ytdlp: inspectVendorTool(vendorPaths.ytdlpDirectory, 'yt-dlp.exe', '--version', ytdlpExpectedFiles),
-      ffmpeg: inspectVendorTool(vendorPaths.ffmpegDirectory, 'ffmpeg.exe', '-version', ffmpegExpectedFiles)
+      ytdlp: {
+        ...inspectVendorTool(
+          dirname(activeYtdlpExecutable),
+          'yt-dlp.exe',
+          '--version',
+          ytdlpExpectedFiles
+        ),
+        channel: activeYtdlp?.channel ?? 'nightly',
+        source: activeYtdlp?.source ?? 'bundled',
+        ejsVersion: ytdlpRuntime.ejsVersion,
+        jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion,
+        // 只要 version 和 jsRuntimeVersion 存在就认为 ready
+        // ejsVersion 只在用 --simulate 时才能检测到，不作为 ready 的必要条件
+        ready: Boolean(ytdlpRuntime.version && ytdlpRuntime.jsRuntimeVersion)
+      },
+      ffmpeg: inspectVendorTool(vendorPaths.ffmpegDirectory, 'ffmpeg.exe', '-version', ffmpegExpectedFiles),
+      deno: inspectVendorTool(config.denoDirectory, 'deno.exe', '--version', denoExpectedFiles)
     }
   }
 }
