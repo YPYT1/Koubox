@@ -18,6 +18,8 @@ https://download.pytorch.org/whl/cu128/
 D:\Project\Koubox\python\wheels\
 ```
 
+`Koubox-subtitle-tool/python/wheels` 已通过 **目录联接（junction）** 指向上述路径，无需再拷一份。
+
 然后在 `D:\Project\Koubox\python` 执行：
 
 ```powershell
