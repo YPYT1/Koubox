@@ -21,9 +21,9 @@ type VocalSeparationPageProps = {
 }
 
 const STEPS = [
-  { stage: 'download', label: '导入音频', desc: '复制本地音频到任务目录' },
-  { stage: 'extract-audio', label: '转换音频', desc: '生成 Demucs 可处理的高精度 WAV' },
-  { stage: 'separate-vocals', label: '分离人声', desc: '去除背景音乐，保留人声轨' },
+  { stage: 'download', label: '导入音频', desc: '读取本地音频文件（不写入保存目录）' },
+  { stage: 'extract-audio', label: '转换音频', desc: '临时生成 Demucs 可处理的高精度 WAV' },
+  { stage: 'separate-vocals', label: '分离人声', desc: '去除背景音乐，仅输出人声轨' },
   { stage: 'complete', label: '完成', desc: '人声文件已写入保存目录' }
 ]
 
@@ -92,6 +92,9 @@ export function VocalSeparationPage({
       onShowToast(err instanceof Error ? err.message : '取消失败', 'error')
     }
   }
+
+  const originalPreviewPath = audioPath.trim() || task?.url || ''
+  const vocalsPreviewPath = task?.artifacts.vocals ?? ''
 
   return (
     <div className="page-container viral-page">
@@ -163,14 +166,28 @@ export function VocalSeparationPage({
 
       <section className="panel-box viral-preview-panel">
         <div className="panel-title">
-          <h3>人声预览</h3>
-          <span className="viral-preview-hint">分离完成后可在此直接播放</span>
+          <h3>音频预览</h3>
         </div>
-        <AudioPreviewSlot
-          audioPath={task?.artifacts.vocals ?? ''}
-          label="人声音频"
-          onError={(message) => onShowToast(message, 'error')}
-        />
+        <div className="vocal-preview-stack">
+          <div className="viral-audio-slot">
+            <div className="viral-slot-label">
+              <span>原始音频</span>
+            </div>
+            <AudioPreviewSlot
+              audioPath={originalPreviewPath}
+              onError={(message) => onShowToast(message, 'error')}
+            />
+          </div>
+          <div className="viral-audio-slot">
+            <div className="viral-slot-label">
+              <span>人声音频</span>
+            </div>
+            <AudioPreviewSlot
+              audioPath={vocalsPreviewPath}
+              onError={(message) => onShowToast(message, 'error')}
+            />
+          </div>
+        </div>
       </section>
     </div>
   )

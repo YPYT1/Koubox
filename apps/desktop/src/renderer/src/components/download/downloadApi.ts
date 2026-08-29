@@ -1,8 +1,10 @@
 import {
   assertDownloadableVideoUrl,
   assertLocalAudioPath,
+  assertLocalSpeechMediaPath,
   assertLocalVideoPath,
   type TaskSnapshot,
+  SPEECH_TO_TEXT_PIPELINE_PATH,
   VIDEO_AUDIO_PIPELINE_PATH,
   VIDEO_DOWNLOAD_PIPELINE_PATH,
   VIDEO_MATERIALS_PIPELINE_PATH,
@@ -58,6 +60,16 @@ export async function startVocalSeparationPipeline(audioPath: string, outputDire
   if (!outputDirectory.trim()) throw new Error('请选择保存目录。')
   return window.koubox.post<TaskSnapshot>(VOCAL_SEPARATION_PIPELINE_PATH, {
     audioPath: checked,
+    outputDirectory: outputDirectory.trim()
+  })
+}
+
+/** 本地上传音频或视频 + 语音识别 */
+export async function startSpeechToTextPipeline(mediaPath: string, outputDirectory: string): Promise<TaskSnapshot> {
+  const checked = assertLocalSpeechMediaPath(mediaPath)
+  if (!outputDirectory.trim()) throw new Error('请选择保存目录。')
+  return window.koubox.post<TaskSnapshot>(SPEECH_TO_TEXT_PIPELINE_PATH, {
+    mediaPath: checked,
     outputDirectory: outputDirectory.trim()
   })
 }

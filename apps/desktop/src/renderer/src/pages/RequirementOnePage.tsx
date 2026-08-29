@@ -49,7 +49,7 @@ const STEPS_URL = [
 ]
 
 const STEPS_LOCAL = [
-  { stage: 'download', label: '导入视频', desc: '复制本地视频到任务目录' },
+  { stage: 'download', label: '导入视频', desc: '读取本地视频文件（不写入保存目录）' },
   { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
   { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
   { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' },
@@ -232,11 +232,15 @@ export function RequirementOnePage({
     original: originalLines[index] ?? '—',
     translated: translatedLines[index] ?? '—'
   }))
-  const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
-  const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
-  const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
   const activeSourceMode: MaterialsSourceMode =
     task?.sourceMode ?? (task && !/^https?:\/\//i.test(task.url) ? 'local' : sourceMode)
+  const videoPreviewPath =
+    activeSourceMode === 'local'
+      ? (videoPath.trim() || task?.url || '')
+      : (task?.artifacts.video ?? '')
+  const videoSrc = videoPreviewPath ? window.koubox.mediaUrl(videoPreviewPath) : ''
+  const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
+  const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
   const pipelineSteps = activeSourceMode === 'local' ? STEPS_LOCAL : STEPS_URL
 
   useEffect(() => {
@@ -402,7 +406,7 @@ export function RequirementOnePage({
               </div>
             ) : (
               <div className="viral-phone-placeholder">
-                <span>{sourceMode === 'local' ? '导入完成后在此预览' : '下载完成后在此预览'}</span>
+                <span>{activeSourceMode === 'local' ? '选择视频后可在此预览' : '下载完成后在此预览'}</span>
                 <small>9:16 竖屏</small>
               </div>
             )}

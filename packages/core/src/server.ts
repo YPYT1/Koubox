@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
-import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalSpeechMediaPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, SPEECH_TO_TEXT_PIPELINE_PATH, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
@@ -543,6 +543,17 @@ export async function startLocalApi(options: ServerOptions) {
           : normalizeOsPath(store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
         return json(response, 202, tasks.startVocalSeparation(audioPath, outputDirectory))
+      }
+      if (method === 'POST' && url.pathname === SPEECH_TO_TEXT_PIPELINE_PATH) {
+        const body = await readJson(request)
+        const mediaPath = typeof body.mediaPath === 'string' ? assertLocalSpeechMediaPath(body.mediaPath) : ''
+        if (!mediaPath) return json(response, 400, { error: '请选择本地音频或视频文件。' })
+        if (!existsSync(mediaPath)) return json(response, 400, { error: '本地媒体文件不存在。' })
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+          ? normalizeOsPath(body.outputDirectory.trim())
+          : normalizeOsPath(store.read().outputDirectory)
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startSpeechToText(mediaPath, outputDirectory, resolveModelPaths(store.read())))
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {

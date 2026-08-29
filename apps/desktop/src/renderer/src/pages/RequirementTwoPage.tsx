@@ -1,79 +1,89 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
+  ArrowsIn,
+  ArrowsOut,
+  Check,
+  Copy,
   Subtitles,
-  X,
-  Export,
-  MusicNotes
+  X
 } from '@phosphor-icons/react'
-import { toUserTaskMessage, type TaskEvent, type TaskSnapshot } from '@koubox/shared'
-import { ResultPanel } from '../components/ResultPanel'
-import { SrtPreview } from '../components/SrtPreview'
+import { type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
-import { PipelineStepper } from '../components/common/PipelineStepper'
-import { formatTaskPercent } from '../utils/progress'
-import { Badge } from '../components/common/Badge'
+import { PipelineStatusPanel } from '../components/common/PipelineStatusPanel'
+import {
+  AudioPreviewSlot,
+  LocalSpeechMediaField,
+  usePipelineTask
+} from '../components/download'
 
 type RequirementTwoPageProps = {
   defaultOutputDirectory: string
   openOutputOnComplete: boolean
   onChooseDirectory: (title: string, defaultPath?: string) => Promise<string | undefined>
-  onChooseAudioFile: (title: string, defaultPath?: string) => Promise<string | undefined>
+  onChooseMediaFile: (title: string, defaultPath?: string) => Promise<string | undefined>
   onShowToast: (message: string, type?: 'success' | 'warning' | 'error' | 'info') => void
   onTaskStatus?: (status: TaskSnapshot['status'] | null) => void
+}
+
+type SrtInputMode = 'with-script' | 'asr-only'
+
+const STEPS_WITH_SCRIPT = [
+  { stage: 'extract-audio', label: '转换音频', desc: '临时生成高精度 WAV 供识别使用' },
+  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 生成时间锚点' },
+  { stage: 'align', label: '贴合原文', desc: '将时间轴精准映射至已知口播文案' },
+  { stage: 'export-srt', label: '导出 SRT', desc: '生成剪映可直接导入的字幕文件' }
+]
+
+const STEPS_ASR_ONLY = [
+  { stage: 'extract-audio', label: '转换音频', desc: '临时生成高精度 WAV 供识别使用' },
+  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 识别并断句' },
+  { stage: 'export-srt', label: '导出 SRT', desc: '生成剪映可直接导入的字幕文件' }
+]
+
+function formatSegmentTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  const ms = Math.floor((seconds % 1) * 1000)
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`
 }
 
 export function RequirementTwoPage({
   defaultOutputDirectory,
   openOutputOnComplete,
   onChooseDirectory,
-  onChooseAudioFile,
+  onChooseMediaFile,
   onShowToast,
   onTaskStatus
 }: RequirementTwoPageProps) {
-  const [audioPath, setAudioPath] = useState('')
+  const [inputMode, setInputMode] = useState<SrtInputMode>('with-script')
+  const [mediaPath, setMediaPath] = useState('')
   const [sourceText, setSourceText] = useState('')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
-  const [task, setTask] = useState<TaskSnapshot | null>(null)
   const [starting, setStarting] = useState(false)
+  const [srtExpanded, setSrtExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
   const openedTaskIds = useRef(new Set<string>())
-  const onTaskStatusRef = useRef(onTaskStatus)
-  onTaskStatusRef.current = onTaskStatus
+  const notifiedRef = useRef<string | null>(null)
+
+  const { task, setTask, cancel, isTaskRunning } = usePipelineTask({
+    kind: 'req2',
+    onStatus: onTaskStatus,
+    onError: (message) => onShowToast(message, 'error')
+  })
 
   useEffect(() => {
-    if (!outputDirectory && defaultOutputDirectory) {
-      setOutputDirectory(defaultOutputDirectory)
-    }
+    if (!outputDirectory && defaultOutputDirectory) setOutputDirectory(defaultOutputDirectory)
   }, [defaultOutputDirectory, outputDirectory])
 
-  const taskId = task?.taskId
   useEffect(() => {
-    let closed = false
-    void window.koubox
-      .get<TaskSnapshot[]>('/tasks')
-      .then((all) => {
-        if (closed) return
-        const active = all
-          .filter((item) => item.kind === 'req2' && (item.status === 'queued' || item.status === 'running'))
-          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]
-        if (!active) return
-        setTask((current) => current ?? active)
-      })
-      .catch((err) => {
-        onShowToast(err instanceof Error ? err.message : '无法读取进行中的任务', 'error')
-      })
-    return () => {
-      closed = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!taskId) return
-    return window.koubox.events<TaskEvent>(`/tasks/${encodeURIComponent(taskId)}/events`, (event) => {
-      setTask(event.task)
-      onTaskStatusRef.current?.(event.task.status)
-    })
-  }, [taskId])
+    if (!task) return
+    if (task.status !== 'complete' && task.status !== 'error') return
+    const key = `${task.taskId}:${task.status}:${task.error?.code ?? task.message}`
+    if (notifiedRef.current === key) return
+    notifiedRef.current = key
+    if (task.status === 'complete') onShowToast('SRT 已生成。', 'success')
+  }, [task, onShowToast])
 
   useEffect(() => {
     if (!task || task.status !== 'complete' || !openOutputOnComplete) return
@@ -84,32 +94,30 @@ export function RequirementTwoPage({
     })
   }, [task, openOutputOnComplete, onShowToast])
 
-  const hasSourceText = Boolean(sourceText.trim())
-  const steps = [
-    { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，生成高精度 WAV 工作副本' },
-    { stage: 'asr', label: 'Faster-Whisper 语音识别', desc: 'Large-v3 直接识别原音频并生成时间锚点' },
-    ...(hasSourceText ? [{ stage: 'align', label: '贴合原文案', desc: '将时间戳精准映射并贴合至已知文案' }] : []),
-    { stage: 'export-srt', label: '生成剪映标准 SRT', desc: '规范化断句与毫秒级时间轴封装' }
-  ]
+  const activeMode: SrtInputMode =
+    task?.mode === 'align' ? 'with-script' : task?.mode === 'asr-only' ? 'asr-only' : inputMode
+  const pipelineSteps = activeMode === 'with-script' ? STEPS_WITH_SCRIPT : STEPS_ASR_ONLY
+  const previewAudioPath =
+    task?.artifacts.audio ?? (mediaPath.trim() || task?.url || '')
+  const segments = task?.transcript?.segments ?? []
 
   const handleStart = async () => {
-    if (!audioPath.trim()) {
-      return onShowToast('请选择本地音频或视频文件', 'warning')
-    }
-    if (!outputDirectory.trim()) {
-      return onShowToast('请选择输出保存目录', 'warning')
+    if (!mediaPath.trim()) return onShowToast('请选择本地音频或视频文件', 'warning')
+    if (!outputDirectory.trim()) return onShowToast('请选择输出保存目录', 'warning')
+    if (inputMode === 'with-script' && !sourceText.trim()) {
+      return onShowToast('有文案模式下请填写口播原文稿', 'warning')
     }
 
     setStarting(true)
     try {
       const created = await window.koubox.post<TaskSnapshot>('/pipelines/req2', {
-        audioPath: audioPath.trim(),
-        sourceText: sourceText.trim(),
+        audioPath: mediaPath.trim(),
+        sourceText: inputMode === 'with-script' ? sourceText.trim() : '',
         outputDirectory: outputDirectory.trim()
       })
       setTask(created)
       onTaskStatus?.(created.status)
-      onShowToast('SRT 生成流水线已启动…', 'info')
+      onShowToast('SRT 生成任务已启动…', 'info')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '任务启动失败', 'error')
     } finally {
@@ -118,13 +126,8 @@ export function RequirementTwoPage({
   }
 
   const handleCancel = async () => {
-    if (!task) return
     try {
-      const cancelled = await window.koubox.post<TaskSnapshot>(
-        `/tasks/${encodeURIComponent(task.taskId)}/cancel`
-      )
-      setTask(cancelled)
-      onTaskStatus?.(cancelled.status)
+      await cancel()
       onShowToast('任务已取消', 'info')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '取消失败', 'error')
@@ -135,208 +138,226 @@ export function RequirementTwoPage({
     if (!task) return
     const targetDir = await onChooseDirectory('选择另存 SRT 文件的目录', outputDirectory)
     if (!targetDir) return
-
     try {
       await window.koubox.post(`/tasks/${encodeURIComponent(task.taskId)}/export`, {
         targetDirectory: targetDir
       })
-      onShowToast('SRT 与字幕文件已另存到目标目录', 'success')
+      onShowToast('SRT 文件已另存到目标目录', 'success')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '另存失败', 'error')
     }
   }
 
-  const handleCopy = (text: string) => {
-    void navigator.clipboard.writeText(text)
+  const handleCopySrt = async () => {
+    if (!task?.transcript?.segments.length) return
+    const content = task.transcript.segments
+      .filter((seg) => seg.text.trim() && seg.end >= seg.start)
+      .map((seg, idx) => {
+        const formatTime = (seconds: number) => {
+          const h = Math.floor(seconds / 3600)
+          const m = Math.floor((seconds % 3600) / 60)
+          const s = Math.floor(seconds % 60)
+          const ms = Math.floor((seconds % 1) * 1000)
+          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`
+        }
+        return `${idx + 1}\n${formatTime(seg.start)} --> ${formatTime(seg.end)}\n${seg.text.trim()}`
+      })
+      .join('\n\n')
+    await navigator.clipboard.writeText(content)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 900)
+    onShowToast('SRT 内容已复制', 'success')
   }
 
-  const transcriptText = task?.transcript?.segments
-    .map((s) => s.text.trim())
-    .filter(Boolean)
-    .join('\n')
-
-  const isTaskRunning = Boolean(task && !['complete', 'error', 'cancelled'].includes(task.status))
-
   return (
-    <div className="page-container">
-      {/* 页面顶栏 */}
+    <div className="page-container viral-page srt-page">
       <div className="page-header-block">
-        <div>
-          <h1>精准 SRT 对齐（待完成）</h1>
-          <p>（功能暂未实现）导入录音与口播文案，利用 GPU 毫秒级对齐时间轴，一键生成剪映直接导入的专业字幕</p>
-        </div>
+        <h1>精准 SRT 对齐</h1>
+        <p>导入录音与口播文案，或纯音频识别，生成可直接导入剪映的标准 SRT 字幕</p>
       </div>
 
-      {/* 左右分栏工作视区 */}
-      <div className="workspace-split-layout">
-        {/* 左侧表单与输入 */}
-        <div className="panel-box">
+      <div className="viral-top-grid">
+        <section className="panel-box viral-input-panel">
           <div className="panel-title">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h3>音频与文案输入</h3>
-              <Badge variant="blue">
-                {hasSourceText ? '模式：已知文案对齐' : '模式：纯音频转字幕'}
-              </Badge>
-            </div>
+            <h3>素材输入</h3>
           </div>
 
-          <FormField
-            label="本地音频或视频文件"
-            hint="支持 WAV, MP3, M4A, AAC, FLAC 或 MP4 视频文件提取"
-          >
-            <PathPicker
-              value={audioPath}
-              onChange={setAudioPath}
-              onBrowse={async () => {
-                const picked = await onChooseAudioFile('选择音频文件', audioPath)
-                if (picked) setAudioPath(picked)
-              }}
-              placeholder="选择本地音频或视频文件…"
-              buttonLabel="选择文件"
-              buttonIcon={<MusicNotes size={16} />}
+          <div className="viral-source-mode srt-source-mode" role="tablist" aria-label="输入模式">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inputMode === 'with-script'}
+              className={`viral-source-mode-btn ${inputMode === 'with-script' ? 'is-active' : ''}`}
               disabled={isTaskRunning}
-            />
-          </FormField>
-
-          <FormField
-            label="口播原文稿"
-            optional="可选"
-            hint="填写后文字 100% 严格以原稿为准，时间轴由音频精准对齐；留空则由 Faster-Whisper Large-v3 纯语音识别转写。"
-          >
-            <textarea
-              className="textarea-box"
-              rows={6}
-              value={sourceText}
-              onChange={(e) => setSourceText(e.target.value)}
-              placeholder="在此粘贴录音对应的口播台词或文案原稿…"
+              onClick={() => setInputMode('with-script')}
+            >
+              有文案对齐
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inputMode === 'asr-only'}
+              className={`viral-source-mode-btn ${inputMode === 'asr-only' ? 'is-active' : ''}`}
               disabled={isTaskRunning}
-            />
-          </FormField>
+              onClick={() => setInputMode('asr-only')}
+            >
+              无文案识别
+            </button>
+          </div>
 
-          <FormField
-            label="SRT 输出保存目录"
-            hint="生成的标准 .srt 字幕文件将保存到此位置，可直接拖入剪映或 Premiere。"
-          >
+          <LocalSpeechMediaField
+            value={mediaPath}
+            onChange={setMediaPath}
+            disabled={isTaskRunning}
+            onChooseMediaFile={onChooseMediaFile}
+            browseDefaultPath={outputDirectory}
+          />
+
+          {inputMode === 'with-script' ? (
+            <FormField
+              label="口播原文稿（文案）"
+              hint="文字 100% 以原稿为准，时间轴由音频精准对齐"
+            >
+              <textarea
+                className="textarea-box srt-script-textarea"
+                rows={8}
+                value={sourceText}
+                onChange={(e) => setSourceText(e.target.value)}
+                placeholder="在此粘贴录音对应的口播台词或文案原稿…"
+                disabled={isTaskRunning}
+              />
+            </FormField>
+          ) : null}
+
+          <FormField label="SRT 保存目录">
             <PathPicker
               value={outputDirectory}
               onChange={setOutputDirectory}
               onBrowse={async () => {
-                const dir = await onChooseDirectory('选择保存目录', outputDirectory)
+                const dir = await onChooseDirectory('选择 SRT 保存目录', outputDirectory)
                 if (dir) setOutputDirectory(dir)
               }}
               disabled={isTaskRunning}
             />
           </FormField>
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+          <div className="viral-actions">
             {!isTaskRunning ? (
               <Button
                 variant="primary-blue"
                 size="lg"
                 style={{ flex: 1 }}
-                onClick={handleStart}
+                onClick={() => void handleStart()}
                 loading={starting}
                 icon={<Subtitles size={18} weight="bold" />}
               >
-                {starting ? '正在启动…' : '开始对齐并生成 SRT'}
+                {starting
+                  ? '正在启动…'
+                  : inputMode === 'with-script'
+                    ? '开始对齐并生成 SRT'
+                    : '开始识别并生成 SRT'}
               </Button>
             ) : (
               <Button
                 variant="danger"
                 size="lg"
                 style={{ flex: 1 }}
-                onClick={handleCancel}
+                onClick={() => void handleCancel()}
                 icon={<X size={18} weight="bold" />}
               >
-                取消当前任务
+                取消任务
               </Button>
             )}
           </div>
+
+          {task && (
+            <div className="viral-task-id">
+              任务 ID：<code>{task.taskId}</code>
+            </div>
+          )}
+        </section>
+
+        <PipelineStatusPanel task={task} steps={pipelineSteps} title="执行状态" />
+      </div>
+
+      <section className="panel-box viral-preview-panel">
+        <div className="panel-title">
+          <h3>结果预览</h3>
+          <span className="viral-preview-hint">上方试听音频，下方按句查看字幕与时间轴</span>
         </div>
 
-        {/* 右侧流水线 Stepper 面板 */}
-        <div className="panel-box">
-          <div className="panel-title">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h3>流水线对齐进度</h3>
-              {task && (
-                <Badge
-                  variant={
-                    task.status === 'complete'
-                      ? 'success'
-                      : task.status === 'error'
-                      ? 'danger'
-                      : 'blue'
-                  }
-                  pulse={isTaskRunning}
-                >
-                  {task.status === 'complete'
-                    ? '对齐完成'
-                    : task.status === 'error'
-                    ? '执行中断'
-                    : task.status === 'cancelled'
-                    ? '已取消'
-                    : '正在对齐'}
-                </Badge>
-              )}
+        <div className="speech-audio-row">
+          <div className="viral-audio-slot speech-audio-slot">
+            <AudioPreviewSlot
+              audioPath={previewAudioPath}
+              onError={(message) => onShowToast(message, 'error')}
+            />
+          </div>
+        </div>
+
+        <div className={`viral-text-card speech-text-card srt-text-card ${srtExpanded ? 'speech-text-expanded' : ''}`}>
+          <div className="viral-text-head">
+            <h4>
+              SRT 字幕
+              {task?.transcript?.language ? (
+                <span className="panel-title-badge">{task.transcript.language}</span>
+              ) : null}
+            </h4>
+            <div className="viral-text-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ height: 32 }}
+                onClick={() => setSrtExpanded((value) => !value)}
+              >
+                {srtExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+                {srtExpanded ? '收起' : '展开'}
+              </button>
+              <button
+                type="button"
+                className={`btn-secondary ${copied ? 'btn-copy-done' : ''}`}
+                style={{ height: 32 }}
+                disabled={!segments.length}
+                onClick={() => void handleCopySrt()}
+              >
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? '已复制' : '复制 SRT'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ height: 32, padding: '0 14px', fontSize: 12 }}
+                disabled={!task?.artifacts.srt}
+                onClick={() => void handleExportFiles()}
+              >
+                另存 SRT
+              </button>
             </div>
-            {task && <span className="task-percent-tag tag-blue">{formatTaskPercent(task.percent)}</span>}
           </div>
 
-          <PipelineStepper
-            steps={steps}
-            currentStage={task?.stage}
-            status={task?.status}
-            percent={task?.percent}
-            message={task?.status === 'error' && task.message ? toUserTaskMessage(task.message) : task?.message}
-            accentColor="var(--accent-blue)"
-          />
-
-          {task?.message && (
-            <div className="pipeline-msg-box">
-              <Subtitles size={18} color="var(--accent-blue)" />
-              <span>{task.status === 'error' ? toUserTaskMessage(task.message) : task.message}</span>
+          {segments.length > 0 ? (
+            <div className="segments-table srt-segments-table">
+              {segments.map((seg, idx) => (
+                <div className="segment-row" key={`${seg.start}-${idx}`}>
+                  <span className="segment-index">#{idx + 1}</span>
+                  <span className="segment-time">
+                    {formatSegmentTime(seg.start)} → {formatSegmentTime(seg.end)}
+                  </span>
+                  <span className="segment-text">{seg.text}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="viral-line-list speech-text-empty">
+              <div className="viral-slot-empty">
+                {isTaskRunning
+                  ? '正在生成字幕，完成后按句展示时间轴'
+                  : '任务完成后，分句字幕与时间轴将显示在此'}
+              </div>
             </div>
           )}
         </div>
-      </div>
-
-      {/* 成果交付区：SRT 专业预览与文本面板 */}
-      {task?.transcript && transcriptText && (
-        <div className="results-stack">
-          {/* SRT 可视化预览面板 */}
-          <SrtPreview
-            transcript={task.transcript}
-            audioPath={task.artifacts?.audio}
-            onExport={handleExportFiles}
-            onCopy={() => onShowToast('SRT 内容已复制到剪贴板', 'success')}
-          />
-
-          {/* 原始文本面板（可选展开查看） */}
-          <ResultPanel
-            title={hasSourceText ? '精准对齐文案 (带毫秒时间戳)' : 'Faster-Whisper 语音识别字幕'}
-            transcript={task.transcript}
-            rawText={transcriptText}
-            onCopy={handleCopy}
-            action={handleExportFiles}
-            actionLabel="另存为剪映 SRT 文件"
-            actionIcon="download"
-          />
-        </div>
-      )}
-
-      {task && task.status === 'complete' && (
-        <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-          <Button
-            variant="secondary"
-            size="md"
-            onClick={handleExportFiles}
-            icon={<Export size={16} />}
-          >
-            导出 SRT 与中间产物
-          </Button>
-        </div>
-      )}
+      </section>
     </div>
   )
 }

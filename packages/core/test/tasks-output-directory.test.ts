@@ -34,12 +34,13 @@ describe('task output directories', () => {
 
     const videoTask = manager.startRequirementOne('https://www.youtube.com/watch?v=example', outputRoot, { asr: '', translation: '' })
     const audioTask = manager.startRequirementTwo(join(root, 'missing.wav'), '', outputRoot, { asr: '', translation: '' })
+    const speechTask = manager.startSpeechToText(join(root, 'missing.wav'), outputRoot, { asr: '', translation: '' })
 
-    for (const task of [videoTask, audioTask]) {
+    for (const task of [videoTask, audioTask, speechTask]) {
       expect(task.outputDirectory).toBe(join(outputRoot, task.taskId))
       expect(task.taskDirectory).toBe(task.outputDirectory)
       expect(existsSync(task.outputDirectory)).toBe(true)
     }
-    expect(videoTask.outputDirectory).not.toBe(audioTask.outputDirectory)
+    expect(new Set([videoTask.outputDirectory, audioTask.outputDirectory, speechTask.outputDirectory]).size).toBe(3)
   })
 })

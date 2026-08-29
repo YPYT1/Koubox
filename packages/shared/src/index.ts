@@ -1,4 +1,4 @@
-export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader' | 'video-audio' | 'vocal-separation'
+export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader' | 'video-audio' | 'vocal-separation' | 'speech-to-text'
 
 export type ToolManifest = {
   id: ToolId
@@ -23,8 +23,8 @@ export const tools: ToolManifest[] = [
   },
   {
     id: 'precise-srt',
-    name: '精准 SRT 对齐（待完成）',
-    description: '（功能暂未实现）导入音频和可选原文，输出可直接导入剪映的标准 SRT。',
+    name: '精准 SRT 对齐',
+    description: '导入音频与口播文案对齐，或纯音频识别，输出可直接导入剪映的标准 SRT。',
     accent: 'blue',
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
@@ -62,6 +62,17 @@ export const tools: ToolManifest[] = [
     artifactTags: ['Audio'],
     menus: [
       { id: 'run', label: '开始分离' },
+      { id: 'history', label: '任务中心' }
+    ]
+  },
+  {
+    id: 'speech-to-text',
+    name: '语音转文字',
+    description: '上传本地音频或视频，用 Faster-Whisper 识别原文并输出带时间轴的分句结果。',
+    accent: 'teal',
+    artifactTags: ['Audio', 'Transcript'],
+    menus: [
+      { id: 'run', label: '开始识别' },
       { id: 'history', label: '任务中心' }
     ]
   }
@@ -136,7 +147,7 @@ export type RuntimeStatus = {
   }
 }
 
-export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation'
+export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation' | 'speech-to-text'
 export type RequirementTwoMode = 'align' | 'asr-only'
 export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
@@ -147,7 +158,8 @@ export const TOOL_TASK_KIND = {
   'precise-srt': 'req2',
   'video-downloader': 'download',
   'video-audio': 'video-audio',
-  'vocal-separation': 'vocal-separation'
+  'vocal-separation': 'vocal-separation',
+  'speech-to-text': 'speech-to-text'
 } as const satisfies Record<ToolId, TaskKind>
 
 export type KouboxPlatform = 'YouTube' | 'TikTok' | 'Instagram' | 'Facebook' | 'Twitter' | 'Bilibili' | 'Douyin' | 'Video' | 'Audio'
@@ -219,6 +231,17 @@ export function assertLocalAudioPath(filePath: string): string {
   return trimmed
 }
 
+/** 语音转文字：本地音频或视频路径 */
+export function assertLocalSpeechMediaPath(filePath: string): string {
+  const trimmed = normalizeOsPath(filePath.trim())
+  if (!trimmed) throw new Error('请选择本地音频或视频文件。')
+  try {
+    return assertLocalAudioPath(trimmed)
+  } catch {
+    return assertLocalVideoPath(trimmed)
+  }
+}
+
 /** 爆款素材获取的视频来源：链接下载或本地上传 */
 export type MaterialsSourceMode = 'url' | 'local'
 
@@ -227,6 +250,7 @@ export const VIDEO_DOWNLOAD_PIPELINE_PATH = '/pipelines/download'
 export const VIDEO_MATERIALS_PIPELINE_PATH = '/pipelines/req1'
 export const VIDEO_AUDIO_PIPELINE_PATH = '/pipelines/video-audio'
 export const VOCAL_SEPARATION_PIPELINE_PATH = '/pipelines/vocal-separation'
+export const SPEECH_TO_TEXT_PIPELINE_PATH = '/pipelines/speech-to-text'
 
 export type TaskArtifacts = {
   video?: string

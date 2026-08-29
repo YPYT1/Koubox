@@ -1,5 +1,3 @@
-import { Waveform } from '@phosphor-icons/react'
-
 type AudioPreviewSlotProps = {
   audioPath: string
   label?: string
@@ -7,21 +5,16 @@ type AudioPreviewSlotProps = {
 }
 
 /** 任务产物音频预览 */
-export function AudioPreviewSlot({ audioPath, label = '音频预览', onError }: AudioPreviewSlotProps) {
+export function AudioPreviewSlot({ audioPath, label, onError }: AudioPreviewSlotProps) {
   if (!audioPath) {
-    return (
-      <div className="viral-preview-empty">
-        <Waveform size={32} weight="duotone" />
-        <p>任务完成后可在此播放音频</p>
-      </div>
-    )
+    return <div className="viral-slot-empty speech-audio-empty" aria-hidden="true" />
   }
 
   const src = window.koubox.mediaUrl(audioPath)
 
   return (
     <div className="viral-audio-preview">
-      <p className="viral-preview-hint">{label}</p>
+      {label ? <p className="viral-preview-hint">{label}</p> : null}
       <audio
         controls
         preload="metadata"

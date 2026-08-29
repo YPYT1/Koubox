@@ -358,7 +358,7 @@ describe('public video download pipeline', () => {
       }
     })
 
-    await expect(downloadVideo(request)).rejects.toThrow('YouTube 粘贴 Cookie 已配置，但 yt-dlp 鉴权失败：Sign in to confirm you are not a bot')
+    await expect(downloadVideo(request)).rejects.toThrow('YouTube 粘贴 Cookie 已配置，但 yt-dlp 下载失败：Sign in to confirm you are not a bot')
   })
 
   it('re-resolves an expired direct media URL before failing over to another strategy', async () => {

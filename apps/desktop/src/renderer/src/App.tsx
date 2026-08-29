@@ -10,6 +10,7 @@ import { RequirementTwoPage } from './pages/RequirementTwoPage'
 import { VideoDownloaderPage } from './pages/VideoDownloaderPage'
 import { VideoAudioPage } from './pages/VideoAudioPage'
 import { VocalSeparationPage } from './pages/VocalSeparationPage'
+import { SpeechToTextPage } from './pages/SpeechToTextPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
 
 type FixedPage = 'home' | 'models' | 'settings'
@@ -172,6 +173,21 @@ export function App() {
     return result.path ?? undefined
   }
 
+  const handleChooseMediaFile = async (
+    title: string,
+    defaultPath?: string
+  ): Promise<string | undefined> => {
+    const result = await window.koubox.post<{ path: string | null }>('/dialog/select-file', {
+      title,
+      defaultPath,
+      filters: [{
+        name: '音频或视频',
+        extensions: ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv']
+      }]
+    })
+    return result.path ?? undefined
+  }
+
   const handleChooseFile = async (
     title: string,
     defaultPath?: string,
@@ -266,7 +282,7 @@ export function App() {
               defaultOutputDirectory={config?.outputDirectory ?? ''}
               openOutputOnComplete={config?.openOutputOnComplete ?? false}
               onChooseDirectory={handleChooseDirectory}
-              onChooseAudioFile={handleChooseAudio}
+              onChooseMediaFile={handleChooseMediaFile}
               onShowToast={showToast}
               onTaskStatus={bindToolStatus('precise-srt')}
             />
@@ -303,6 +319,18 @@ export function App() {
               onChooseAudioFile={handleChooseAudio}
               onShowToast={showToast}
               onTaskStatus={bindToolStatus('vocal-separation')}
+            />
+          )}
+
+          {opened.includes('speech-to-text') && keepAlivePane(
+            focus.kind === 'tool' && focus.toolId === 'speech-to-text' && focus.menu === 'run',
+            <SpeechToTextPage
+              defaultOutputDirectory={config?.outputDirectory ?? ''}
+              openOutputOnComplete={config?.openOutputOnComplete ?? false}
+              onChooseDirectory={handleChooseDirectory}
+              onChooseMediaFile={handleChooseMediaFile}
+              onShowToast={showToast}
+              onTaskStatus={bindToolStatus('speech-to-text')}
             />
           )}
 

@@ -36,7 +36,9 @@ function isDeletable(task: TaskSnapshot): boolean {
 type PlatformBadge = { label: string; className: string }
 
 function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
-  if (kind === 'req2' || kind === 'vocal-separation') return { label: '本地音频', className: 'platform-local' }
+  if (kind === 'req2' || kind === 'vocal-separation' || kind === 'speech-to-text') {
+    return { label: '本地媒体', className: 'platform-local' }
+  }
   if (kind === 'video-audio' && !/^https?:\/\//i.test(url)) return { label: '本地视频', className: 'platform-local' }
   const platform = detectPlatform(url)
   if (platform === 'YouTube') return { label: platform, className: 'platform-youtube' }
