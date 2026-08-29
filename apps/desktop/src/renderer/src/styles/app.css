@@ -2242,6 +2242,10 @@ button:disabled {
   align-items: stretch;
 }
 
+.viral-text-card-single {
+  width: 100%;
+}
+
 .viral-actions {
   display: flex;
   gap: 10px;

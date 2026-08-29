@@ -570,13 +570,13 @@ export class TaskManager {
       record.task.artifacts.vocals = vocals
       this.persist(record)
       await this.performAsr(record, audio, modelPaths.asr, 55)
-      const target = this.options.getConfig().translationTargetLanguage
-      this.update(record, { stage: 'translation', percent: 84, message: '正在翻译文案' })
-      const sourceLines = (record.task.transcript?.segments ?? []).map((segment) => segment.text.trim()).filter(Boolean)
-      const sourceText = sourceLines.join('\n')
-      if (!sourceText) throw new Error('原文为空，无法翻译。')
-      await this.performTranslation(record, modelPaths.translation, target, sourceLines, sourceText)
-      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别与翻译完成' })
+      // const target = this.options.getConfig().translationTargetLanguage
+      // this.update(record, { stage: 'translation', percent: 84, message: '正在翻译文案' })
+      // const sourceLines = (record.task.transcript?.segments ?? []).map((segment) => segment.text.trim()).filter(Boolean)
+      // const sourceText = sourceLines.join('\n')
+      // if (!sourceText) throw new Error('原文为空，无法翻译。')
+      // await this.performTranslation(record, modelPaths.translation, target, sourceLines, sourceText)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文识别完成' })
     } catch (error) {
       if (record.cancelled) return
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
