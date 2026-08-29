@@ -1,8 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import {
-  DownloadSimple,
-  UploadSimple,
-  LinkSimple,
   X,
   Copy,
   FilmStrip,
@@ -14,10 +11,8 @@ import {
   Check
 } from '@phosphor-icons/react'
 import {
-  LOCAL_VIDEO_EXTENSIONS,
   toUserTaskMessage,
   type MaterialsSourceMode,
-  type TaskEvent,
   type TaskSnapshot,
   type TranslationTargetLanguage
 } from '@koubox/shared'
@@ -26,7 +21,13 @@ import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
 import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
-import { VideoUrlField, startMaterialsPipeline, cancelDownloadTask } from '../components/download'
+import {
+  startMaterialsPipeline,
+  cancelDownloadTask,
+  usePipelineTask,
+  VideoSourceFields,
+  videoSourceStartIcon
+} from '../components/download'
 import { TARGET_LANGUAGE_OPTIONS } from './SettingsPage'
 
 type RequirementOnePageProps = {
@@ -69,7 +70,6 @@ export function RequirementOnePage({
   const [videoPath, setVideoPath] = useState('')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
   const [targetLanguage, setTargetLanguage] = useState<TranslationTargetLanguage>(translationTargetLanguage)
-  const [task, setTask] = useState<TaskSnapshot | null>(null)
   const [starting, setStarting] = useState(false)
   const [textExpanded, setTextExpanded] = useState(false)
   const [copiedSection, setCopiedSection] = useState<'original' | 'translated' | null>(null)
@@ -86,9 +86,12 @@ export function RequirementOnePage({
   const translatedListRef = useRef<HTMLDivElement>(null)
   const scrollSyncLock = useRef(false)
   const openedTaskIds = useRef(new Set<string>())
-  const shownErrorRef = useRef<string | null>(null)
-  const onTaskStatusRef = useRef(onTaskStatus)
-  onTaskStatusRef.current = onTaskStatus
+
+  const { task, setTask, isTaskRunning } = usePipelineTask({
+    kind: 'req1',
+    onStatus: onTaskStatus,
+    onError: (message) => onShowToast(message, 'error')
+  })
 
   useEffect(() => {
     if (!outputDirectory && defaultOutputDirectory) setOutputDirectory(defaultOutputDirectory)
@@ -97,43 +100,6 @@ export function RequirementOnePage({
   useEffect(() => {
     setTargetLanguage(translationTargetLanguage)
   }, [translationTargetLanguage])
-
-  const taskId = task?.taskId
-  useEffect(() => {
-    let closed = false
-    void window.koubox
-      .get<TaskSnapshot[]>('/tasks')
-      .then((all) => {
-        if (closed) return
-        const active = all
-          .filter((item) => item.kind === 'req1' && (item.status === 'queued' || item.status === 'running'))
-          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]
-        if (!active) return
-        setTask((current) => current ?? active)
-      })
-      .catch((err) => {
-        onShowToast(err instanceof Error ? err.message : '无法读取进行中的任务', 'error')
-      })
-    return () => {
-      closed = true
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!taskId) return
-    return window.koubox.events<TaskEvent>(`/tasks/${encodeURIComponent(taskId)}/events`, (event) => {
-      setTask(event.task)
-      onTaskStatusRef.current?.(event.task.status)
-    })
-  }, [taskId])
-
-  useEffect(() => {
-    if (!task || task.status !== 'error') return
-    const key = `${task.taskId}:${task.error?.code ?? task.message}`
-    if (shownErrorRef.current === key) return
-    shownErrorRef.current = key
-    onShowToast(toUserTaskMessage(task.message || task.error?.message || '任务失败'), 'error')
-  }, [task, onShowToast])
 
   useEffect(() => {
     if (!task || task.status !== 'complete' || !openOutputOnComplete) return
@@ -266,14 +232,12 @@ export function RequirementOnePage({
     original: originalLines[index] ?? '—',
     translated: translatedLines[index] ?? '—'
   }))
-  const isTaskRunning = Boolean(task && !['complete', 'error', 'cancelled'].includes(task.status))
   const videoSrc = task?.artifacts.video ? window.koubox.mediaUrl(task.artifacts.video) : ''
   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
   const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
   const activeSourceMode: MaterialsSourceMode =
     task?.sourceMode ?? (task && !/^https?:\/\//i.test(task.url) ? 'local' : sourceMode)
   const pipelineSteps = activeSourceMode === 'local' ? STEPS_LOCAL : STEPS_URL
-  const videoFileName = videoPath.replace(/^.*[/\\]/, '')
 
   useEffect(() => {
     setVideoOrientation('unknown')
@@ -293,58 +257,17 @@ export function RequirementOnePage({
             <h3>视频来源</h3>
           </div>
 
-          <div className="viral-source-mode" role="tablist" aria-label="视频来源">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sourceMode === 'url'}
-              className={`viral-source-mode-btn ${sourceMode === 'url' ? 'is-active' : ''}`}
-              disabled={isTaskRunning}
-              onClick={() => setSourceMode('url')}
-            >
-              <LinkSimple size={16} weight="bold" />
-              链接下载
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sourceMode === 'local'}
-              className={`viral-source-mode-btn ${sourceMode === 'local' ? 'is-active' : ''}`}
-              disabled={isTaskRunning}
-              onClick={() => setSourceMode('local')}
-            >
-              <UploadSimple size={16} weight="bold" />
-              本地上传
-            </button>
-          </div>
-
-          {sourceMode === 'url' ? (
-            <VideoUrlField
-              value={url}
-              onChange={setUrl}
-              disabled={isTaskRunning}
-              label="短视频 URL"
-            />
-          ) : (
-            <FormField label="本地视频" hint={`支持 ${LOCAL_VIDEO_EXTENSIONS.join(' / ')}`}>
-              <PathPicker
-                value={videoPath}
-                onChange={setVideoPath}
-                onBrowse={async () => {
-                  const picked = await onChooseVideoFile('选择本地视频', videoPath || outputDirectory)
-                  if (picked) setVideoPath(picked)
-                }}
-                disabled={isTaskRunning}
-                placeholder="选择要导入的视频文件…"
-              />
-              {videoFileName ? (
-                <p className="viral-local-file-hint">
-                  <FilmStrip size={14} />
-                  <span>{videoFileName}</span>
-                </p>
-              ) : null}
-            </FormField>
-          )}
+          <VideoSourceFields
+            sourceMode={sourceMode}
+            onSourceModeChange={setSourceMode}
+            url={url}
+            onUrlChange={setUrl}
+            videoPath={videoPath}
+            onVideoPathChange={setVideoPath}
+            disabled={isTaskRunning}
+            onChooseVideoFile={onChooseVideoFile}
+            browseDefaultPath={outputDirectory}
+          />
 
           <FormField label="保存目录">
             <PathPicker
@@ -379,11 +302,7 @@ export function RequirementOnePage({
                 style={{ flex: 1 }}
                 onClick={handleStart}
                 loading={starting}
-                icon={
-                  sourceMode === 'local'
-                    ? <UploadSimple size={18} weight="bold" />
-                    : <DownloadSimple size={18} weight="bold" />
-                }
+                icon={videoSourceStartIcon(sourceMode)}
               >
                 {starting ? '正在启动…' : sourceMode === 'local' ? '开始提取（本地）' : '开始提取'}
               </Button>

@@ -1,4 +1,4 @@
-export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader'
+export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader' | 'video-audio' | 'vocal-separation'
 
 export type ToolManifest = {
   id: ToolId
@@ -40,6 +40,28 @@ export const tools: ToolManifest[] = [
     artifactTags: ['URL', 'Video'],
     menus: [
       { id: 'run', label: '开始下载' },
+      { id: 'history', label: '任务中心' }
+    ]
+  },
+  {
+    id: 'video-audio',
+    name: '视频提取音频',
+    description: '粘贴平台链接或上传本地视频，仅抽取原音频为高精度 WAV。',
+    accent: 'teal',
+    artifactTags: ['URL', 'Video', 'Audio'],
+    menus: [
+      { id: 'run', label: '开始提取' },
+      { id: 'history', label: '任务中心' }
+    ]
+  },
+  {
+    id: 'vocal-separation',
+    name: '人声分离',
+    description: '上传本地音频，用 Demucs 去除背景音乐，仅保留人声轨。',
+    accent: 'teal',
+    artifactTags: ['Audio'],
+    menus: [
+      { id: 'run', label: '开始分离' },
       { id: 'history', label: '任务中心' }
     ]
   }
@@ -114,10 +136,19 @@ export type RuntimeStatus = {
   }
 }
 
-export type TaskKind = 'req1' | 'req2' | 'download'
+export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation'
 export type RequirementTwoMode = 'align' | 'asr-only'
 export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
+
+/** 工具侧栏 / 任务中心与后端 TaskKind 的固定映射 */
+export const TOOL_TASK_KIND = {
+  'viral-materials': 'req1',
+  'precise-srt': 'req2',
+  'video-downloader': 'download',
+  'video-audio': 'video-audio',
+  'vocal-separation': 'vocal-separation'
+} as const satisfies Record<ToolId, TaskKind>
 
 export type KouboxPlatform = 'YouTube' | 'TikTok' | 'Instagram' | 'Facebook' | 'Twitter' | 'Bilibili' | 'Douyin' | 'Video' | 'Audio'
 
@@ -159,6 +190,9 @@ export function assertDownloadableVideoUrl(url: string): { url: string; platform
 /** 爆款素材获取：本地上传视频允许的扩展名 */
 export const LOCAL_VIDEO_EXTENSIONS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'flv'] as const
 
+/** 人声分离：本地上传音频允许的扩展名 */
+export const LOCAL_AUDIO_EXTENSIONS = ['wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma'] as const
+
 /** 校验本地视频路径（只校验路径与扩展名；是否存在由调用方用 fs 检查） */
 export function assertLocalVideoPath(filePath: string): string {
   const trimmed = normalizeOsPath(filePath.trim())
@@ -172,12 +206,27 @@ export function assertLocalVideoPath(filePath: string): string {
   return trimmed
 }
 
+/** 校验本地音频路径（只校验路径与扩展名；是否存在由调用方用 fs 检查） */
+export function assertLocalAudioPath(filePath: string): string {
+  const trimmed = normalizeOsPath(filePath.trim())
+  if (!trimmed) throw new Error('请选择本地音频文件。')
+  const base = trimmed.replace(/^.*[/\\]/, '')
+  const dot = base.lastIndexOf('.')
+  const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : ''
+  if (!(LOCAL_AUDIO_EXTENSIONS as readonly string[]).includes(ext)) {
+    throw new Error(`仅支持常见音频格式：${LOCAL_AUDIO_EXTENSIONS.join(' / ')}。`)
+  }
+  return trimmed
+}
+
 /** 爆款素材获取的视频来源：链接下载或本地上传 */
 export type MaterialsSourceMode = 'url' | 'local'
 
 /** 桌面端/任务共用的下载管线路径 */
 export const VIDEO_DOWNLOAD_PIPELINE_PATH = '/pipelines/download'
 export const VIDEO_MATERIALS_PIPELINE_PATH = '/pipelines/req1'
+export const VIDEO_AUDIO_PIPELINE_PATH = '/pipelines/video-audio'
+export const VOCAL_SEPARATION_PIPELINE_PATH = '/pipelines/vocal-separation'
 
 export type TaskArtifacts = {
   video?: string
@@ -472,6 +521,16 @@ export function toUserTaskMessage(raw: string): string {
   const text = raw.trim()
   if (!text) return '任务失败，请重试。'
 
+  if (/CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够/i.test(text)) {
+    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+  }
+  if (/torch_dtype.*deprecated|Use 'dtype' instead/i.test(text)) {
+    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+  }
+  if (/没有音轨|没有原始音频流|没有音频流/.test(text)) {
+    return '下载的视频没有音轨，请更新该平台 Cookie 后重试，或稍后再试。'
+  }
+
   if (/Deno (?:运行时不存在|运行时检测失败|SHA-256 校验失败)|未能启用 Deno JS Challenge Provider/i.test(text)) {
     return 'Deno 运行时缺失或损坏。请在「全局设置 → 模型与运行环境」检查内置 Deno 2.9.5。'
   }
@@ -481,7 +540,7 @@ export function toUserTaskMessage(raw: string): string {
   if (/Netscape formatted|not JSON/i.test(text)) {
     return 'Cookie 格式不对。请使用「口播匣 Cookie 导出」插件复制 Netscape 格式全文，不能使用 JSON。'
   }
-  if (/(粘贴 Cookie 已配置|应用内登录已保存)，?但 yt-dlp 鉴权失败/i.test(text)) {
+  if (/(粘贴 Cookie 已配置|应用内登录已保存)，?但 yt-dlp (?:鉴权失败|下载失败)/i.test(text)) {
     return text
   }
   if (/DEMUCS|demucs|torchaudio|人声分离|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {

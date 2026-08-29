@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { tools as toolCatalog, type KouboxConfig, type RuntimeStatus, type TaskStatus, type ToolId, type ToolManifest } from '@koubox/shared'
+import { tools as toolCatalog, TOOL_TASK_KIND, type KouboxConfig, type RuntimeStatus, type TaskStatus, type ToolId, type ToolManifest } from '@koubox/shared'
 import { Sidebar } from './components/Sidebar'
 import { Toast, type ToastMessage } from './components/common/Toast'
 import { HomePage } from './pages/HomePage'
@@ -8,6 +8,8 @@ import { SettingsPage } from './pages/SettingsPage'
 import { RequirementOnePage } from './pages/RequirementOnePage'
 import { RequirementTwoPage } from './pages/RequirementTwoPage'
 import { VideoDownloaderPage } from './pages/VideoDownloaderPage'
+import { VideoAudioPage } from './pages/VideoAudioPage'
+import { VocalSeparationPage } from './pages/VocalSeparationPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
 
 type FixedPage = 'home' | 'models' | 'settings'
@@ -280,15 +282,33 @@ export function App() {
             />
           )}
 
+          {opened.includes('video-audio') && keepAlivePane(
+            focus.kind === 'tool' && focus.toolId === 'video-audio' && focus.menu === 'run',
+            <VideoAudioPage
+              defaultOutputDirectory={config?.outputDirectory ?? ''}
+              openOutputOnComplete={config?.openOutputOnComplete ?? false}
+              onChooseDirectory={handleChooseDirectory}
+              onChooseVideoFile={handleChooseVideo}
+              onShowToast={showToast}
+              onTaskStatus={bindToolStatus('video-audio')}
+            />
+          )}
+
+          {opened.includes('vocal-separation') && keepAlivePane(
+            focus.kind === 'tool' && focus.toolId === 'vocal-separation' && focus.menu === 'run',
+            <VocalSeparationPage
+              defaultOutputDirectory={config?.outputDirectory ?? ''}
+              openOutputOnComplete={config?.openOutputOnComplete ?? false}
+              onChooseDirectory={handleChooseDirectory}
+              onChooseAudioFile={handleChooseAudio}
+              onShowToast={showToast}
+              onTaskStatus={bindToolStatus('vocal-separation')}
+            />
+          )}
+
           {focus.kind === 'tool' && focus.menu !== 'run' && (
             <TaskHistoryPage
-              kind={
-                focus.toolId === 'precise-srt'
-                  ? 'req2'
-                  : focus.toolId === 'video-downloader'
-                    ? 'download'
-                    : 'req1'
-              }
+              kind={TOOL_TASK_KIND[focus.toolId]}
               outputDirectory={config?.outputDirectory ?? ''}
               onShowToast={showToast}
             />

@@ -199,7 +199,7 @@ def run(
     tokenizer = AutoTokenizer.from_pretrained(model_directory, local_files_only=True, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_directory,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         local_files_only=True,
         trust_remote_code=True,
     ).to("cuda:0")

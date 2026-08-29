@@ -4,6 +4,8 @@ import type { ToolManifest } from '@koubox/shared'
 import viralMaterialsIcon from '../../../../../../png/爆款素材获取.png'
 import preciseSrtIcon from '../../../../../../png/精准 SRT 对齐.png'
 import videoDownloaderIcon from '../../../../../../png/downloder.png'
+import videoAudioIcon from '../../../../../../png/视频提取音频.png'
+import vocalSeparationIcon from '../../../../../../png/人声分离.png'
 
 type HomePageProps = {
   tools: ToolManifest[]
@@ -15,7 +17,9 @@ type HomePageProps = {
 const toolImages: Record<string, string> = {
   'viral-materials': viralMaterialsIcon,
   'precise-srt': preciseSrtIcon,
-  'video-downloader': videoDownloaderIcon
+  'video-downloader': videoDownloaderIcon,
+  'video-audio': videoAudioIcon,
+  'vocal-separation': vocalSeparationIcon
 }
 
 const chipClassByTag: Record<string, string> = {
@@ -96,9 +100,7 @@ export function HomePage({ tools, query, onQueryChange, onOpenTool }: HomePagePr
                 }}
               >
                 <div className="tool-card-top">
-                  <div className="tool-card-icon">
-                    {image ? <img src={image} alt="" /> : null}
-                  </div>
+                  {image ? <img className="tool-card-icon" src={image} alt="" /> : null}
                   <div className="tool-card-body">
                     <h3>{tool.name}</h3>
                     <p>{tool.description}</p>

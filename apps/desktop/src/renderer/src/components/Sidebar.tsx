@@ -7,7 +7,9 @@ import {
   X,
   Play,
   Subtitles,
-  DownloadSimple
+  DownloadSimple,
+  Waveform,
+  Microphone
 } from '@phosphor-icons/react'
 import type { RuntimeStatus, TaskStatus, ToolId, ToolManifest } from '@koubox/shared'
 import kouboxIcon from '../assets/koubox-icon.png'
@@ -29,7 +31,9 @@ type SidebarProps = {
 const toolIcons: Record<ToolId, React.ComponentType<{ size?: number; weight?: 'bold' | 'duotone' | 'fill' | 'regular' }>> = {
   'viral-materials': Play,
   'precise-srt': Subtitles,
-  'video-downloader': DownloadSimple
+  'video-downloader': DownloadSimple,
+  'video-audio': Waveform,
+  'vocal-separation': Microphone
 }
 
 const STATUS_LABEL: Record<TaskStatus, string> = {

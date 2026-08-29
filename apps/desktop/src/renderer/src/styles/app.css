@@ -559,29 +559,14 @@ body.is-resizing {
 .tool-card-icon {
   width: 64px;
   height: 64px;
-  border-radius: var(--radius-lg);
-  background: var(--accent-teal-soft);
-  border: 1px solid var(--accent-teal-border);
-  display: grid;
-  place-items: center;
   flex-shrink: 0;
-  padding: 6px;
+  display: block;
+  object-fit: contain;
   transition: transform var(--duration-normal) var(--ease-spring);
-}
-
-.tool-card.blue .tool-card-icon {
-  background: var(--accent-blue-soft);
-  border-color: var(--accent-blue-border);
 }
 
 .tool-card:hover .tool-card-icon {
   transform: scale(1.06);
-}
-
-.tool-card-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
 }
 
 .tool-card-body {

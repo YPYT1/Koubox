@@ -32,7 +32,7 @@ def write(level: str, component: str, message: str, detail: object | None = None
         return
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     line = f"[{timestamp}] [{level.upper()}] [{component}] {message}"
-    if detail is not None and cfg["verbose"]:
+    if detail is not None and (cfg["verbose"] or level in ("error", "warn")):
         if isinstance(detail, str):
             line += f"\n{detail}"
         else:

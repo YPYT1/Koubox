@@ -50,7 +50,7 @@ type TaskRecord = {
 type QueuedJob = {
   record: TaskRecord
   modelPaths?: ModelPaths
-  kind: 'req1' | 'req2' | 'download'
+  kind: 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation'
 }
 
 type WorkerMessage = {
@@ -107,6 +107,16 @@ function formatCommandError(stderr: string, commandName: string): string {
   return toUserTaskMessage(text)
 }
 
+function workerProcessError(stderr: string): string {
+  const lines = stderr.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  if (lines.length === 0) return '本地模型运行器退出失败。'
+  const noise = /deprecated|FutureWarning|UserWarning|\[transformers\]/i
+  const meaningful = lines.filter((line) => !noise.test(line))
+  const pool = meaningful.length > 0 ? meaningful : lines
+  const oom = pool.find((line) => /CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error/i.test(line))
+  return oom ?? pool.at(-1) ?? '本地模型运行器退出失败。'
+}
+
 function dateStamp(value = new Date()): string {
   const y = value.getFullYear()
   const m = String(value.getMonth() + 1).padStart(2, '0')
@@ -130,8 +140,13 @@ function nextSequence(prefix: string, outputDirectory: string, existingIds: stri
   return max + 1
 }
 
-function allocateTaskId(kind: 'req1' | 'req2' | 'download', url: string, outputDirectory: string, existingIds: string[]): string {
-  const detected = kind === 'req1' || kind === 'download' ? detectPlatform(url) : 'Audio'
+function allocateTaskId(
+  kind: 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation',
+  url: string,
+  outputDirectory: string,
+  existingIds: string[]
+): string {
+  const detected = kind === 'req1' || kind === 'download' || kind === 'video-audio' ? detectPlatform(url) : 'Audio'
   // Keep the existing task-id casing for compatibility with saved output folders.
   const platform = detected === 'YouTube' ? 'Youtube' : detected === 'TikTok' ? 'Tiktok' : detected
   const prefix = `${platform}_${dateStamp()}_`
@@ -274,6 +289,67 @@ export class TaskManager {
     return this.clone(task)
   }
 
+  startVideoAudio(
+    source: string,
+    outputDirectory: string,
+    sourceMode: 'url' | 'local' = 'url'
+  ): TaskSnapshot {
+    const outputRoot = resolve(normalizeOsPath(outputDirectory))
+    mkdirSync(outputRoot, { recursive: true })
+    const resolvedSource = sourceMode === 'local' ? resolve(normalizeOsPath(source)) : source.trim()
+    const id = allocateTaskId('video-audio', resolvedSource, outputRoot, [...this.records.keys()])
+    const taskDir = join(outputRoot, id)
+    mkdirSync(taskDir, { recursive: true })
+    const task: TaskSnapshot = {
+      taskId: id,
+      kind: 'video-audio',
+      sourceMode,
+      status: 'queued',
+      stage: 'queued',
+      percent: 0,
+      message: sourceMode === 'local' ? '本地视频任务已排队' : '音频提取任务已排队',
+      url: resolvedSource,
+      outputDirectory: taskDir,
+      taskDirectory: taskDir,
+      artifacts: {},
+      createdAt: now(),
+      updatedAt: now()
+    }
+    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    this.records.set(id, record)
+    this.persist(record)
+    this.enqueue({ record, kind: 'video-audio' })
+    return this.clone(task)
+  }
+
+  startVocalSeparation(audioPath: string, outputDirectory: string): TaskSnapshot {
+    const outputRoot = resolve(normalizeOsPath(outputDirectory))
+    mkdirSync(outputRoot, { recursive: true })
+    const resolvedAudio = resolve(normalizeOsPath(audioPath))
+    const id = allocateTaskId('vocal-separation', resolvedAudio, outputRoot, [...this.records.keys()])
+    const taskDir = join(outputRoot, id)
+    mkdirSync(taskDir, { recursive: true })
+    const task: TaskSnapshot = {
+      taskId: id,
+      kind: 'vocal-separation',
+      status: 'queued',
+      stage: 'queued',
+      percent: 0,
+      message: '人声分离任务已排队',
+      url: resolvedAudio,
+      outputDirectory: taskDir,
+      taskDirectory: taskDir,
+      artifacts: {},
+      createdAt: now(),
+      updatedAt: now()
+    }
+    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    this.records.set(id, record)
+    this.persist(record)
+    this.enqueue({ record, kind: 'vocal-separation' })
+    return this.clone(task)
+  }
+
   get(taskIdValue: string): TaskSnapshot | undefined {
     const record = this.records.get(taskIdValue)
     return record ? this.clone(record.task) : undefined
@@ -405,7 +481,11 @@ export class TaskManager {
         ? this.executeRequirementOne(job.record, job.modelPaths!)
         : job.kind === 'req2'
           ? this.executeRequirementTwo(job.record, job.modelPaths!)
-          : this.executeDownloadOnly(job.record)
+          : job.kind === 'video-audio'
+            ? this.executeVideoAudio(job.record)
+            : job.kind === 'vocal-separation'
+              ? this.executeVocalSeparation(job.record)
+              : this.executeDownloadOnly(job.record)
       void run.finally(() => {
         this.runningCount = Math.max(0, this.runningCount - 1)
         this.pumpQueue()
@@ -413,24 +493,40 @@ export class TaskManager {
     }
   }
 
+  private resolveSourceMode(task: TaskSnapshot): 'url' | 'local' {
+    return task.sourceMode ?? (/^https?:\/\//i.test(task.url) ? 'url' : 'local')
+  }
+
+  private async acquireVideo(record: TaskRecord, root: string, taskId: string, sourceMode: 'url' | 'local'): Promise<string> {
+    if (sourceMode === 'local') {
+      this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在导入本地视频' })
+      if (!existsSync(record.task.url)) throw this.failWithCode(record, 'VIDEO_NOT_FOUND', '选择的本地视频不存在。')
+      const ext = extname(record.task.url).toLowerCase() || '.mp4'
+      const video = join(root, `${taskId}${ext}`)
+      copyFileSync(record.task.url, video)
+      return video
+    }
+    this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在下载视频' })
+    return this.download(record, root, taskId)
+  }
+
+  private async importLocalAudio(record: TaskRecord, root: string, taskId: string, sourcePath: string): Promise<string> {
+    if (!existsSync(sourcePath)) throw this.failWithCode(record, 'AUDIO_NOT_FOUND', '选择的音频文件不存在。')
+    const sourceAudio = join(root, `${taskId}_source${extname(sourcePath).toLowerCase() || '.audio'}`)
+    copyFileSync(sourcePath, sourceAudio)
+    record.task.artifacts.sourceAudio = sourceAudio
+    this.persist(record)
+    return sourceAudio
+  }
+
   private async executeRequirementOne(record: TaskRecord, modelPaths: ModelPaths): Promise<void> {
     const { task } = record
     const root = resolve(task.outputDirectory)
     mkdirSync(root, { recursive: true })
-    const sourceMode = task.sourceMode ?? (/^https?:\/\//i.test(task.url) ? 'url' : 'local')
+    const sourceMode = this.resolveSourceMode(task)
     log.info('任务开始', { taskId: task.taskId, url: task.url, sourceMode })
     try {
-      let video: string
-      if (sourceMode === 'local') {
-        this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在导入本地视频' })
-        if (!existsSync(task.url)) throw this.failWithCode(record, 'VIDEO_NOT_FOUND', '选择的本地视频不存在。')
-        const ext = extname(task.url).toLowerCase() || '.mp4'
-        video = join(root, `${task.taskId}${ext}`)
-        copyFileSync(task.url, video)
-      } else {
-        this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在下载视频' })
-        video = await this.download(record, root, task.taskId)
-      }
+      const video = await this.acquireVideo(record, root, task.taskId, sourceMode)
       record.task.artifacts.video = video
       this.persist(record)
       this.update(record, { stage: 'extract-audio', percent: 28, message: '正在提取原音频' })
@@ -459,6 +555,54 @@ export class TaskManager {
     }
   }
 
+  private async executeVideoAudio(record: TaskRecord): Promise<void> {
+    const { task } = record
+    const root = resolve(task.outputDirectory)
+    mkdirSync(root, { recursive: true })
+    const sourceMode = this.resolveSourceMode(task)
+    try {
+      const video = await this.acquireVideo(record, root, task.taskId, sourceMode)
+      record.task.artifacts.video = video
+      this.persist(record)
+      this.update(record, { stage: 'extract-audio', percent: 65, message: '正在提取原音频' })
+      const audio = await this.extractAudio(record, video, join(root, `${task.taskId}.wav`))
+      record.task.artifacts.audio = audio
+      this.persist(record)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '音频提取完成' })
+    } catch (error) {
+      if (record.cancelled) return
+      if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
+      else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
+      log.error('音频提取任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
+    }
+  }
+
+  private async executeVocalSeparation(record: TaskRecord): Promise<void> {
+    const { task } = record
+    const root = resolve(task.outputDirectory)
+    mkdirSync(root, { recursive: true })
+    try {
+      this.update(record, { status: 'running', stage: 'download', percent: 5, message: '正在导入本地音频' })
+      const sourceAudio = await this.importLocalAudio(record, root, task.taskId, task.url)
+      this.update(record, { stage: 'extract-audio', percent: 15, message: '正在转换音频' })
+      const audio = await this.extractAudio(record, sourceAudio, join(root, `${task.taskId}.wav`))
+      record.task.artifacts.audio = audio
+      this.persist(record)
+      const gpu = detectGpu()
+      if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '音频已保存，但当前没有可用的 NVIDIA GPU，无法执行人声分离。')
+      this.update(record, { stage: 'separate-vocals', percent: 25, message: '正在分离人声（加载模型 / 去除背景音乐）' })
+      const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`), { min: 25, max: 95 })
+      record.task.artifacts.vocals = vocals
+      this.persist(record)
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '人声分离完成' })
+    } catch (error) {
+      if (record.cancelled) return
+      if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
+      else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
+      log.error('人声分离任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
+    }
+  }
+
   private async executeDownloadOnly(record: TaskRecord): Promise<void> {
     const root = resolve(record.task.outputDirectory)
     mkdirSync(root, { recursive: true })
@@ -480,10 +624,7 @@ export class TaskManager {
     const root = resolve(task.outputDirectory)
     mkdirSync(root, { recursive: true })
     try {
-      if (!existsSync(task.url)) throw this.failWithCode(record, 'AUDIO_NOT_FOUND', '选择的音频文件不存在。')
-      const sourceAudio = join(root, `${task.taskId}_source${extname(task.url).toLowerCase() || '.audio'}`)
-      copyFileSync(task.url, sourceAudio)
-      record.task.artifacts.sourceAudio = sourceAudio
+      const sourceAudio = await this.importLocalAudio(record, root, task.taskId, task.url)
       this.update(record, { status: 'running', stage: 'extract-audio', percent: 8, message: '正在转换音频' })
       const audio = await this.extractAudio(record, sourceAudio, join(root, `${task.taskId}.wav`))
       record.task.artifacts.audio = audio
@@ -630,7 +771,12 @@ export class TaskManager {
     return result.path
   }
 
-  private async separateVocals(record: TaskRecord, audioPath: string, vocalsPath: string): Promise<string> {
+  private async separateVocals(
+    record: TaskRecord,
+    audioPath: string,
+    vocalsPath: string,
+    progress: { min: number; max: number } = { min: 36, max: 54 }
+  ): Promise<string> {
     const config = this.options.getConfig()
     const modelsDirectory = config.demucsModelDirectory || join(config.modelsDirectory, 'demucs')
     mkdirSync(modelsDirectory, { recursive: true })
@@ -642,7 +788,7 @@ export class TaskManager {
     }, (message) => {
       if (message.type === 'progress') {
         this.update(record, {
-          percent: Math.max(36, Math.min(54, message.percent ?? 36)),
+          percent: Math.max(progress.min, Math.min(progress.max, message.percent ?? progress.min)),
           message: message.message ?? '正在分离人声'
         })
       }
@@ -767,7 +913,10 @@ export class TaskManager {
           if (!line.trim()) continue
           try {
             const message = JSON.parse(line) as WorkerMessage
-            if (message.type === 'error') return reject(Object.assign(new Error(message.message ?? '本地模型运行失败。'), { code: message.code }))
+            if (message.type === 'error') {
+              const userMessage = toUserTaskMessage(message.message ?? '本地模型运行失败。')
+              return reject(Object.assign(new Error(userMessage), { code: message.code }))
+            }
             onMessage(message)
             if (message.type === 'transcript' || message.type === 'translation' || message.type === 'separated') final = message
           } catch { /* Ignore non-protocol stdout noise. */ }
@@ -779,8 +928,9 @@ export class TaskManager {
         record.processes.delete(child)
         if (record.cancelled) return reject(new Error('任务已取消。'))
         if (code !== 0) {
-          log.error(`worker 退出失败: ${operation}`, { code, stderr: stderr.trim() })
-          return reject(new Error(stderr.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? '本地模型运行器退出失败。'))
+          const stderrText = stderr.trim()
+          log.error(`worker 退出失败: ${operation}`, { code, stderr: stderrText })
+          return reject(new Error(toUserTaskMessage(workerProcessError(stderrText))))
         }
         if (!final) return reject(new Error('本地模型运行器没有返回结果。'))
         resolvePromise(final)
@@ -807,7 +957,7 @@ export class TaskManager {
 
   private fail(record: TaskRecord, code: string, message: string): void {
     const userMessage = toUserTaskMessage(message)
-    log.error('任务阶段失败', { taskId: record.task.taskId, code, message: userMessage })
+    log.error(`任务阶段失败: ${userMessage}`, { taskId: record.task.taskId, code, message })
     this.update(record, { status: 'error', stage: 'error', message: userMessage, error: { code, message: userMessage } })
   }
 

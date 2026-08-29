@@ -67,7 +67,7 @@ function shouldLog(level: LogLevel): boolean {
 function formatLine(level: LogLevel, component: string, message: string, detail?: unknown): string {
   const timestamp = new Date().toISOString()
   let line = `[${timestamp}] [${level.toUpperCase()}] [${component}] ${message}`
-  if (detail !== undefined && verbose) {
+  if (detail !== undefined && (verbose || level === 'error' || level === 'warn')) {
     line += `\n${typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2)}`
   }
   return line

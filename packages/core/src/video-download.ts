@@ -187,7 +187,7 @@ export async function verifyDownloadedMedia(filePath: string, ffmpegExecutable: 
   const duration = parseProbeNumber(data.format?.duration)
   const size = parseProbeNumber(data.format?.size)
   if (!video) throw new Error('下载文件没有视频流。')
-  if (!audio) throw new Error('下载文件没有原始音频流。')
+  if (!audio) throw new Error('下载的视频没有音轨。')
   if (!(duration > 0)) throw new Error('下载文件时长无效。')
   if (!(size > 0)) throw new Error('下载文件大小无效。')
   return {
@@ -316,6 +316,17 @@ function ytdlpAuthenticationArgs(request: VideoDownloadRequest, authentication?:
 
 function authenticationSourceLabel(source: AuthenticatedCookieFile['source']): string {
   return source === 'paste' ? '粘贴 Cookie 已配置' : '应用内登录已保存'
+}
+
+function formatYtdlpAuthenticatedFailure(
+  platform: DownloadableVideoPlatform,
+  source: AuthenticatedCookieFile['source'],
+  failure: string
+): string {
+  if (/没有音轨|没有原始音频流|没有音频流/.test(failure)) {
+    return `${platform} 下载的视频没有音轨，请更新 Cookie 后重试，或稍后再试。`
+  }
+  return `${platform} ${authenticationSourceLabel(source)}，但 yt-dlp 下载失败：${failure}`
 }
 
 /**
@@ -508,14 +519,14 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     }
     if (ytdlpAuthenticationFailure) {
       if (!authenticationResolved) throw new Error(ytdlpAuthenticationFailure)
-      throw new Error(`YouTube ${authenticationSourceLabel(authenticationResolved.source)}，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
+      throw new Error(formatYtdlpAuthenticatedFailure('YouTube', authenticationResolved.source, ytdlpAuthenticationFailure))
     }
     throw new Error(`YouTube 视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请检查 YouTube 登录状态是否有效。`)
   }
 
   if (ytdlpAuthenticationFailure) {
     if (authenticationResolved) {
-      throw new Error(`${checked.platform} ${authenticationSourceLabel(authenticationResolved.source)}，但 yt-dlp 鉴权失败：${ytdlpAuthenticationFailure}`)
+      throw new Error(formatYtdlpAuthenticatedFailure(checked.platform, authenticationResolved.source, ytdlpAuthenticationFailure))
     }
     throw new Error(`${checked.platform} 公开视频解析失败；认证线路失败：${ytdlpAuthenticationFailure}`)
   }

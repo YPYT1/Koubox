@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
-import { assertDownloadableVideoUrl, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
@@ -146,6 +146,24 @@ function readVideoPipelineInput(body: Record<string, unknown>, defaultOutputDire
     ? normalizeOsPath(body.outputDirectory.trim())
     : normalizeOsPath(defaultOutputDirectory)
   return { url: checked.url, outputDirectory }
+}
+
+function readVideoMaterialsPipelineInput(body: Record<string, unknown>, defaultOutputDirectory: string): {
+  outputDirectory: string
+  source: string
+  sourceMode: 'url' | 'local'
+} {
+  const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+    ? normalizeOsPath(body.outputDirectory.trim())
+    : normalizeOsPath(defaultOutputDirectory)
+  const videoPathRaw = typeof body.videoPath === 'string' ? body.videoPath : ''
+  if (videoPathRaw.trim()) {
+    const videoPath = assertLocalVideoPath(videoPathRaw)
+    if (!existsSync(videoPath)) throw new Error('本地视频文件不存在。')
+    return { outputDirectory, source: videoPath, sourceMode: 'local' }
+  }
+  const { url } = readVideoPipelineInput(body, defaultOutputDirectory)
+  return { outputDirectory, source: url, sourceMode: 'url' }
 }
 
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
@@ -488,18 +506,9 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/pipelines/req1') {
         const body = await readJson(request)
-        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
-          ? normalizeOsPath(body.outputDirectory.trim())
-          : normalizeOsPath(store.read().outputDirectory)
+        const { outputDirectory, source, sourceMode } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
-        const videoPathRaw = typeof body.videoPath === 'string' ? body.videoPath : ''
-        if (videoPathRaw.trim()) {
-          const videoPath = assertLocalVideoPath(videoPathRaw)
-          if (!existsSync(videoPath)) return json(response, 400, { error: '本地视频文件不存在。' })
-          return json(response, 202, tasks.startRequirementOne(videoPath, outputDirectory, resolveModelPaths(store.read()), 'local'))
-        }
-        const { url: urlValue } = readVideoPipelineInput(body, store.read().outputDirectory)
-        return json(response, 202, tasks.startRequirementOne(urlValue, outputDirectory, resolveModelPaths(store.read()), 'url'))
+        return json(response, 202, tasks.startRequirementOne(source, outputDirectory, resolveModelPaths(store.read()), sourceMode))
       }
       if (method === 'POST' && url.pathname === '/pipelines/req2') {
         const body = await readJson(request)
@@ -517,6 +526,23 @@ export async function startLocalApi(options: ServerOptions) {
         const { url: urlValue, outputDirectory } = readVideoPipelineInput(body, store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
         return json(response, 202, tasks.startDownload(urlValue, outputDirectory))
+      }
+      if (method === 'POST' && url.pathname === VIDEO_AUDIO_PIPELINE_PATH) {
+        const body = await readJson(request)
+        const { outputDirectory, source, sourceMode } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startVideoAudio(source, outputDirectory, sourceMode))
+      }
+      if (method === 'POST' && url.pathname === VOCAL_SEPARATION_PIPELINE_PATH) {
+        const body = await readJson(request)
+        const audioPath = typeof body.audioPath === 'string' ? assertLocalAudioPath(body.audioPath) : ''
+        if (!audioPath) return json(response, 400, { error: '请选择本地音频文件。' })
+        if (!existsSync(audioPath)) return json(response, 400, { error: '本地音频文件不存在。' })
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+          ? normalizeOsPath(body.outputDirectory.trim())
+          : normalizeOsPath(store.read().outputDirectory)
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startVocalSeparation(audioPath, outputDirectory))
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {
