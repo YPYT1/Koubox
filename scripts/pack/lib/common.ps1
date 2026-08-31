@@ -141,6 +141,21 @@ function Remove-PackPythonCaches([string] $TargetRoot) {
   }
 }
 
+function Get-PackFileSha256([string] $Path) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+      $bytes = $sha.ComputeHash($stream)
+      return ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
+    } finally {
+      $stream.Dispose()
+    }
+  } finally {
+    $sha.Dispose()
+  }
+}
+
 function Invoke-PackHooks {
   param(
     [Parameter(Mandatory = $true)][string] $Phase,

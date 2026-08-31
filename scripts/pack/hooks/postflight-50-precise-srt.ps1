@@ -14,7 +14,7 @@ foreach ($line in Get-Content -LiteralPath $stableHashFile) {
   if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { continue }
   $stableFile = Join-Path $stableRoot $matches[2]
   Assert-PackPath $stableFile "stable-ts 受控文件 $($matches[2])"
-  $actualHash = (Get-FileHash -LiteralPath $stableFile -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actualHash = Get-PackFileSha256 $stableFile
   if ($actualHash -ne $matches[1]) {
     throw "校验失败：stable-ts 文件哈希不一致：$($matches[2])"
   }
