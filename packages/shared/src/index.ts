@@ -24,7 +24,7 @@ export const tools: ToolManifest[] = [
   {
     id: 'precise-srt',
     name: '精准 SRT 对齐',
-    description: '导入音频与口播文案对齐，或纯音频识别，输出可直接导入剪映的标准 SRT。',
+    description: '推荐选有文案模式，时间轴更准；无文案时也可纯音频识别，输出可直接导入剪映的标准 SRT。',
     accent: 'blue',
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
@@ -56,12 +56,12 @@ export const tools: ToolManifest[] = [
   },
   {
     id: 'vocal-separation',
-    name: '人声分离',
-    description: '上传本地音频，用 Demucs 去除背景音乐，仅保留人声轨。',
+    name: '去除背景音乐',
+    description: '上传本地音频，用 Demucs 去除背景音乐并保留人声；对带有完整背景音乐的素材效果较好。',
     accent: 'teal',
     artifactTags: ['Audio'],
     menus: [
-      { id: 'run', label: '开始分离' },
+      { id: 'run', label: '开始处理' },
       { id: 'history', label: '任务中心' }
     ]
   },
@@ -195,15 +195,62 @@ export function isDownloadableVideoPlatform(platform: KouboxPlatform): platform 
   return (DOWNLOADABLE_VIDEO_PLATFORMS as readonly string[]).includes(platform)
 }
 
+function hasRecognizableVideoPath(url: string, platform: DownloadableVideoPlatform): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    if (platform === 'YouTube') {
+      if (host === 'youtu.be') return Boolean(parsed.pathname.split('/').filter(Boolean)[0])
+      if (!/(^|\.)youtube\.com$/i.test(host)) return false
+      if (parsed.searchParams.get('v')) return true
+      const parts = parsed.pathname.split('/').filter(Boolean)
+      return (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live') && Boolean(parts[1])
+    }
+    if (platform === 'TikTok') {
+      if (/^(?:vm|vt)\.tiktok\.com$/i.test(host)) return Boolean(parsed.pathname.split('/').filter(Boolean)[0])
+      return /\/@[^/]+\/video\/\d+/.test(parsed.pathname)
+    }
+    if (platform === 'Instagram') {
+      return /^\/(p|reel|reels)\/[A-Za-z0-9_-]+/.test(parsed.pathname)
+    }
+    if (platform === 'Facebook') {
+      if (/\/share\/[rv]\//i.test(parsed.pathname)) return true
+      if (parsed.searchParams.get('v') && /^\d+$/.test(parsed.searchParams.get('v') ?? '')) return true
+      return /\/(?:videos|reel|reels)\/\d+/i.test(parsed.pathname)
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function platformFormatError(platform: DownloadableVideoPlatform): string {
+  if (platform === 'YouTube') return 'YouTube 链接格式不正确，未找到有效视频 ID。'
+  if (platform === 'TikTok') return 'TikTok 链接格式不正确，需要 /@用户名/video/数字 或短链。'
+  if (platform === 'Instagram') return 'Instagram 链接格式不正确，支持 /p/、/reel/、/reels/。'
+  return 'Facebook 链接格式不正确，支持 watch、reel、videos 或分享链接。'
+}
+
 /** 校验链接后返回 trim 后的 URL；不合法直接抛错 */
 export function assertDownloadableVideoUrl(url: string): { url: string; platform: DownloadableVideoPlatform } {
   const trimmed = url.trim()
+  if (!trimmed) throw new Error('请输入合法的视频链接（http/https）。')
   if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error('请输入合法的视频链接（http/https）。')
+  }
+  let hostname = ''
+  try {
+    hostname = new URL(trimmed).hostname
+    if (!hostname) throw new Error('invalid')
+  } catch {
     throw new Error('请输入合法的视频链接（http/https）。')
   }
   const platform = detectPlatform(trimmed)
   if (!isDownloadableVideoPlatform(platform)) {
     throw new Error('仅支持 YouTube / Facebook / Instagram / TikTok。')
+  }
+  if (!hasRecognizableVideoPath(trimmed, platform)) {
+    throw new Error(platformFormatError(platform))
   }
   return { url: trimmed, platform }
 }
@@ -298,6 +345,8 @@ export type TaskSnapshot = {
   preciseSrtDiagnostics?: PreciseSrtDiagnostics
   /** req1：链接下载或本地上传；缺省按 url 以 http(s) 判断 */
   sourceMode?: MaterialsSourceMode
+  /** req1：是否执行 Demucs 去除背景音乐（完整 BGM 素材效果较好） */
+  separateVocals?: boolean
   status: TaskStatus
   stage: TaskStage
   percent: number
@@ -315,6 +364,11 @@ export type TaskSnapshot = {
   error?: TaskError
   createdAt: string
   updatedAt: string
+}
+
+/** req1 是否实际执行去除背景音乐；必须显式为 true */
+export function req1UsesSeparateVocals(task: Pick<TaskSnapshot, 'kind' | 'separateVocals'>): boolean {
+  return task.kind === 'req1' && task.separateVocals === true
 }
 
 export type TaskEvent = {
@@ -463,6 +517,24 @@ export function detectAuthPlatformFromText(text: string): YtdlpCookiePlatformId 
   return undefined
 }
 
+export function isStalePlatformAuthFailure(text: string): boolean {
+  return /Sign in to confirm|not a bot|login required|Please log in|Use --cookies|已被平台拒绝|登录态无效|Cookie 未生效|Cookie 可能已过期|应用内登录可能已失效|cookie.*(?:invalid|expired)|session.*expired/i.test(
+    text
+  )
+}
+
+/** Cookie / 应用内登录已配置，但 yt-dlp 仍被平台拒绝（多为过期或会话失效） */
+export function platformAuthRejectedMessage(
+  platformId: YtdlpCookiePlatformId,
+  mode: PlatformAuthMode
+): string {
+  const label = platformLabel(platformId)
+  if (mode === 'paste') {
+    return `${label} Cookie 可能已过期或失效。请用插件重新导出 ${label} Cookie，粘贴到「全局设置 → 平台登录」后保存，再重试。`
+  }
+  return `${label} 应用内登录可能已失效。请到「全局设置 → 平台登录」重新打开登录窗口，登录 ${label} 后点击「保存应用内登录」。`
+}
+
 export function platformAuthMissingMessage(
   platformId: YtdlpCookiePlatformId,
   mode: PlatformAuthMode,
@@ -588,10 +660,15 @@ export function toUserTaskMessage(raw: string): string {
     return 'Cookie 格式不对。请使用「口播匣 Cookie 导出」插件复制 Netscape 格式全文，不能使用 JSON。'
   }
   if (/(粘贴 Cookie 已配置|应用内登录已保存)，?但 yt-dlp (?:鉴权失败|下载失败)/i.test(text)) {
+    const authPlatform = detectAuthPlatformFromText(text)
+    if (authPlatform && isStalePlatformAuthFailure(text)) {
+      const mode: PlatformAuthMode = text.includes('粘贴 Cookie 已配置') ? 'paste' : 'builtin'
+      return platformAuthRejectedMessage(authPlatform, mode)
+    }
     return text
   }
-  if (/DEMUCS|demucs|torchaudio|人声分离|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
-    return '人声分离启动失败：检测到系统代理环境变量可能指向错误端口。请到「全局设置 → 下载（yt-dlp）」确认代理为 http://127.0.0.1:7897，或清空系统 HTTP_PROXY。'
+  if (/DEMUCS|demucs|torchaudio|人声分离|去除背景音乐|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
+    return '去除背景音乐启动失败：检测到系统代理环境变量可能指向错误端口。请到「全局设置 → 下载（yt-dlp）」确认代理为 http://127.0.0.1:7897，或清空系统 HTTP_PROXY。'
   }
   if (/Unable to connect to proxy|ProxyError|\[download\]|yt-dlp|yt_dlp/i.test(text) && /10061|积极拒绝|actively refused|proxy/i.test(text)) {
     const host = text.match(/host=['"]?([^'"\s,)]+)/i)?.[1]
@@ -618,9 +695,9 @@ export function toUserTaskMessage(raw: string): string {
   if (/\[Instagram\]|instagram\.com/i.test(text) && /login required|rate-limit|not available|Please wait|challenge|cookie/i.test(text)) {
     return platformAuthMissingMessage('instagram', 'paste', 'login-required')
   }
-  if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
+  if (isStalePlatformAuthFailure(text)) {
     if (authPlatform) {
-      return `${platformLabel(authPlatform)} Cookie 或应用内登录已被平台拒绝。请到「全局设置 → 平台登录」检查当前选择的登录方式。`
+      return platformAuthRejectedMessage(authPlatform, 'paste')
     }
     return '该视频需要登录后才能下载。请到「全局设置 → 平台登录」为对应平台配置登录后再试。'
   }
@@ -658,3 +735,11 @@ export function toUserTaskMessage(raw: string): string {
   }
   return text
 }
+
+export {
+  describeParsedPlatformUrl,
+  parsePlatformUrl,
+  parsePlatformUrlOrThrow,
+  type ParsedPlatformUrl,
+  type ParsedPlatformUrlKind
+} from './platform-url.js'

@@ -136,6 +136,60 @@ export function extractFacebookMedia(html: string, referer: string): FacebookMed
   return undefined
 }
 
+export function isFacebookShareUrl(url: string): boolean {
+  try {
+    return /\/share\/[rv]\//i.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
+}
+
+export async function resolveFacebookShareUrl(
+  inputUrl: string,
+  proxy: string
+): Promise<{ finalUrl: string; redirectChain: string[] }> {
+  const redirectChain = [inputUrl]
+  const seen = new Set<string>([inputUrl])
+  let current = inputUrl
+
+  for (let hop = 0; hop < 5; hop += 1) {
+    const normalizedProxy = normalizeProxyUrl(proxy)
+    const dispatcher = normalizedProxy ? new ProxyAgent(normalizedProxy) : undefined
+    try {
+      const response = await request(current, {
+        dispatcher,
+        maxRedirections: 0,
+        headers: {
+          'user-agent': DEFAULT_USER_AGENT,
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        },
+        headersTimeout: 20_000,
+        bodyTimeout: 20_000
+      })
+      await response.body.dump()
+      const location = response.headers.location
+      if (response.statusCode >= 300 && response.statusCode < 400 && location) {
+        const next = new URL(String(location), current).toString()
+        if (seen.has(next)) throw new Error('Facebook 分享链接重定向出现循环。')
+        seen.add(next)
+        redirectChain.push(next)
+        current = next
+        continue
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300 && !isFacebookShareUrl(current)) {
+        return { finalUrl: current, redirectChain }
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300 && isFacebookShareUrl(current)) {
+        throw new Error('Facebook 分享链接无法跳转到视频页面。')
+      }
+      throw new Error(`Facebook 分享链接返回 HTTP ${response.statusCode}，没有可用的重定向目标。`)
+    } finally {
+      await dispatcher?.close()
+    }
+  }
+  throw new Error('Facebook 分享链接重定向次数过多。')
+}
+
 export function extractFacebookVideoId(url: string): string | undefined {
   try {
     const parsed = new URL(url)

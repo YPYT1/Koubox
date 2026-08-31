@@ -358,7 +358,9 @@ describe('public video download pipeline', () => {
       }
     })
 
-    await expect(downloadVideo(request)).rejects.toThrow('YouTube 粘贴 Cookie 已配置，但 yt-dlp 下载失败：Sign in to confirm you are not a bot')
+    await expect(downloadVideo(request)).rejects.toThrow(
+      'YouTube Cookie 可能已过期或失效。请用插件重新导出 YouTube Cookie，粘贴到「全局设置 → 平台登录」后保存，再重试。'
+    )
   })
 
   it('re-resolves an expired direct media URL before failing over to another strategy', async () => {
@@ -416,5 +418,21 @@ describe('public video download pipeline', () => {
 
     expect(result.strategy).toBe('yt-dlp-authenticated')
     expect(calls).toEqual(['page', 'anonymous-browser', 'yt-dlp 认证预检', 'yt-dlp'])
+  })
+
+  it('allows Instagram /reel/ links into the public-page strategy', async () => {
+    const request = createRequest({
+      url: 'https://www.instagram.com/reel/DbqaVFtTBUv/?utm_source=ig_web_copy_link',
+      resolvePublicMedia: async (url) => {
+        expect(url).toBe('https://www.instagram.com/reel/DbqaVFtTBUv/')
+        return directResolution
+      },
+      runCommand: async (_command, args) => {
+        writeFileSync(args.at(-1)!, 'media')
+      }
+    })
+
+    const result = await downloadVideo(request)
+    expect(result.strategy).toBe('public-page')
   })
 })

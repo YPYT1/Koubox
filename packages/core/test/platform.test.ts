@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { detectPlatform } from '@koubox/shared'
+import { assertDownloadableVideoUrl, detectPlatform } from '@koubox/shared'
 import { normalizeTikTokVideoUrl } from '../src/public-video'
+import { parsePlatformUrl } from '@koubox/shared'
 
 describe('shared platform detection', () => {
   it.each([
     ['https://www.youtube.com/watch?v=abc', 'YouTube'],
     ['https://www.tiktok.com/@creator/video/1', 'TikTok'],
     ['https://www.instagram.com/reel/abc', 'Instagram'],
-    ['https://www.facebook.com/watch/?v=abc', 'Facebook'],
+    ['https://www.instagram.com/reels/abc', 'Instagram'],
+    ['https://www.facebook.com/watch/?v=1234567890', 'Facebook'],
+    ['https://www.facebook.com/share/r/abc/', 'Facebook'],
+    ['https://www.facebook.com/share/v/abc/', 'Facebook'],
   ])('detects %s as %s', (url, expected) => {
     expect(detectPlatform(url)).toBe(expected)
+    expect(assertDownloadableVideoUrl(url).platform).toBe(expected)
   })
 })
 

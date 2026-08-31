@@ -3,11 +3,15 @@ import { dirname, extname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
   assertDownloadableVideoUrl,
+  isStalePlatformAuthFailure,
   normalizeProxyUrl,
+  platformAuthIdFromUrlPlatform,
+  platformAuthRejectedMessage,
   type DownloadableVideoPlatform,
   type KouboxConfig
 } from '@koubox/shared'
 import { resolveFacebookPublicMedia } from './facebook.js'
+import { prepareDownloadUrl } from './download-url.js'
 import { resolvePublicMedia, type PublicMediaResolution } from './public-video.js'
 
 export {
@@ -326,6 +330,11 @@ function formatYtdlpAuthenticatedFailure(
   if (/没有音轨|没有原始音频流|没有音频流/.test(failure)) {
     return `${platform} 下载的视频没有音轨，请更新 Cookie 后重试，或稍后再试。`
   }
+  const platformId = platformAuthIdFromUrlPlatform(platform)
+  const mode = source === 'paste' ? 'paste' : 'builtin'
+  if (platformId && isStalePlatformAuthFailure(failure)) {
+    return platformAuthRejectedMessage(platformId, mode)
+  }
   return `${platform} ${authenticationSourceLabel(source)}，但 yt-dlp 下载失败：${failure}`
 }
 
@@ -389,6 +398,8 @@ async function verifyResult(
 /** Canonical download pipeline used by both `download` and `req1` tasks. */
 export async function downloadVideo(request: VideoDownloadRequest): Promise<VideoDownloadResult> {
   const checked = assertDownloadableVideoUrl(request.url)
+  const prepared = await prepareDownloadUrl(request.url, request.config.ytdlpProxy)
+  const effectiveRequest: VideoDownloadRequest = { ...request, url: prepared.downloadUrl }
   const failures: VideoDownloadResult['failures'] = []
   const tryResolved = async (
     strategy: VideoDownloadStrategy,
@@ -458,29 +469,29 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
 
   // YouTube 直接走登录态；TikTok 优先使用复制进来的参考下载器，再回退匿名浏览器。
   if (checked.platform === 'TikTok') {
-    if (request.downloadTikTokPublic) {
-      request.updateProgress(4, '正在使用 TikTok 无 Cookie 下载器…')
+    if (effectiveRequest.downloadTikTokPublic) {
+      effectiveRequest.updateProgress(4, '正在使用 TikTok 无 Cookie 下载器…')
       try {
-        const path = await request.downloadTikTokPublic(request.url, request.directory, request.fileStem, (line) => {
+        const path = await effectiveRequest.downloadTikTokPublic(effectiveRequest.url, effectiveRequest.directory, effectiveRequest.fileStem, (line) => {
           const percent = line.match(/(\d+(?:\.\d+)?)%/)
-          if (percent) request.updateProgress(Math.min(28, Math.max(8, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
-          else if (/Downloading webpage|Solving JS challenge/i.test(line)) request.updateProgress(5, '正在解析 TikTok 视频信息…')
+          if (percent) effectiveRequest.updateProgress(Math.min(28, Math.max(8, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
+          else if (/Downloading webpage|Solving JS challenge/i.test(line)) effectiveRequest.updateProgress(5, '正在解析 TikTok 视频信息…')
         })
-        return await verifyResult(request, path, checked.platform, 'tiktok-reference', failures)
+        return await verifyResult(effectiveRequest, path, checked.platform, 'tiktok-reference', failures)
       } catch (error) {
         failures.push({ strategy: 'tiktok-reference', message: errorMessage(error) })
       }
     }
-    const browserFallback = publicFallbacks(request, checked.platform).find((item) => item.strategy === 'tiktok-browser')
+    const browserFallback = publicFallbacks(effectiveRequest, checked.platform).find((item) => item.strategy === 'tiktok-browser')
     if (browserFallback) {
       const result = await tryResolved(browserFallback.strategy, browserFallback.resolve, browserFallback.resolveAttempts)
       if (result) return result
     }
   } else if (checked.platform !== 'YouTube') {
-    const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(request, checked.platform))
+    const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(effectiveRequest, checked.platform))
     if (direct) return direct
 
-    for (const fallback of publicFallbacks(request, checked.platform)) {
+    for (const fallback of publicFallbacks(effectiveRequest, checked.platform)) {
       const result = await tryResolved(fallback.strategy, fallback.resolve, fallback.resolveAttempts)
       if (result) return result
     }
@@ -488,18 +499,18 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
 
   let authenticationResolved: AuthenticatedCookieFile | undefined
   let ytdlpAuthenticationFailure: string | undefined
-  if (request.resolveAuthenticatedCookies) {
+  if (effectiveRequest.resolveAuthenticatedCookies) {
     try {
-      request.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
-      const cookieFile = await request.resolveAuthenticatedCookies(checked.platform)
+      effectiveRequest.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
+      const cookieFile = await effectiveRequest.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
         authenticationResolved = cookieFile
         try {
-          request.updateProgress(5, `正在验证${cookieFile.source === 'paste' ? '粘贴 Cookie' : '应用内登录'}…`)
-          await runYtdlpAuthenticationPreflight(request, cookieFile)
-          request.updateProgress(6, '平台登录验证通过，正在下载…')
-          const path = await runYtdlpAuthenticated(request, cookieFile)
-          return await verifyResult(request, path, checked.platform, 'yt-dlp-authenticated', failures)
+          effectiveRequest.updateProgress(5, `正在验证${cookieFile.source === 'paste' ? '粘贴 Cookie' : '应用内登录'}…`)
+          await runYtdlpAuthenticationPreflight(effectiveRequest, cookieFile)
+          effectiveRequest.updateProgress(6, '平台登录验证通过，正在下载…')
+          const path = await runYtdlpAuthenticated(effectiveRequest, cookieFile)
+          return await verifyResult(effectiveRequest, path, checked.platform, 'yt-dlp-authenticated', failures)
         } catch (error) {
           ytdlpAuthenticationFailure = errorMessage(error)
           throw error

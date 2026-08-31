@@ -389,14 +389,15 @@ async function resolveYoutube(url: string, proxy: string, maxHeight: number): Pr
  *
  * 两种格式都支持无登录公开解析。
  */
-type InstagramUrlFormat = 'reels' | 'post' | 'unknown'
+type InstagramUrlFormat = 'reels' | 'reel' | 'post' | 'unknown'
 
 function extractInstagramInfo(url: string): { shortcode: string; format: InstagramUrlFormat } | undefined {
-  const match = url.match(/instagram\.com\/(p|reels)\/([A-Za-z0-9_-]+)/)
+  const match = url.match(/instagram\.com\/(p|reel|reels)\/([A-Za-z0-9_-]+)/)
   if (!match) return undefined
 
   const [, formatPath, shortcode] = match
-  const format: InstagramUrlFormat = formatPath === 'reels' ? 'reels' : 'post'
+  const format: InstagramUrlFormat =
+    formatPath === 'p' ? 'post' : formatPath === 'reel' ? 'reel' : 'reels'
 
   return { shortcode, format }
 }
@@ -418,7 +419,7 @@ function extractInstagramShortcode(url: string): string | undefined {
  */
 async function resolveInstagram(url: string, proxy: string): Promise<PublicMediaResolution> {
   const info = extractInstagramInfo(url)
-  if (!info) throw new Error('Instagram 链接格式不正确。仅支持 /reels/ 和 /p/ 格式。')
+  if (!info) throw new Error('Instagram 链接格式不正确，支持 /p/、/reel/、/reels/。')
 
   const normalizedProxy = normalizeProxyUrl(proxy)
   const { spawn } = await import('node:child_process')
