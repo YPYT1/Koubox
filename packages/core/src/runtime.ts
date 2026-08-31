@@ -31,6 +31,7 @@ const translationModelFiles = [
 const ytdlpExpectedFiles = ['yt-dlp.exe']
 const denoExpectedFiles = ['deno.exe']
 
+// 与 scripts/pack/manifests/pack-manifest.json 的 ffmpegExpectedFiles 保持一致。
 const ffmpegExpectedFiles = [
   'ffmpeg.exe',
   'ffprobe.exe',

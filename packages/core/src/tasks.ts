@@ -30,6 +30,8 @@ type TaskManagerOptions = {
   projectDirectory: string
   pythonProjectDirectory: string
   bundledPythonExecutable?: string
+  /** Worker hard timeout override, mainly for tests. Production uses operation-specific defaults. */
+  workerTimeoutMs?: number
   taskIndexFile: string
   downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
   resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
@@ -75,9 +77,25 @@ type WorkerMessage = {
   }
 }
 
+const WORKER_TIMEOUT_MS: Record<'asr' | 'precise_srt' | 'translate' | 'separate', number> = {
+  asr: 30 * 60_000,
+  precise_srt: 60 * 60_000,
+  translate: 30 * 60_000,
+  separate: 45 * 60_000
+}
+
 function now(): string { return new Date().toISOString() }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
+
+function createWorkerTaskError(message: string, code?: string): Error & { code: string; taskError: TaskError } {
+  const userMessage = toUserTaskMessage(message)
+  const workerCode = code?.trim() || 'WORKER_FAILED'
+  return Object.assign(new Error(userMessage), {
+    code: workerCode,
+    taskError: { code: workerCode, message: userMessage }
+  })
+}
 
 function optionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
@@ -125,6 +143,22 @@ function workerProcessError(stderr: string): string {
   const pool = meaningful.length > 0 ? meaningful : lines
   const oom = pool.find((line) => /CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error/i.test(line))
   return oom ?? pool.at(-1) ?? '本地模型运行器退出失败。'
+}
+
+function parseWorkerFailure(stderr: string, stdoutBuffer = ''): { message: string; code?: string } {
+  for (const source of [stdoutBuffer, stderr]) {
+    const lines = source.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const parsed = JSON.parse(lines[index]) as { type?: string; code?: string; message?: string }
+        if (parsed.type === 'error' && parsed.message) {
+          return { message: parsed.message, code: parsed.code }
+        }
+      } catch { /* Ignore non-protocol stdout noise. */ }
+    }
+  }
+  const codeMatch = stderr.match(/"code"\s*:\s*"([^"]+)"/) ?? stdoutBuffer.match(/"code"\s*:\s*"([^"]+)"/)
+  return { message: workerProcessError(stderr), code: codeMatch?.[1] }
 }
 
 function dateStamp(value = new Date()): string {
@@ -1071,35 +1105,89 @@ export class TaskManager {
       let buffer = ''
       let final: WorkerMessage | undefined
       let stderr = ''
+      let settled = false
+      let stdoutEnded = !child.stdout
+      let exitCode: number | null = null
+      const timeoutMs = Math.max(1, this.options.workerTimeoutMs ?? WORKER_TIMEOUT_MS[operation])
+      const finishReject = (error: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        reject(error)
+      }
+      const finishResolve = (message: WorkerMessage) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        resolvePromise(message)
+      }
+      const processStdoutLine = (line: string): boolean => {
+        if (!line.trim()) return false
+        try {
+          const message = JSON.parse(line) as WorkerMessage
+          if (message.type === 'error') {
+            killProcessTree(child)
+            record.processes.delete(child)
+            finishReject(createWorkerTaskError(message.message ?? '本地模型运行失败。', message.code))
+            return true
+          }
+          onMessage(message)
+          if (message.type === 'transcript' || message.type === 'translation' || message.type === 'separated') final = message
+        } catch { /* Ignore non-protocol stdout noise. */ }
+        return false
+      }
+      const drainStdoutBuffer = (): void => {
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (processStdoutLine(line)) return
+        }
+      }
+      const handleWorkerExit = (): void => {
+        if (!stdoutEnded || exitCode === null || settled) return
+        record.processes.delete(child)
+        if (record.cancelled) return finishReject(new Error('任务已取消。'))
+        if (buffer.trim() && processStdoutLine(buffer.trim())) {
+          buffer = ''
+          return
+        }
+        if (exitCode !== 0) {
+          const stderrText = stderr.trim()
+          const failure = parseWorkerFailure(stderrText, buffer)
+          log.error(`worker 退出失败: ${operation}`, { code: exitCode, stderr: stderrText, workerCode: failure.code })
+          return finishReject(createWorkerTaskError(failure.message, failure.code ?? 'WORKER_FAILED'))
+        }
+        if (!final) {
+          const failure = parseWorkerFailure(stderr, buffer)
+          if (failure.code) return finishReject(createWorkerTaskError(failure.message, failure.code))
+          return finishReject(createWorkerTaskError('本地模型运行器没有返回结果。', 'WORKER_FAILED'))
+        }
+        finishResolve(final)
+      }
+      const timeout = setTimeout(() => {
+        const message = `${operation} Worker 运行超时（${Math.ceil(timeoutMs / 60_000)} 分钟），已终止进程。`
+        killProcessTree(child)
+        record.processes.delete(child)
+        finishReject(Object.assign(new Error(message), {
+          code: 'WORKER_TIMEOUT',
+          taskError: { code: 'WORKER_TIMEOUT', message }
+        }))
+      }, timeoutMs)
+      timeout.unref()
       child.stdout?.setEncoding('utf8')
       child.stdout?.on('data', (chunk: string) => {
         buffer += chunk
-        const lines = buffer.split(/\r?\n/); buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.trim()) continue
-          try {
-            const message = JSON.parse(line) as WorkerMessage
-            if (message.type === 'error') {
-              const userMessage = toUserTaskMessage(message.message ?? '本地模型运行失败。')
-              return reject(Object.assign(new Error(userMessage), { code: message.code }))
-            }
-            onMessage(message)
-            if (message.type === 'transcript' || message.type === 'translation' || message.type === 'separated') final = message
-          } catch { /* Ignore non-protocol stdout noise. */ }
-        }
+        drainStdoutBuffer()
+      })
+      child.stdout?.on('end', () => {
+        stdoutEnded = true
+        handleWorkerExit()
       })
       child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
-      child.once('error', (error) => { record.processes.delete(child); reject(error) })
+      child.once('error', (error) => { record.processes.delete(child); finishReject(error) })
       child.once('close', (code) => {
-        record.processes.delete(child)
-        if (record.cancelled) return reject(new Error('任务已取消。'))
-        if (code !== 0) {
-          const stderrText = stderr.trim()
-          log.error(`worker 退出失败: ${operation}`, { code, stderr: stderrText })
-          return reject(new Error(toUserTaskMessage(workerProcessError(stderrText))))
-        }
-        if (!final) return reject(new Error('本地模型运行器没有返回结果。'))
-        resolvePromise(final)
+        exitCode = code ?? 1
+        handleWorkerExit()
       })
       child.stdin?.write(`${JSON.stringify({ operation, ...payload })}\n`)
       child.stdin?.end()
@@ -1167,4 +1255,4 @@ export class TaskManager {
 
 function isTaskError(error: unknown): error is { taskError: TaskError } { return Boolean(error && typeof error === 'object' && 'taskError' in error) }
 
-export { isTranslationTargetLanguage }
+export { createWorkerTaskError, isTranslationTargetLanguage, parseWorkerFailure }

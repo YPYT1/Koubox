@@ -1,0 +1,49 @@
+{
+  "ffmpegExpectedFiles": [
+    "ffmpeg.exe",
+    "ffprobe.exe",
+    "ffplay.exe",
+    "avcodec-62.dll",
+    "avdevice-62.dll",
+    "avfilter-11.dll",
+    "avformat-62.dll",
+    "avutil-60.dll",
+    "swresample-6.dll",
+    "swscale-9.dll"
+  ],
+  "vcRuntimeDlls": [
+    "MSVCP140.dll",
+    "MSVCP140_1.dll",
+    "MSVCP140_2.dll",
+    "VCRUNTIME140.dll",
+    "VCRUNTIME140_1.dll",
+    "CONCRT140.dll"
+  ],
+  "vcRuntimeTargetSubdirs": [
+    "python/Lib/site-packages/torch/lib",
+    "python/Scripts",
+    "python-home",
+    "vendor/ffmpeg/bin"
+  ],
+  "pythonSitePackages": [
+    "torch",
+    "numpy",
+    "faster_whisper",
+    "ctranslate2",
+    "janome",
+    "soundfile",
+    "demucs",
+    "yt_dlp",
+    "curl_cffi"
+  ],
+  "pythonNativeLibs": [
+    "torch/lib/c10.dll",
+    "torch/lib/c10_cuda.dll",
+    "torch/lib/torch_cuda.dll",
+    "torch/lib/cublas64_12.dll",
+    "torch/lib/cudnn64_9.dll",
+    "torch/lib/cudart64_12.dll",
+    "ctranslate2/ctranslate2.dll"
+  ],
+  "pythonImportProbe": "import torch, numpy, soundfile, ctranslate2, faster_whisper, janome, demucs, koubox_runtime, stable_whisper; import koubox_runtime.precise_srt, koubox_runtime.precise_srt_segmentation, koubox_runtime.precise_srt_retry, koubox_runtime.precise_srt_worker; print(torch.__version__); print(int(torch.cuda.is_available())); print(stable_whisper.__version__); print('pack-runtime-ok')"
+}

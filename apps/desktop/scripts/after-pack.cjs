@@ -11,14 +11,9 @@ const {
 } = require('node:fs')
 const { join } = require('node:path')
 
-const VC_RUNTIME_DLLS = [
-  'MSVCP140.dll',
-  'MSVCP140_1.dll',
-  'MSVCP140_2.dll',
-  'VCRUNTIME140.dll',
-  'VCRUNTIME140_1.dll',
-  'CONCRT140.dll'
-]
+const manifestPath = join(__dirname, '../../../scripts/pack/manifests/pack-manifest.json')
+const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+const VC_RUNTIME_DLLS = manifest.vcRuntimeDlls
 
 function copyOneVcDll(src, dest) {
   if (existsSync(dest)) {
@@ -96,9 +91,10 @@ module.exports = async function afterPack(context) {
 
   const torchLib = join(resources, 'python', 'Lib', 'site-packages', 'torch', 'lib')
   const scripts = join(resources, 'python', 'Scripts')
+  const ffmpegBin = join(resources, 'vendor', 'ffmpeg', 'bin')
   if (!existsSync(torchLib)) {
     throw new Error(`打包后找不到 torch\\lib：${torchLib}`)
   }
-  // WinError 126 常见原因：目标机没有 VC++ Redistributable。把运行库放到 c10.dll 同目录。
-  copyVcRuntime([torchLib, scripts, pythonHome])
+  // WinError 126 常见原因：目标机没有 VC++ Redistributable。把运行库放到 torch / python / ffmpeg 同目录。
+  copyVcRuntime([torchLib, scripts, pythonHome, ffmpegBin])
 }

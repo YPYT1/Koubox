@@ -89,6 +89,8 @@ export type Transcript = {
   segments: TranscriptSegment[]
 }
 
+export { formatSrtTime, transcriptToSrt } from './srt.js'
+
 export type ModelCheck = {
   id: string
   label: string

@@ -7,7 +7,7 @@ import {
   Subtitles,
   X
 } from '@phosphor-icons/react'
-import { type AsrLanguage, type SpeechRateMode, type TaskSnapshot } from '@koubox/shared'
+import { transcriptToSrt, type AsrLanguage, type SpeechRateMode, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStatusPanel } from '../components/common/PipelineStatusPanel'
@@ -158,19 +158,7 @@ export function RequirementTwoPage({
 
   const handleCopySrt = async () => {
     if (!task?.transcript?.segments.length) return
-    const content = task.transcript.segments
-      .filter((seg) => seg.text.trim() && seg.end >= seg.start)
-      .map((seg, idx) => {
-        const formatTime = (seconds: number) => {
-          const h = Math.floor(seconds / 3600)
-          const m = Math.floor((seconds % 3600) / 60)
-          const s = Math.floor(seconds % 60)
-          const ms = Math.floor((seconds % 1) * 1000)
-          return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`
-        }
-        return `${idx + 1}\n${formatTime(seg.start)} --> ${formatTime(seg.end)}\n${seg.text.trim()}`
-      })
-      .join('\n\n')
+    const content = transcriptToSrt(task.transcript)
     await navigator.clipboard.writeText(content)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 900)

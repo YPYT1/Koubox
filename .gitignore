@@ -32,6 +32,8 @@ packages/core/test/
 !packages/core/test/
 !packages/core/test/precise-srt-task.test.ts
 !packages/core/test/speech-to-text-task.test.ts
+!packages/core/test/req2-hardening.test.ts
+!packages/core/test/smoke-six-tools.integration.test.ts
 链接.txt
 verification
 apps/desktop/release-test-20260826.deleted.fail

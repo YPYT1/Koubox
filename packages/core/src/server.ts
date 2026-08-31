@@ -527,8 +527,9 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/pipelines/req2') {
         const body = await readJson(request)
-        const audioPath = typeof body.audioPath === 'string' ? normalizeOsPath(body.audioPath.trim()) : ''
-        if (!audioPath) return json(response, 400, { error: '请选择本地音频文件。' })
+        const audioPath = typeof body.audioPath === 'string' ? assertLocalSpeechMediaPath(body.audioPath) : ''
+        if (!audioPath) return json(response, 400, { error: '请选择本地音频或视频文件。' })
+        if (!existsSync(audioPath)) return json(response, 400, { error: '本地媒体文件不存在。' })
         const sourceText = typeof body.sourceText === 'string' ? body.sourceText : ''
         const language = asAsrLanguage(body.language, 'auto')
         const speechRateMode = asSpeechRateMode(body.speechRateMode, 'auto')
