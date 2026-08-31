@@ -5,6 +5,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -Version 0.2.0
 #   ... -CleanOnly              只删除旧 release 产物（含 Koubox-*）
 #   ... -SkipPackage            只预检，不真正打包（给你手动打包前验证）
+#   ... -PostflightOnly         只复验已经生成的 Koubox-x.y.z 目录
 #   ... -Version 0.2.0          指定发布版本（写入 apps/desktop/package.json，目录名 Koubox-0.2.0）
 #   ... -ProxyPort 7897         代理端口，默认 7897
 #
@@ -18,7 +19,8 @@ param(
   [string]$Version = '',
   [int]$ProxyPort = 7897,
   [switch]$CleanOnly,
-  [switch]$SkipPackage
+  [switch]$SkipPackage,
+  [switch]$PostflightOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,14 +87,63 @@ function Assert-NotPacked([string] $Haystack, [string] $Needle, [string] $Label)
   }
 }
 
+function Remove-PythonCaches([string]$TargetRoot) {
+  $sourceRoot = [IO.Path]::GetFullPath($TargetRoot)
+  $caches = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  foreach ($cache in $caches) {
+    $resolved = [IO.Path]::GetFullPath($cache.FullName)
+    if (-not $resolved.StartsWith($sourceRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+      throw "拒绝清理 Python 缓存目录之外的路径：$resolved"
+    }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+  }
+  $remaining = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  if ($remaining.Count -gt 0) {
+    throw "Python 源码仍包含 __pycache__：$sourceRoot"
+  }
+}
+
+function Remove-PythonSourceCaches {
+  Remove-PythonCaches (Join-Path $root 'python\src')
+}
+
 function Remove-OldRelease {
   if (-not (Test-Path -LiteralPath $releaseDir)) {
     Write-Host "无旧产物：$releaseDir"
     return
   }
   Stop-ProcessesForRelease $releaseDir
-  Write-Host "删除旧打包产物：$releaseDir"
-  Remove-Item -LiteralPath $releaseDir -Recurse -Force
+  $resolvedRelease = [IO.Path]::GetFullPath($releaseDir)
+  $desktopRoot = [IO.Path]::GetFullPath((Join-Path $root 'apps\desktop'))
+  if (-not $resolvedRelease.StartsWith($desktopRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw "拒绝删除仓库 apps/desktop 之外的目录：$resolvedRelease"
+  }
+  Write-Host "删除旧打包产物：$resolvedRelease"
+  $lastDeleteError = $null
+  for ($attempt = 1; $attempt -le 5; $attempt += 1) {
+    try {
+      Remove-Item -LiteralPath $resolvedRelease -Recurse -Force -ErrorAction Stop
+      $lastDeleteError = $null
+      break
+    } catch {
+      $lastDeleteError = $_.Exception
+      Write-Host "旧产物删除重试 $attempt/5：$($_.Exception.Message)"
+      Start-Sleep -Milliseconds (250 * $attempt)
+    }
+  }
+  if ($lastDeleteError -and (Test-Path -LiteralPath $resolvedRelease)) {
+    Write-Host '常规删除重试仍失败，改用 .NET 扩展路径删除。'
+    try {
+      [IO.Directory]::Delete("\\?\$resolvedRelease", $true)
+    } catch {
+      $remaining = @(Get-ChildItem -LiteralPath $resolvedRelease -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 12 -ExpandProperty FullName)
+      $detail = if ($remaining.Count -gt 0) { $remaining -join "`n" } else { '(目录内容不可枚举)' }
+      throw "旧打包产物删除失败：$resolvedRelease`n$($_.Exception.Message)`n残留示例：`n$detail"
+    }
+  }
+  if (Test-Path -LiteralPath $resolvedRelease) {
+    throw "旧打包产物未彻底删除：$resolvedRelease"
+  }
 }
 
 function Stop-ProcessesForRelease([string]$TargetDirectory) {
@@ -115,6 +166,7 @@ function Stop-ProcessesForRelease([string]$TargetDirectory) {
 
 function Invoke-Preflight {
   Write-Host '== 预检 =='
+  Remove-PythonSourceCaches
 
   $mainIndex = Get-Content -LiteralPath (Join-Path $root 'apps\desktop\src\main\index.ts') -Raw
   if ($mainIndex -notmatch 'usePortableUserData') {
@@ -144,6 +196,15 @@ function Invoke-Preflight {
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\torch') '已安装的 torch'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\yt_dlp') '参考 TikTok 下载器 yt-dlp 依赖'
   Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\curl_cffi') '参考 TikTok 下载器 curl_cffi 依赖'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\faster_whisper') '精准 SRT Faster-Whisper 依赖'
+  Assert-Path (Join-Path $root 'python\.venv\Lib\site-packages\janome') '精准 SRT Janome 依赖'
+  Assert-Path (Join-Path $root 'python\src\stable_whisper\LICENSE') 'stable-ts MIT LICENSE'
+  Assert-Path (Join-Path $root 'python\src\stable_whisper\SHA256SUMS.txt') 'stable-ts SHA256 清单'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\precise_srt.py') '精准 SRT Python 模块'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\precise_srt_terms.toml') '精准 SRT 内置规则'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\precise_srt_segmentation.py') '精准 SRT 分段模块'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\precise_srt_retry.py') '精准 SRT 复识别模块'
+  Assert-Path (Join-Path $root 'python\src\koubox_runtime\precise_srt_worker.py') '精准 SRT worker 模块'
   Assert-Path (Join-Path $root 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '复制的 TikTok 下载器源码'
 
   $freeGb = [math]::Round((Get-PSDrive -Name D).Free / 1GB, 2)
@@ -231,8 +292,34 @@ function Invoke-Postflight {
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\torch\lib\VCRUNTIME140.dll') '包内 VC++ VCRUNTIME140'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\yt_dlp') '包内参考 TikTok yt-dlp'
   Assert-Path (Join-Path $resources 'python\Lib\site-packages\curl_cffi') '包内参考 TikTok curl_cffi'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\faster_whisper') '包内 Faster-Whisper'
+  Assert-Path (Join-Path $resources 'python\Lib\site-packages\janome') '包内 Janome'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime') '包内 Python 源码'
   Assert-Path (Join-Path $resources 'python\src\koubox_runtime\reference_tiktok\sites\tiktok.py') '包内复制的 TikTok 下载器源码'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\precise_srt.py') '包内精准 SRT 模块'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\precise_srt_terms.toml') '包内精准 SRT 内置规则'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\precise_srt_segmentation.py') '包内精准 SRT 分段模块'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\precise_srt_retry.py') '包内精准 SRT 复识别模块'
+  Assert-Path (Join-Path $resources 'python\src\koubox_runtime\precise_srt_worker.py') '包内精准 SRT worker 模块'
+  Assert-Path (Join-Path $resources 'python\src\stable_whisper\LICENSE') '包内 stable-ts MIT LICENSE'
+  $stableHashFile = Join-Path $resources 'python\src\stable_whisper\SHA256SUMS.txt'
+  Assert-Path $stableHashFile '包内 stable-ts SHA256 清单'
+  $stableRoot = Join-Path $resources 'python\src\stable_whisper'
+  foreach ($line in Get-Content -LiteralPath $stableHashFile) {
+    if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { continue }
+    $stableFile = Join-Path $stableRoot $matches[2]
+    Assert-Path $stableFile "stable-ts 受控文件 $($matches[2])"
+    $actualHash = (Get-FileHash -LiteralPath $stableFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $matches[1]) {
+      throw "校验失败：stable-ts 文件哈希不一致：$($matches[2])"
+    }
+  }
+  $packedPythonSource = Join-Path $resources 'python\src'
+  Remove-PythonCaches $packedPythonSource
+  $pythonCaches = @(Get-ChildItem -LiteralPath $packedPythonSource -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  if ($pythonCaches.Count -gt 0) {
+    throw ("校验失败：包内 Python 源码含 __pycache__：`n" + ($pythonCaches.FullName -join "`n"))
+  }
 
   $playwrightChrome = Get-ChildItem -LiteralPath (Join-Path $resources 'playwright-browsers') -Recurse -Filter 'chrome.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $playwrightChrome) {
@@ -272,12 +359,17 @@ function Invoke-Postflight {
   $packedPython = Join-Path $resources 'python\Scripts\python.exe'
   $torchLib = Join-Path $resources 'python\Lib\site-packages\torch\lib'
   $env:PYTHONPATH = Join-Path $resources 'python\src'
+  $env:PYTHONDONTWRITEBYTECODE = '1'
   $env:Path = "$torchLib;$env:Path"
-  $importOut = & $packedPython -c "import torch, koubox_runtime; print(torch.__version__); print('runtime-ok')"
+  $importOut = & $packedPython -c "import torch, koubox_runtime, stable_whisper, janome, faster_whisper; import koubox_runtime.precise_srt, koubox_runtime.precise_srt_segmentation, koubox_runtime.precise_srt_retry, koubox_runtime.precise_srt_worker; print(torch.__version__); print(stable_whisper.__version__); print('precise-srt-runtime-ok')"
   $importText = ($importOut | Out-String)
   Write-Host $importText.Trim()
-  if ($importText -notmatch 'runtime-ok') {
-    throw '校验失败：包内 Python 无法 import koubox_runtime / torch。'
+  if ($importText -notmatch 'precise-srt-runtime-ok') {
+    throw '校验失败：包内 Python 无法 import 精准 SRT 运行时依赖。'
+  }
+  $postImportCaches = @(Get-ChildItem -LiteralPath $packedPythonSource -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  if ($postImportCaches.Count -gt 0) {
+    throw '校验失败：包内 import 后重新生成了 __pycache__。'
   }
 
   Write-Host ''
@@ -291,6 +383,11 @@ function Invoke-Postflight {
 if ($CleanOnly) {
   Remove-OldRelease
   Write-Host '已清理旧打包产物。'
+  exit 0
+}
+
+if ($PostflightOnly) {
+  Invoke-Postflight
   exit 0
 }
 

@@ -110,6 +110,12 @@ export type GpuStatus = {
   message: string
 }
 
+export type SystemMemoryStatus = {
+  totalMemoryMiB: number
+  usedMemoryMiB: number
+  freeMemoryMiB: number
+}
+
 export type VendorToolCheck = {
   ready: boolean
   directory: string
@@ -149,7 +155,8 @@ export type RuntimeStatus = {
 
 export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation' | 'speech-to-text'
 export type RequirementTwoMode = 'align' | 'asr-only'
-export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
+export type SpeechRateMode = 'off' | 'auto' | 'force'
+export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'retry-asr' | 'align' | 'segment' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
 
 /** 工具侧栏 / 任务中心与后端 TaskKind 的固定映射 */
@@ -269,10 +276,24 @@ export type TaskError = {
   message: string
 }
 
+export type PreciseSrtDiagnostics = {
+  multirateSpanCount?: number
+  correctionCount?: number
+  unresolvedLowConfidenceCount?: number
+  speechRateUnitsPerSecond?: number
+  speechRateThreshold?: number
+  wallTimeS?: number
+}
+
 export type TaskSnapshot = {
   taskId: string
   kind: TaskKind
   mode?: RequirementTwoMode
+  requestedLanguage?: AsrLanguage
+  detectedLanguage?: Exclude<AsrLanguage, 'auto'>
+  speechRateMode?: SpeechRateMode
+  speechRateTriggered?: boolean
+  preciseSrtDiagnostics?: PreciseSrtDiagnostics
   /** req1：链接下载或本地上传；缺省按 url 以 http(s) 判断 */
   sourceMode?: MaterialsSourceMode
   status: TaskStatus

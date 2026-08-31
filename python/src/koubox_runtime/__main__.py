@@ -7,6 +7,7 @@ import traceback
 from .asr import run as run_asr
 from .log import write as log_write
 from .protocol import fail
+from .precise_srt_worker import run as run_precise_srt
 from .separate import run as run_separate
 from .translate import run as run_translate
 
@@ -25,6 +26,16 @@ def main() -> None:
                     request["audioPath"],
                     language=request.get("language", "auto"),
                     chunk_length_s=float(request.get("chunkLengthS", 30)),
+                )
+            elif operation == "precise_srt":
+                run_precise_srt(
+                    request["modelDirectory"],
+                    request["audioPath"],
+                    mode=str(request["mode"]),
+                    source_text=request.get("sourceText"),
+                    language=str(request.get("language", "auto")),
+                    speech_rate_mode=str(request.get("speechRateMode", "auto")),
+                    ffmpeg_executable=str(request["ffmpegExecutable"]),
                 )
             elif operation == "separate":
                 run_separate(

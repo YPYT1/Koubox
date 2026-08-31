@@ -7,7 +7,7 @@ import {
   Subtitles,
   X
 } from '@phosphor-icons/react'
-import { type TaskSnapshot } from '@koubox/shared'
+import { type AsrLanguage, type SpeechRateMode, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStatusPanel } from '../components/common/PipelineStatusPanel'
@@ -30,14 +30,18 @@ type SrtInputMode = 'with-script' | 'asr-only'
 
 const STEPS_WITH_SCRIPT = [
   { stage: 'extract-audio', label: '转换音频', desc: '临时生成高精度 WAV 供识别使用' },
-  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 生成时间锚点' },
-  { stage: 'align', label: '贴合原文', desc: '将时间轴精准映射至已知口播文案' },
+  { stage: 'asr', label: '确认语言', desc: '自动模式下先检测当前音频语言' },
+  { stage: 'align', label: '声学对齐', desc: '使用 Faster-Whisper 将原文贴合真实发音' },
+  { stage: 'segment', label: '气口分段', desc: '按完整词语、气口与语言规则生成短条' },
   { stage: 'export-srt', label: '导出 SRT', desc: '生成剪映可直接导入的字幕文件' }
 ]
 
 const STEPS_ASR_ONLY = [
   { stage: 'extract-audio', label: '转换音频', desc: '临时生成高精度 WAV 供识别使用' },
-  { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 识别并断句' },
+  { stage: 'asr', label: '语音识别', desc: '保留词级时间、标点和识别置信度' },
+  { stage: 'retry-asr', label: '语速复识别', desc: '按设置对可疑片段生成多速率候选' },
+  { stage: 'align', label: '重新对齐', desc: '将纠正后的识别文本贴回原始音频' },
+  { stage: 'segment', label: '气口分段', desc: '按完整词语、气口与语言规则生成短条' },
   { stage: 'export-srt', label: '导出 SRT', desc: '生成剪映可直接导入的字幕文件' }
 ]
 
@@ -59,6 +63,8 @@ export function RequirementTwoPage({
   const [inputMode, setInputMode] = useState<SrtInputMode>('with-script')
   const [mediaPath, setMediaPath] = useState('')
   const [sourceText, setSourceText] = useState('')
+  const [language, setLanguage] = useState<AsrLanguage>('auto')
+  const [speechRateMode, setSpeechRateMode] = useState<SpeechRateMode>('auto')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
   const [starting, setStarting] = useState(false)
   const [srtExpanded, setSrtExpanded] = useState(false)
@@ -113,6 +119,8 @@ export function RequirementTwoPage({
       const created = await window.koubox.post<TaskSnapshot>('/pipelines/req2', {
         audioPath: mediaPath.trim(),
         sourceText: inputMode === 'with-script' ? sourceText.trim() : '',
+        language,
+        speechRateMode: inputMode === 'asr-only' ? speechRateMode : 'off',
         outputDirectory: outputDirectory.trim()
       })
       setTask(created)
@@ -191,7 +199,7 @@ export function RequirementTwoPage({
               disabled={isTaskRunning}
               onClick={() => setInputMode('with-script')}
             >
-              有文案对齐
+              有文案
             </button>
             <button
               type="button"
@@ -201,7 +209,7 @@ export function RequirementTwoPage({
               disabled={isTaskRunning}
               onClick={() => setInputMode('asr-only')}
             >
-              无文案识别
+              无文案
             </button>
           </div>
 
@@ -212,6 +220,43 @@ export function RequirementTwoPage({
             onChooseMediaFile={onChooseMediaFile}
             browseDefaultPath={outputDirectory}
           />
+
+          <FormField
+            label="音频语言"
+            hint="自动会先检测语言；已知语言时手动选择可减少误判。"
+          >
+            <select
+              className="input-text"
+              value={language}
+              disabled={isTaskRunning}
+              onChange={(event) => setLanguage(event.target.value as AsrLanguage)}
+            >
+              <option value="auto">自动检测</option>
+              <option value="zh-Hans">中文（简体）</option>
+              <option value="zh-Hant">中文（繁体）</option>
+              <option value="en">英文</option>
+              <option value="ja">日文</option>
+              <option value="ko">韩文</option>
+            </select>
+          </FormField>
+
+          {inputMode === 'asr-only' ? (
+            <FormField
+              label="快速语音处理"
+              hint="自动仅处理快速且低置信度的片段；最终时间轴始终使用原始音频。"
+            >
+              <select
+                className="input-text"
+                value={speechRateMode}
+                disabled={isTaskRunning}
+                onChange={(event) => setSpeechRateMode(event.target.value as SpeechRateMode)}
+              >
+                <option value="auto">自动（推荐）</option>
+                <option value="off">关闭</option>
+                <option value="force">强制多速率</option>
+              </select>
+            </FormField>
+          ) : null}
 
           {inputMode === 'with-script' ? (
             <FormField
@@ -273,6 +318,10 @@ export function RequirementTwoPage({
           {task && (
             <div className="viral-task-id">
               任务 ID：<code>{task.taskId}</code>
+              {task.detectedLanguage ? ` · 检测语言：${task.detectedLanguage}` : ''}
+              {task.mode === 'asr-only' && task.status === 'complete'
+                ? ` · 多速率：${task.speechRateTriggered ? '已触发' : '未触发'}`
+                : ''}
             </div>
           )}
         </section>

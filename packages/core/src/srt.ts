@@ -13,6 +13,34 @@ export function formatSrtTime(seconds: number): string {
   return `${pad(hours)}:${pad(minutes)}:${pad(secs)},${pad(millis, 3)}`
 }
 
+export function assertValidTranscript(transcript: Transcript): void {
+  if (transcript.segments.length === 0) throw new Error('SRT 没有字幕片段。')
+  const language = transcript.language?.toLowerCase().replace('_', '-')
+  let previousEnd = -1
+  for (const [index, segment] of transcript.segments.entries()) {
+    if (!segment.text.trim()) throw new Error(`第 ${index + 1} 条字幕为空。`)
+    if (!Number.isFinite(segment.start) || !Number.isFinite(segment.end)) {
+      throw new Error(`第 ${index + 1} 条字幕时间不是有效数字。`)
+    }
+    if (segment.start < 0) throw new Error(`第 ${index + 1} 条字幕开始时间小于 0。`)
+    if (segment.end <= segment.start) throw new Error(`第 ${index + 1} 条字幕不是正时长。`)
+    if (segment.start < previousEnd) throw new Error(`第 ${index + 1} 条字幕时间轴重叠或倒退。`)
+    if (segment.end - segment.start > 3.001) throw new Error(`第 ${index + 1} 条字幕超过 3 秒。`)
+    const visibleCharacters = segment.text.replace(/\s+/g, '').length
+    if ((language === 'ja' || language === 'zh' || language?.startsWith('zh-')) && visibleCharacters > 14) {
+      throw new Error(`第 ${index + 1} 条字幕超过语言字符上限。`)
+    }
+    if (language === 'ko' && visibleCharacters > 18) {
+      throw new Error(`第 ${index + 1} 条字幕超过语言字符上限。`)
+    }
+    if (language === 'en') {
+      if (visibleCharacters > 42) throw new Error(`第 ${index + 1} 条英文字幕超过字符上限。`)
+      if (segment.text.trim().split(/\s+/).length > 8) throw new Error(`第 ${index + 1} 条英文字幕超过单词上限。`)
+    }
+    previousEnd = segment.end
+  }
+}
+
 /**
  * 将 Transcript 转换为标准 SRT 格式，完全兼容剪映导入
  *

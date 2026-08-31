@@ -27,6 +27,11 @@ vendor/**/*
 !.vscode/extensions.json
 tests/
 packages/core/test/
+!python/tests/
+!python/tests/test_precise_srt.py
+!packages/core/test/
+!packages/core/test/precise-srt-task.test.ts
+!packages/core/test/speech-to-text-task.test.ts
 链接.txt
 verification
 apps/desktop/release-test-20260826.deleted.fail
@@ -39,3 +44,4 @@ docs/技术分析/并发下载优化方案.md
 链接.txt
 链接 copy.txt
 链接.txt
+.tmp

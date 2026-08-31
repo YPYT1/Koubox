@@ -1,0 +1,183 @@
+# 精准 SRT 内置受限术语规则。
+# 新规则必须满足：至少两个独立样本重复出现、错误形式精确、上下文受限、负样本零误改。
+
+[prompts]
+ja = "日本語のテクノロジー市場解説。速報、特定銘柄、売買推奨、公開情報、AI芯片、封止材、歩留まり、組み込みソフト、エッジAI、通信モジュール、ロボット減速機、静音性、LiDAR、清掃、曇り、高積層化、プローブ、光学ステージ、保守サービス、納期、工場設備、店舗機器、小型半導体、推論チップ、メモリー、PoC、在庫、研究開発負担、数字との照合、本稿、テーマ解説。"
+zh = ""
+en = ""
+ko = ""
+
+# 当前值来自 2026-08-29 日文本地回归和初始四语工程假设。
+# FLEURS validation 标定完成前，发布验收状态保持“未完成”。
+[speech_rate_thresholds]
+version = 2
+# FLEURS validation 四语各 30 条，经相对峰值 VAD 标定得到的 q90 候选值。
+zh = 5.74
+en = 3.26
+ja = 6.76
+ko = 6.11
+
+[[rules.ja]]
+id = "ai-chip-newbian"
+source = "AI新編"
+target = "AI芯片"
+
+[[rules.ja]]
+id = "sealing-material-fengciji"
+source = "風刺剤"
+target = "封止材"
+
+[[rules.ja]]
+id = "sealing-fengci"
+source = "風刺"
+target = "封止"
+
+[[rules.ja]]
+id = "yield-budomari"
+source = "ぶどまり"
+target = "歩留まり"
+
+[[rules.ja]]
+id = "embedded-software"
+source = "クリーフォミドフト"
+target = "組み込みソフト"
+
+[[rules.ja]]
+id = "harsh-environment"
+source = "対環境"
+target = "耐環境"
+
+[[rules.ja]]
+id = "calibration-service"
+source = "縫製サービス"
+target = "校正サービス"
+
+[[rules.ja]]
+id = "calibration-equipment"
+source = "縫製装置"
+target = "校正装置"
+
+[[rules.ja]]
+id = "downstream-context"
+source = "元リュウの導入計画"
+target = "下流の導入計画"
+
+[[rules.ja]]
+id = "expectation-context"
+source = "機体が先行"
+target = "期待が先行"
+
+[[rules.ja]]
+id = "primary-source-context"
+source = "ニュースの一時情報"
+target = "ニュースの一次情報"
+
+[[rules.ja]]
+id = "infrastructure-context"
+source = "物理世界のインフラで役割"
+target = "物理世界のインフラへ役割"
+
+[[rules.ja]]
+id = "poc-letter-case"
+source = "POC"
+target = "PoC"
+
+[[rules.ja]]
+id = "breaking-news-tokou-context"
+source = "とこうです"
+target = "速報です"
+
+[[rules.ja]]
+id = "inference-chip-suion-context"
+source = "水温チップ"
+target = "推論チップ"
+
+[[rules.ja]]
+id = "communication-latency-chain-context"
+source = "通信チェーンやクラウド費用"
+target = "通信遅延やクラウド費用"
+
+[[rules.ja]]
+id = "edge-camera-factory-context"
+source = "カメラホールドガイズリ車両"
+target = "カメラ工場設備車両"
+
+[[rules.ja]]
+id = "store-equipment-context"
+source = "電報機器の近く"
+target = "店舗機器の近く"
+
+[[rules.ja]]
+id = "embedded-software-rendaku-context"
+source = "振り込みソフトが必要"
+target = "組み込みソフトが必要"
+
+[[rules.ja]]
+id = "communication-latency-variant-context"
+source = "通信経緯やクラウド費用"
+target = "通信遅延やクラウド費用"
+
+[[rules.ja]]
+id = "cost-lowering-context"
+source = "何のコストを基げ"
+target = "何のコストを下げ"
+
+[[rules.ja]]
+id = "market-heat-context"
+source = "市場のネッキ上げではなく"
+target = "市場の熱気だけでなく"
+
+[[rules.ja]]
+id = "edge-ai-letter-context"
+source = "JAIの公開情報"
+target = "エッジAIの公開情報"
+
+[[rules.ja]]
+id = "document-draft-context"
+source = "本校はテーマ解説"
+target = "本稿はテーマ解説"
+
+[[rules.ja]]
+id = "comment-number-context"
+source = "710719とコメント"
+target = "779とコメント"
+
+[[rules.ja]]
+id = "data-center-context"
+source = "AIの次の競争は巨大な戦略だけで"
+target = "AIの次の競争は巨大データセンターだけで"
+
+[[rules.ja]]
+id = "camera-factory-short-context"
+source = "カメラホールド開発機車両"
+target = "カメラ工場設備車両"
+
+[[rules.ja]]
+id = "inference-chip-static-context"
+source = "現場処理には静音チップ"
+target = "現場処理には推論チップ"
+
+[[rules.ja]]
+id = "cost-requested-context"
+source = "何のコストを求め"
+target = "何のコストを下げ"
+
+[[rules.ja]]
+id = "evaluation-root-context"
+source = "評価の根拠が上げます"
+target = "評価の根拠が見えます"
+
+[[rules.ja]]
+id = "check-items-context"
+source = "公開情報チェックコンボを提示します"
+target = "公開情報チェック項目を整理します"
+
+[[rules.ja]]
+id = "listed-security-context"
+source = "特定映画の売買推奨"
+target = "特定銘柄の売買推奨"
+
+[[rules.ja]]
+id = "number-crosscheck-context"
+source = "数字の証拠が重要です"
+target = "数字との照合が重要です"

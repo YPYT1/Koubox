@@ -12,6 +12,7 @@ import { VideoAudioPage } from './pages/VideoAudioPage'
 import { VocalSeparationPage } from './pages/VocalSeparationPage'
 import { SpeechToTextPage } from './pages/SpeechToTextPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
+import { RuntimeMonitorBootstrap } from './monitor/RuntimeMonitorBootstrap'
 
 type FixedPage = 'home' | 'models' | 'settings'
 type Focus = { kind: 'fixed'; page: FixedPage } | { kind: 'tool'; toolId: ToolId; menu: string }
@@ -216,6 +217,7 @@ export function App() {
 
   return (
     <div className="desktop-shell">
+      <RuntimeMonitorBootstrap seedGpu={runtime?.gpu} />
       <div className="app-body">
         {/* 左侧可拖拽调宽工作台侧栏 */}
         <Sidebar

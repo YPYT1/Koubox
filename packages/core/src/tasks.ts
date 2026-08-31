@@ -2,17 +2,19 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkS
 import { basename, dirname, extname, join, resolve, delimiter } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { detectGpu } from './runtime.js'
-import { alignKnownText } from './align.js'
-import { transcriptToSrt } from './srt.js'
+import { assertValidTranscript, transcriptToSrt } from './srt.js'
 import { downloadVideo, type PublicMediaResolution } from './video-download.js'
 import type {
+  AsrLanguage,
   KouboxConfig,
   PlatformAuthEntry,
   RequirementTwoMode,
+  SpeechRateMode,
   TaskArtifacts,
   TaskError,
   TaskEvent,
   TaskSnapshot,
+  TaskStage,
   Transcript,
   TranslationTargetLanguage
 } from '@koubox/shared'
@@ -67,11 +69,19 @@ type WorkerMessage = {
   translatedLines?: string[]
   correctedLines?: string[]
   vocalsPath?: string
+  diagnostics?: {
+    speechRateTriggered?: boolean
+    [key: string]: unknown
+  }
 }
 
 function now(): string { return new Date().toISOString() }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
 
 function killProcessTree(child: ChildProcess): void {
   if (!child.pid || child.killed) return
@@ -231,7 +241,14 @@ export class TaskManager {
     return this.clone(task)
   }
 
-  startRequirementTwo(audioPath: string, sourceText: string, outputDirectory: string, modelPaths: ModelPaths): TaskSnapshot {
+  startRequirementTwo(
+    audioPath: string,
+    sourceText: string,
+    outputDirectory: string,
+    modelPaths: ModelPaths,
+    requestedLanguage: AsrLanguage = 'auto',
+    speechRateMode: SpeechRateMode = 'auto'
+  ): TaskSnapshot {
     const outputRoot = resolve(normalizeOsPath(outputDirectory))
     mkdirSync(outputRoot, { recursive: true })
     const resolvedAudio = resolve(normalizeOsPath(audioPath))
@@ -239,10 +256,13 @@ export class TaskManager {
     const taskDir = join(outputRoot, id)
     mkdirSync(taskDir, { recursive: true })
     const mode: RequirementTwoMode = sourceText.trim() ? 'align' : 'asr-only'
+    const effectiveSpeechRateMode = mode === 'asr-only' ? speechRateMode : 'off'
     const task: TaskSnapshot = {
       taskId: id,
       kind: 'req2',
       mode,
+      requestedLanguage,
+      speechRateMode: effectiveSpeechRateMode,
       status: 'queued',
       stage: 'queued',
       percent: 0,
@@ -714,15 +734,13 @@ export class TaskManager {
       this.persist(record)
       const gpu = detectGpu()
       if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '音频已保存，但当前没有可用的 NVIDIA GPU，无法执行语音识别。')
-      await this.performAsr(record, audio, modelPaths.asr, 35)
-      let finalTranscript = record.task.transcript
-      if (!finalTranscript) throw new Error('ASR 未返回有效字幕。')
-      if (task.mode === 'align' && task.sourceText) {
-        this.update(record, { stage: 'align', percent: 84, message: '正在按原文整理时间轴' })
-        finalTranscript = alignKnownText(task.sourceText, finalTranscript)
-        this.writeTranscript(record, finalTranscript)
-      }
+      const finalTranscript = await this.performPreciseSrt(
+        record,
+        audio,
+        modelPaths.asr
+      )
       this.update(record, { stage: 'export-srt', percent: 92, message: '正在导出 SRT' })
+      assertValidTranscript(finalTranscript)
       const srtPath = join(root, `${task.taskId}.srt`)
       writeFileSync(srtPath, transcriptToSrt(finalTranscript), 'utf8')
       record.task.artifacts.srt = srtPath
@@ -734,6 +752,67 @@ export class TaskManager {
       else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
       log.error('任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
     }
+  }
+
+  private async performPreciseSrt(
+    record: TaskRecord,
+    audio: string,
+    asrModelDirectory: string
+  ): Promise<Transcript> {
+    const { task } = record
+    const requestedLanguage = task.requestedLanguage ?? 'auto'
+    const speechRateMode = task.speechRateMode ?? 'auto'
+    this.update(record, { stage: 'asr', percent: 35, message: '正在加载精准 SRT 模型' })
+    const response = await this.runWorker(record, 'precise_srt', {
+      modelDirectory: asrModelDirectory,
+      audioPath: audio,
+      mode: task.mode ?? 'asr-only',
+      sourceText: task.mode === 'align' ? task.sourceText : undefined,
+      language: requestedLanguage,
+      speechRateMode,
+      ffmpegExecutable: this.options.resolveVendor().ffmpegExecutable
+    }, (message) => {
+      if (message.type !== 'progress') return
+      const workerStages: TaskStage[] = ['asr', 'retry-asr', 'align', 'segment', 'export-srt']
+      const stage = workerStages.includes(message.stage as TaskStage)
+        ? message.stage as TaskStage
+        : record.task.stage
+      this.update(record, {
+        stage,
+        percent: Math.max(36, Math.min(91, message.percent ?? 36)),
+        message: message.message ?? '正在生成精准 SRT'
+      })
+    })
+    if (response.type !== 'transcript' || !response.segments) {
+      throw new Error('精准 SRT 运行器没有返回最终字幕。')
+    }
+    const detectedLanguage = response.language === 'zh'
+      ? requestedLanguage === 'zh-Hant' ? 'zh-Hant' : 'zh-Hans'
+      : response.language === 'en' || response.language === 'ja' || response.language === 'ko'
+        ? response.language
+        : undefined
+    if (!detectedLanguage) throw new Error(`精准 SRT 返回了不支持的语言：${response.language ?? 'unknown'}`)
+    record.task.detectedLanguage = detectedLanguage
+    record.task.speechRateTriggered = Boolean(response.diagnostics?.speechRateTriggered)
+    record.task.preciseSrtDiagnostics = {
+      multirateSpanCount: optionalFiniteNumber(response.diagnostics?.multirateSpanCount),
+      correctionCount: optionalFiniteNumber(response.diagnostics?.correctionCount),
+      unresolvedLowConfidenceCount: optionalFiniteNumber(response.diagnostics?.unresolvedLowConfidenceCount),
+      speechRateUnitsPerSecond: optionalFiniteNumber(response.diagnostics?.speechRateUnitsPerSecond),
+      speechRateThreshold: optionalFiniteNumber(response.diagnostics?.speechRateThreshold),
+      wallTimeS: optionalFiniteNumber(response.diagnostics?.wallTimeS)
+    }
+    const transcript = { language: detectedLanguage, segments: response.segments }
+    this.rememberTranscript(record, transcript)
+    this.persist(record)
+    log.info('精准 SRT 诊断摘要', {
+      taskId: task.taskId,
+      requestedLanguage,
+      detectedLanguage,
+      speechRateMode,
+      diagnostics: response.diagnostics ?? {}
+    })
+    return transcript
   }
 
   private async performAsr(record: TaskRecord, audio: string, asrModelDirectory: string, startPercent: number): Promise<void> {
@@ -815,11 +894,15 @@ export class TaskManager {
   private writeTranscript(record: TaskRecord, transcript: Transcript): void {
     const textPath = join(record.task.outputDirectory, `${record.task.taskId}_原文案.txt`)
     writeFileSync(textPath, transcript.segments.map((segment) => segment.text.trim()).filter(Boolean).join('\n'), 'utf8')
+    this.rememberTranscript(record, transcript)
+    record.task.artifacts.transcriptText = textPath
+    this.persist(record)
+  }
+
+  private rememberTranscript(record: TaskRecord, transcript: Transcript): void {
     record.task.transcript = transcript
     record.task.language = transcript.language
-    record.task.artifacts.transcriptText = textPath
     delete record.task.artifacts.transcript
-    this.persist(record)
   }
 
   private async download(record: TaskRecord, directory: string, fileStem: string): Promise<string> {
@@ -971,7 +1054,7 @@ export class TaskManager {
 
   private runWorker(
     record: TaskRecord,
-    operation: 'asr' | 'translate' | 'separate',
+    operation: 'asr' | 'precise_srt' | 'translate' | 'separate',
     payload: Record<string, unknown>,
     onMessage: (message: WorkerMessage) => void,
     envExtra?: Record<string, string>
