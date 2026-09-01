@@ -17,6 +17,8 @@
 # - 不打包 AppData 登录态 / Cookie；便携版用 exe 旁 userdata（空目录）
 # - 打包版强制使用 resources 内的 vendor / python
 # - resources/models 只创建空目录，模型由用户手动放入
+# - 开发机 vendor 若是 Junction，after-pack 会解引用成实体，避免分发后断链
+# - 分发给用户时请只压缩 Koubox-x.y.z 目录，不要压缩整个 apps/desktop/release
 
 param(
   [string]$Version = '',
@@ -153,7 +155,8 @@ function Invoke-Postflight {
   Write-Host '便携目录已生成（解压即用）：'
   Write-Host $distDir
   Write-Host '双击 口播匣.exe。工具路径会指向 resources\；请把模型手动放入 resources\models，登录需用户自己完成。'
-  Write-Host "把整个 $distFolderName（含空 userdata）打成 7z/zip 发给用户即可。"
+  Write-Host "分发时请只压缩整个 $distFolderName（含空 userdata），不要压缩整个 apps/desktop/release。"
+  Write-Host 'vendor 已要求为实体文件；若 postflight 报 Junction，说明 after-pack 解引用失败。'
 }
 
 # ---- main ----

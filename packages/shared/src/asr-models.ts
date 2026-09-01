@@ -49,6 +49,10 @@ export function isAsrResourceError(message: string): boolean {
   return /CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够|内存不足|MemoryError|DefaultCPUAllocator|can't allocate memory/i.test(message)
 }
 
+export function isAsrAlignmentQualityError(message: string): boolean {
+  return /未完整保留用户文案|PRECISE_SRT_ALIGNMENT_INCOMPLETE/i.test(message)
+}
+
 export function asrResourceErrorUserMessage(modelId: AsrModelId): string {
   if (modelId === 'faster-whisper-large-v3-turbo') {
     return '显存或内存不足。当前已使用最轻量的语音识别模型 faster-whisper-large-v3-turbo，请关闭其他占用 GPU 的程序后重试，或缩短音频长度。'
@@ -58,4 +62,8 @@ export function asrResourceErrorUserMessage(modelId: AsrModelId): string {
 
 export function asrFallbackNoticeMessage(): string {
   return '显存或内存不足，已自动切换到轻量模型 faster-whisper-large-v3-turbo 继续识别。'
+}
+
+export function asrAlignmentFallbackNoticeMessage(): string {
+  return '轻量模型对齐未完整保留文案，已自动切换到 Faster-Whisper Large v3 重试。'
 }

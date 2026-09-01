@@ -23,6 +23,19 @@ if ($desktopPkg -notmatch '"target":\s*\[\s*"dir"\s*\]') {
 
 Assert-PackPath (Join-Path $root 'vendor\yt-dlp\yt-dlp.exe') 'yt-dlp'
 Assert-PackPath (Join-Path $root 'vendor\deno\deno.exe') 'Deno'
+Assert-PackPath (Join-Path $root 'vendor\ffmpeg\bin\ffmpeg.exe') 'ffmpeg'
+$vendorLinks = @()
+foreach ($name in @('deno', 'ffmpeg', 'yt-dlp')) {
+  $item = Get-Item -LiteralPath (Join-Path $root "vendor\$name") -Force
+  if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    $vendorLinks += "$name -> $($item.Target)"
+  }
+}
+if ($vendorLinks.Count -gt 0) {
+  Write-Host ("开发机 vendor 含软链接/Junction（after-pack 会解引用成实体）：`n  " + ($vendorLinks -join "`n  "))
+} else {
+  Write-Host '开发机 vendor 已是实体目录。'
+}
 Assert-PackPath (Join-Path $root 'node_modules\.pnpm\playwright@1.62.1\node_modules\playwright\package.json') 'Playwright Node 依赖'
 
 $repoDrive = (Split-Path -Qualifier $root).TrimEnd(':')

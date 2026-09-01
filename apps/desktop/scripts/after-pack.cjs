@@ -3,6 +3,7 @@ const {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -63,11 +64,100 @@ function copyPythonHomeReal(sourceHome, destHome) {
   }
 }
 
+/**
+ * 开发机 vendor/{deno,ffmpeg,yt-dlp} 常是指向其他工程的软链/Junction。
+ * electron-builder 会原样打进包，分发后必断；这里解引用成实体目录。
+ * Windows 上对 Junction 只能 unlink/rmdir，不能 rmSync({recursive:true})，否则可能删掉源目录内容。
+ */
+function removeReparsePoint(path) {
+  const stat = lstatSync(path)
+  if (!stat.isSymbolicLink()) {
+    throw new Error(`期望删除软链接/Junction，但路径不是重解析点：${path}`)
+  }
+  unlinkSync(path)
+}
+
+function materializePath(dest) {
+  const stat = lstatSync(dest)
+  if (!stat.isSymbolicLink()) return false
+  const real = realpathSync(dest)
+  removeReparsePoint(dest)
+  cpSync(real, dest, { recursive: true, verbatimSymlinks: false })
+  const next = lstatSync(dest)
+  if (next.isSymbolicLink()) {
+    throw new Error(`解引用后仍是软链接：${dest}（源 ${real}）`)
+  }
+  return true
+}
+
+function materializeVendorTree(vendorRoot) {
+  if (!existsSync(vendorRoot)) {
+    throw new Error(`打包后找不到 vendor：${vendorRoot}`)
+  }
+  const materialized = []
+  for (const name of ['deno', 'ffmpeg', 'yt-dlp']) {
+    const dest = join(vendorRoot, name)
+    if (!existsSync(dest)) {
+      throw new Error(`打包后缺少 vendor\\${name}：${dest}`)
+    }
+    if (materializePath(dest)) {
+      materialized.push(name)
+    }
+  }
+  // 防止目录内还有嵌套 Junction（例如 bin 子目录）
+  for (const name of ['deno', 'ffmpeg', 'yt-dlp']) {
+    const root = join(vendorRoot, name)
+    const stack = [root]
+    while (stack.length > 0) {
+      const current = stack.pop()
+      let entries
+      try {
+        entries = readdirSync(current, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        const child = join(current, entry.name)
+        let childStat
+        try {
+          childStat = lstatSync(child)
+        } catch {
+          continue
+        }
+        if (childStat.isSymbolicLink()) {
+          materializePath(child)
+          materialized.push(`${name}/…/${entry.name}`)
+          if (lstatSync(child).isDirectory()) stack.push(child)
+          continue
+        }
+        if (childStat.isDirectory()) stack.push(child)
+      }
+    }
+  }
+  for (const relative of ['deno\\deno.exe', 'ffmpeg\\bin\\ffmpeg.exe', 'yt-dlp\\yt-dlp.exe']) {
+    const file = join(vendorRoot, relative)
+    if (!existsSync(file)) {
+      throw new Error(`vendor 解引用后仍缺少：${file}`)
+    }
+    if (lstatSync(file).isSymbolicLink()) {
+      throw new Error(`vendor 关键文件仍是软链接：${file}`)
+    }
+  }
+  if (materialized.length > 0) {
+    console.log(`[after-pack] 已将 vendor 软链接解引用为实体：${materialized.join(', ')}`)
+  } else {
+    console.log('[after-pack] vendor 已是实体目录，无需解引用')
+  }
+}
+
 module.exports = async function afterPack(context) {
   const resources = join(context.appOutDir, 'resources')
   // Models are intentionally user-supplied. Keep the canonical directory in
   // every packaged build, but never copy development-machine model weights.
   mkdirSync(join(resources, 'models'), { recursive: true })
+
+  materializeVendorTree(join(resources, 'vendor'))
+
   const cfgPath = join(resources, 'python', 'pyvenv.cfg')
   if (!existsSync(cfgPath)) {
     throw new Error(`打包后找不到 Python 配置：${cfgPath}`)

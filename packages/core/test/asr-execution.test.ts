@@ -49,7 +49,11 @@ describe('ASR execution plan', () => {
         directory: expect.stringContaining('custom-light-location'),
         computeType: 'int8'
       },
-      fallback: undefined
+      fallback: {
+        id: 'faster-whisper-large-v3',
+        directory: expect.stringContaining('custom-large-location'),
+        computeType: 'float16'
+      }
     })
 
     const largeConfig = sampleConfig('D:/models')
@@ -96,7 +100,49 @@ describe('ASR execution plan', () => {
       effectiveModel: 'faster-whisper-large-v3-turbo',
       fallbackUsed: true
     })
-    expect(onFallback).toHaveBeenCalledOnce()
+    expect(onFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'faster-whisper-large-v3' }),
+      expect.objectContaining({ id: 'faster-whisper-large-v3-turbo' }),
+      'resource-exhausted'
+    )
+  })
+
+  it('falls back from turbo to large-v3 after an alignment quality failure', async () => {
+    const plan = resolveAsrExecutionPlan(sampleConfig('D:/models'))
+    const onFallback = vi.fn()
+    const qualityError = () => new Error('模式 A 对齐结果未完整保留用户文案。')
+
+    const result = await runAsrExecutionPlan(plan, {
+      runAttempt: async (model) => {
+        if (model.id === 'faster-whisper-large-v3-turbo') throw qualityError()
+        return 'large-result'
+      },
+      isResourceError,
+      isAlignmentQualityError: (error) => error instanceof Error && /未完整保留用户文案/.test(error.message),
+      onFallback
+    })
+
+    expect(result).toMatchObject({
+      value: 'large-result',
+      effectiveModel: 'faster-whisper-large-v3',
+      fallbackUsed: true
+    })
+    expect(onFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'faster-whisper-large-v3-turbo' }),
+      expect.objectContaining({ id: 'faster-whisper-large-v3' }),
+      'alignment-quality'
+    )
+  })
+
+  it('does not fall back from turbo to large-v3 on resource exhaustion', async () => {
+    await expect(runAsrExecutionPlan(resolveAsrExecutionPlan(sampleConfig('D:/models')), {
+      runAttempt: async () => { throw resourceError() },
+      isResourceError,
+      isAlignmentQualityError: () => false
+    })).rejects.toMatchObject({
+      name: AsrResourceExhaustedError.name,
+      modelId: 'faster-whisper-large-v3-turbo'
+    })
   })
 
   it('reports turbo as the exhausted model when both attempts run out of memory', async () => {

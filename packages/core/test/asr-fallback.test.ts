@@ -128,4 +128,78 @@ describe('ASR worker failure parsing', () => {
     restored.restore(join(root, 'outputs'))
     expect(restored.get(queued.taskId)?.asrExecution).toEqual(completed?.asrExecution)
   })
+
+  it('falls back from turbo to large-v3 when mode-A alignment is incomplete', async () => {
+    expect(existsSync(ffmpegExecutable)).toBe(true)
+    expect(existsSync(pythonExecutable)).toBe(true)
+    const root = mkdtempSync(join(tmpdir(), 'koubox-asr-align-fallback-'))
+    temporaryRoots.push(root)
+    const inputPath = join(root, 'speech.wav')
+    const generated = spawnSync(ffmpegExecutable, [
+      '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.2', '-ar', '16000', '-ac', '1', inputPath
+    ], { encoding: 'utf8' })
+    expect(generated.status, generated.stderr || generated.stdout).toBe(0)
+
+    const pythonRoot = join(root, 'python')
+    const workerRoot = join(pythonRoot, 'src', 'koubox_runtime')
+    mkdirSync(workerRoot, { recursive: true })
+    writeFileSync(join(workerRoot, '__init__.py'), '', 'utf8')
+    writeFileSync(join(workerRoot, '__main__.py'), [
+      'import json, sys',
+      'request = json.loads(sys.stdin.readline())',
+      'model = request.get("modelDirectory", "")',
+      'if model.endswith("turbo"):',
+      '    print(json.dumps({"type":"error","code":"PRECISE_SRT_ALIGNMENT_INCOMPLETE","message":"模式 A 对齐结果未完整保留用户文案。"}), flush=True)',
+      '    raise SystemExit(1)',
+      'print(json.dumps({"type":"transcript","language":"ja","segments":[{"text":"回退成功","start":0.0,"end":0.2}],"diagnostics":{}}), flush=True)'
+    ].join('\n'), 'utf8')
+
+    const config = {
+      maxConcurrentTasks: 1,
+      pythonExecutable,
+      ytdlpProxy: '',
+      asrLanguage: 'auto',
+      whisperChunkLengthS: 30
+    } as KouboxConfig
+    const options = {
+      getConfig: () => config,
+      resolveVendor: () => ({ ytdlpExecutable: '', ffmpegExecutable, denoExecutable: '' }),
+      projectDirectory: root,
+      pythonProjectDirectory: pythonRoot,
+      taskIndexFile: join(root, 'runtime', 'tasks.json')
+    }
+    const paths = testModelPaths({
+      asrPlan: {
+        selectedModel: 'faster-whisper-large-v3-turbo',
+        primary: { id: 'faster-whisper-large-v3-turbo', directory: join(root, 'turbo'), computeType: 'int8' },
+        fallback: { id: 'faster-whisper-large-v3', directory: join(root, 'large'), computeType: 'float16' }
+      }
+    })
+    const manager = new TaskManager(options)
+    const queued = manager.startRequirementTwo(
+      inputPath,
+      '回退成功',
+      join(root, 'outputs'),
+      paths,
+      'ja',
+      'off'
+    )
+
+    let completed = manager.get(queued.taskId)
+    for (let attempt = 0; attempt < 200 && completed?.status !== 'complete' && completed?.status !== 'error'; attempt += 1) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 50))
+      completed = manager.get(queued.taskId)
+    }
+    expect(completed).toMatchObject({
+      status: 'complete',
+      asrExecution: {
+        selectedModel: 'faster-whisper-large-v3-turbo',
+        effectiveModel: 'faster-whisper-large-v3',
+        fallbackUsed: true,
+        fallbackReason: 'alignment-quality'
+      }
+    })
+    expect(completed?.asrExecution?.notice).toContain('Large v3')
+    expect(completed?.artifacts.srt).toBeTruthy()
+  })
 })

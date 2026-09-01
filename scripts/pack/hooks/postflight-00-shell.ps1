@@ -3,6 +3,28 @@ Assert-PackPath (Join-Path $resources 'vendor\yt-dlp\yt-dlp.exe') '包内 yt-dlp
 Assert-PackPath (Join-Path $resources 'vendor\deno\deno.exe') '包内 Deno'
 Assert-PackPath (Join-Path $resources 'app.asar') '包内 Electron 应用'
 
+foreach ($name in @('deno', 'ffmpeg', 'yt-dlp')) {
+  $vendorItem = Get-Item -LiteralPath (Join-Path $resources "vendor\$name") -Force
+  if ($vendorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "校验失败：resources\vendor\$name 仍是软链接/Junction（目标：$($vendorItem.Target)）。便携包必须是实体目录。"
+  }
+}
+foreach ($relative in @(
+  'vendor\deno\deno.exe',
+  'vendor\ffmpeg\bin\ffmpeg.exe',
+  'vendor\ffmpeg\bin\ffprobe.exe',
+  'vendor\yt-dlp\yt-dlp.exe'
+)) {
+  $fileItem = Get-Item -LiteralPath (Join-Path $resources $relative) -Force
+  if ($fileItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "校验失败：resources\$relative 仍是软链接/Junction，分发后会失效。"
+  }
+  if ($fileItem.Length -le 0) {
+    throw "校验失败：resources\$relative 文件大小为 0。"
+  }
+}
+Write-Host 'resources\vendor\{deno,ffmpeg,yt-dlp} 已验证为实体目录，关键可执行文件齐全。'
+
 $packedModels = Join-Path $resources 'models'
 Assert-PackPath $packedModels '包内空 models 目录'
 $packedModelEntries = @(Get-ChildItem -LiteralPath $packedModels -Force -ErrorAction SilentlyContinue)

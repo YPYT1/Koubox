@@ -2,8 +2,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_ASR_MODEL,
+  asrAlignmentFallbackNoticeMessage,
   asrResourceErrorUserMessage,
   defaultPlatformAuth,
+  isAsrAlignmentQualityError,
   isAsrResourceError,
   type KouboxConfig
 } from '@koubox/shared'
@@ -42,7 +44,7 @@ describe('ASR model helpers', () => {
   it('uses turbo as primary path when default model is turbo', () => {
     const paths = resolveAsrModelPaths(sampleConfig('D:/models'))
     expect(paths.asrPrimary).toContain('faster-whisper-large-v3-turbo-int8-ct2')
-    expect(paths.asrFallback).toBeUndefined()
+    expect(paths.asrFallback).toContain('faster-whisper-large-v3')
   })
 
   it('uses large-v3 as primary path when default model is large-v3', () => {
@@ -67,5 +69,11 @@ describe('ASR model helpers', () => {
     expect(isAsrResourceError("DefaultCPUAllocator: can't allocate memory")).toBe(true)
     expect(asrResourceErrorUserMessage('faster-whisper-large-v3-turbo')).toContain('最轻量')
     expect(asrResourceErrorUserMessage('faster-whisper-large-v3')).toContain('显卡显存或系统内存不足')
+  })
+
+  it('recognizes mode-A alignment quality failures', () => {
+    expect(isAsrAlignmentQualityError('模式 A 对齐结果未完整保留用户文案。')).toBe(true)
+    expect(isAsrAlignmentQualityError('CUDA out of memory')).toBe(false)
+    expect(asrAlignmentFallbackNoticeMessage()).toContain('Large v3')
   })
 })

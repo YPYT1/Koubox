@@ -66,12 +66,13 @@ function resolvedModel(config: KouboxConfig, modelId: AsrModelId): ResolvedAsrMo
 export function resolveAsrExecutionPlan(config: KouboxConfig): AsrExecutionPlan {
   const selectedModel = asAsrModelId(config.defaultAsrModel)
   const primary = resolvedModel(config, selectedModel)
+  const fallbackId = selectedModel === 'faster-whisper-large-v3'
+    ? 'faster-whisper-large-v3-turbo'
+    : 'faster-whisper-large-v3'
   return {
     selectedModel,
     primary,
-    fallback: selectedModel === 'faster-whisper-large-v3'
-      ? resolvedModel(config, 'faster-whisper-large-v3-turbo')
-      : undefined
+    fallback: resolvedModel(config, fallbackId)
   }
 }
 
@@ -92,14 +93,36 @@ export function resolveAsrModelPaths(config: KouboxConfig): {
   }
 }
 
+export type AsrFallbackReason = 'resource-exhausted' | 'alignment-quality'
+
+export function shouldFallbackAsrAttempt(
+  error: unknown,
+  primary: ResolvedAsrModel,
+  fallback: ResolvedAsrModel,
+  options: {
+    isResourceError(error: unknown): boolean
+    isAlignmentQualityError(error: unknown): boolean
+  }
+): AsrFallbackReason | undefined {
+  const fallingToLighter = primary.id === 'faster-whisper-large-v3'
+    && fallback.id === 'faster-whisper-large-v3-turbo'
+  const fallingToHeavier = primary.id === 'faster-whisper-large-v3-turbo'
+    && fallback.id === 'faster-whisper-large-v3'
+  if (options.isResourceError(error) && fallingToLighter) return 'resource-exhausted'
+  if (options.isAlignmentQualityError(error) && fallingToHeavier) return 'alignment-quality'
+  return undefined
+}
+
 export async function runAsrExecutionPlan<T>(
   plan: AsrExecutionPlan,
   options: {
     runAttempt(model: ResolvedAsrModel, isFallback: boolean): Promise<T>
     isResourceError(error: unknown): boolean
-    onFallback?(from: ResolvedAsrModel, to: ResolvedAsrModel): Promise<void> | void
+    isAlignmentQualityError?(error: unknown): boolean
+    onFallback?(from: ResolvedAsrModel, to: ResolvedAsrModel, reason: AsrFallbackReason): Promise<void> | void
   }
 ): Promise<AsrExecutionResult<T>> {
+  const isAlignmentQualityError = options.isAlignmentQualityError ?? (() => false)
   try {
     return {
       value: await options.runAttempt(plan.primary, false),
@@ -107,21 +130,31 @@ export async function runAsrExecutionPlan<T>(
       fallbackUsed: false
     }
   } catch (error) {
-    if (!options.isResourceError(error)) throw error
-    if (!plan.fallback) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
-  }
+    if (!plan.fallback) {
+      if (options.isResourceError(error)) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
+      throw error
+    }
+    const reason = shouldFallbackAsrAttempt(error, plan.primary, plan.fallback, {
+      isResourceError: options.isResourceError,
+      isAlignmentQualityError
+    })
+    if (!reason) {
+      if (options.isResourceError(error)) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
+      throw error
+    }
 
-  await options.onFallback?.(plan.primary, plan.fallback)
-  try {
-    return {
-      value: await options.runAttempt(plan.fallback, true),
-      effectiveModel: plan.fallback.id,
-      fallbackUsed: true
+    await options.onFallback?.(plan.primary, plan.fallback, reason)
+    try {
+      return {
+        value: await options.runAttempt(plan.fallback, true),
+        effectiveModel: plan.fallback.id,
+        fallbackUsed: true
+      }
+    } catch (fallbackError) {
+      if (options.isResourceError(fallbackError)) {
+        throw new AsrResourceExhaustedError(plan.fallback.id, { cause: fallbackError })
+      }
+      throw fallbackError
     }
-  } catch (error) {
-    if (options.isResourceError(error)) {
-      throw new AsrResourceExhaustedError(plan.fallback.id, { cause: error })
-    }
-    throw error
   }
 }

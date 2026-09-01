@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 import tempfile
 import tomllib
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -582,10 +584,96 @@ def _punctuated_text_from_words(words: Sequence[TimedWord], language: str) -> st
 
 
 def _normalize_for_equality(text: str, language: str) -> str:
-    normalized = format_display_text(text)
+    normalized = format_display_text(unicodedata.normalize("NFKC", text))
     if language in {"zh", "ja"}:
         return re.sub(r"\s+", "", normalized)
     return re.sub(r"\s+", "", normalized).lower()
+
+
+def _mode_a_near_match(expected: str, actual: str) -> bool:
+    if not expected or not actual:
+        return False
+    ratio = SequenceMatcher(None, expected, actual).ratio()
+    length_delta = abs(len(expected) - len(actual))
+    max_delta = max(8, len(expected) // 25)
+    min_ratio = 0.92 if len(expected) >= 40 else 0.88
+    return ratio >= min_ratio and length_delta <= max_delta
+
+
+def _split_text_by_weights(text: str, weights: Sequence[int]) -> list[str]:
+    if not weights:
+        return []
+    if not text:
+        return ["" for _ in weights]
+    total = sum(max(1, int(weight)) for weight in weights) or len(weights)
+    raw = [len(text) * max(1, int(weight)) / total for weight in weights]
+    lengths = [int(value) for value in raw]
+    remainders = sorted(
+        range(len(weights)),
+        key=lambda index: raw[index] - lengths[index],
+        reverse=True,
+    )
+    missing = len(text) - sum(lengths)
+    for index in range(missing):
+        lengths[remainders[index % len(lengths)]] += 1
+    parts: list[str] = []
+    cursor = 0
+    for length in lengths:
+        parts.append(text[cursor : cursor + length])
+        cursor += length
+    return parts
+
+
+def _rebase_segments_to_source_text(
+    segments: Sequence[dict[str, float | str]],
+    source_text: str,
+    language: str,
+) -> list[dict[str, float | str]]:
+    """Keep segment timings, rewrite texts so Mode A still ships the user script."""
+    normalized_source = _normalize_for_equality(source_text, language)
+    weights = [
+        max(1, len(_normalize_for_equality(str(item["text"]), language)))
+        for item in segments
+    ]
+    pieces = _split_text_by_weights(normalized_source, weights)
+    rebased: list[dict[str, float | str]] = []
+    for item, piece in zip(segments, pieces):
+        text = piece
+        old = str(item["text"]).strip()
+        if (
+            text
+            and old
+            and old[-1] in "。！？!?、，,"
+            and text[-1] not in "。！？!?、，,"
+        ):
+            text += old[-1]
+        rebased.append({**item, "text": text})
+    return rebased
+
+
+def _ensure_mode_a_preserves_source(
+    segments: list[dict[str, float | str]],
+    source_text: str,
+    language: str,
+    *,
+    compute_type: str,
+) -> list[dict[str, float | str]]:
+    expected = _normalize_for_equality(source_text, language)
+    actual = _normalize_for_equality(
+        "".join(str(item["text"]) for item in segments),
+        language,
+    )
+    if actual == expected:
+        return segments
+    if compute_type == "int8" and _mode_a_near_match(expected, actual):
+        rebased = _rebase_segments_to_source_text(segments, source_text, language)
+        rebased_actual = _normalize_for_equality(
+            "".join(str(item["text"]) for item in rebased),
+            language,
+        )
+        if rebased_actual == expected:
+            return rebased
+    raise ValueError("模式 A 对齐结果未完整保留用户文案。")
 
 
 def _validate_final_segments(

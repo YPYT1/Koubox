@@ -10,6 +10,7 @@ import torch
 from .log import write as log_write
 from .precise_srt import (
     _align_text,
+    _ensure_mode_a_preserves_source,
     _extract_words,
     enforce_aligned_word_limits,
     _join_words,
@@ -180,13 +181,12 @@ def run(
                     language=detected_language,
                     pauses=pauses,
                 )
-            expected = _normalize_for_equality(source_text or "", detected_language)
-            actual = _normalize_for_equality(
-                "".join(str(item["text"]) for item in segments),
+            segments = _ensure_mode_a_preserves_source(
+                segments,
+                source_text or "",
                 detected_language,
+                compute_type=compute_type,
             )
-            if actual != expected:
-                raise ValueError("模式 A 对齐结果未完整保留用户文案。")
         else:
             send("progress", stage="asr", percent=18, message="正在识别原始音频")
             initial = _transcribe_original(
@@ -439,7 +439,12 @@ def run(
         )
     except Exception as error:
         log_write("error", "precise_srt", str(error))
-        fail("PRECISE_SRT_FAILED", str(error))
+        code = (
+            "PRECISE_SRT_ALIGNMENT_INCOMPLETE"
+            if "未完整保留用户文案" in str(error)
+            else "PRECISE_SRT_FAILED"
+        )
+        fail(code, str(error))
         return
     finally:
         if torch.cuda.is_available():

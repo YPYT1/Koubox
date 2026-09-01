@@ -338,7 +338,7 @@ export type AsrExecutionSummary = {
   selectedModel: import('./asr-models.js').AsrModelId
   effectiveModel: import('./asr-models.js').AsrModelId
   fallbackUsed: boolean
-  fallbackReason?: 'resource-exhausted'
+  fallbackReason?: 'resource-exhausted' | 'alignment-quality'
   notice?: string
 }
 
@@ -606,8 +606,10 @@ export {
   ASR_MODEL_OPTIONS,
   DEFAULT_ASR_MODEL,
   asAsrModelId,
+  asrAlignmentFallbackNoticeMessage,
   asrFallbackNoticeMessage,
   asrResourceErrorUserMessage,
+  isAsrAlignmentQualityError,
   isAsrResourceError,
   resolveAsrComputeType
 } from './asr-models.js'

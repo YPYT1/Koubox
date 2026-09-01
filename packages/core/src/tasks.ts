@@ -19,9 +19,11 @@ import type {
   TranslationTargetLanguage
 } from '@koubox/shared'
 import {
+  asrAlignmentFallbackNoticeMessage,
   asrFallbackNoticeMessage,
   asrResourceErrorUserMessage,
   detectPlatform,
+  isAsrAlignmentQualityError,
   isAsrResourceError,
   platformAuthIdFromUrlPlatform,
   req1UsesSeparateVocals,
@@ -185,11 +187,22 @@ function workerProcessError(stderr: string, stdoutBuffer = ''): string {
   return meaningful.at(-1) ?? '本地模型运行失败，请查看日志。'
 }
 
-function isWorkerResourceError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
+function workerErrorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return String(error ?? '')
   const taskError = (error as { taskError?: TaskError }).taskError
-  const message = taskError?.message ?? (error instanceof Error ? error.message : String(error))
-  return isAsrResourceError(message)
+  return taskError?.message ?? (error instanceof Error ? error.message : String(error))
+}
+
+function isWorkerResourceError(error: unknown): boolean {
+  return isAsrResourceError(workerErrorMessage(error))
+}
+
+function isWorkerAlignmentQualityError(error: unknown): boolean {
+  const taskError = error && typeof error === 'object'
+    ? (error as { taskError?: TaskError }).taskError
+    : undefined
+  if (taskError?.code === 'PRECISE_SRT_ALIGNMENT_INCOMPLETE') return true
+  return isAsrAlignmentQualityError(workerErrorMessage(error))
 }
 
 function parseWorkerFailure(stderr: string, stdoutBuffer = ''): { message: string; code?: string } {
@@ -1061,8 +1074,11 @@ export class TaskManager {
       const result = await runAsrExecutionPlan(plan, {
         runAttempt,
         isResourceError: isWorkerResourceError,
-        onFallback: (_from, to) => {
-          const notice = asrFallbackNoticeMessage()
+        isAlignmentQualityError: isWorkerAlignmentQualityError,
+        onFallback: (_from, to, reason) => {
+          const notice = reason === 'alignment-quality'
+            ? asrAlignmentFallbackNoticeMessage()
+            : asrFallbackNoticeMessage()
           this.update(record, {
             stage: 'retry-asr',
             percent: fallbackPercent,
@@ -1071,7 +1087,7 @@ export class TaskManager {
               selectedModel: plan.selectedModel,
               effectiveModel: to.id,
               fallbackUsed: true,
-              fallbackReason: 'resource-exhausted',
+              fallbackReason: reason,
               notice
             }
           })
