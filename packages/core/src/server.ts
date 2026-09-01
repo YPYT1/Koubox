@@ -3,7 +3,8 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, SpeechRateMode, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
+import type { AsrLanguage, AsrModelId, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, SpeechRateMode, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
+import { asAsrModelId } from '@koubox/shared'
 import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalSpeechMediaPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, SPEECH_TO_TEXT_PIPELINE_PATH, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, detectGpu, detectSystemMemory, getRuntimeStatus, GPU_RUNTIME_PROBE_MAX_AGE_MS, resolveModelPaths, resolveVendorPaths } from './runtime.js'
@@ -178,6 +179,8 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     modelsDirectory: asPathString(body.modelsDirectory, config.modelsDirectory),
     outputDirectory: asPathString(body.outputDirectory, config.outputDirectory),
     asrModelDirectory: asPathString(body.asrModelDirectory, config.asrModelDirectory),
+    asrLightModelDirectory: asPathString(body.asrLightModelDirectory, config.asrLightModelDirectory),
+    defaultAsrModel: asAsrModelId(body.defaultAsrModel, config.defaultAsrModel),
     translationModelDirectory: asPathString(body.translationModelDirectory, config.translationModelDirectory),
     demucsModelDirectory: asPathString(body.demucsModelDirectory, config.demucsModelDirectory),
     ytdlpDirectory: asPathString(body.ytdlpDirectory, config.ytdlpDirectory),

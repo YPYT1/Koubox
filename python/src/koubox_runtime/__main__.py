@@ -26,6 +26,7 @@ def main() -> None:
                     request["audioPath"],
                     language=request.get("language", "auto"),
                     chunk_length_s=float(request.get("chunkLengthS", 30)),
+                    compute_type=str(request.get("computeType", "float16")),
                 )
             elif operation == "precise_srt":
                 run_precise_srt(
@@ -36,6 +37,7 @@ def main() -> None:
                     language=str(request.get("language", "auto")),
                     speech_rate_mode=str(request.get("speechRateMode", "auto")),
                     ffmpeg_executable=str(request["ffmpegExecutable"]),
+                    compute_type=str(request.get("computeType", "float16")),
                 )
             elif operation == "separate":
                 run_separate(

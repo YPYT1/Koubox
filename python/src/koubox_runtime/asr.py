@@ -18,7 +18,13 @@ WHISPER_LANGUAGE_MAP = {
 }
 
 
-def run(model_directory: str, audio_path: str, language: str = "auto", chunk_length_s: float = 30) -> None:
+def run(
+    model_directory: str,
+    audio_path: str,
+    language: str = "auto",
+    chunk_length_s: float = 30,
+    compute_type: str = "float16",
+) -> None:
     if not torch.cuda.is_available():
         fail("GPU_REQUIRED", "当前没有可用的 NVIDIA GPU，无法执行语音识别。")
         return
@@ -26,8 +32,9 @@ def run(model_directory: str, audio_path: str, language: str = "auto", chunk_len
         fail("INPUT_NOT_FOUND", "ASR 模型目录或音频文件不存在。")
         return
 
-    send("progress", stage="loading-model", percent=5, message="正在加载 Faster-Whisper Large-v3（FP16）")
-    model = WhisperModel(model_directory, device="cuda", compute_type="float16")
+    model_label = "Faster-Whisper Large-v3（FP16）" if compute_type == "float16" else "faster-whisper-large-v3-turbo（INT8）"
+    send("progress", stage="loading-model", percent=5, message=f"正在加载 {model_label}")
+    model = WhisperModel(model_directory, device="cuda", compute_type=compute_type)
     send("progress", stage="transcribing", percent=18, message="正在识别音频")
 
     whisper_language = WHISPER_LANGUAGE_MAP.get(language)

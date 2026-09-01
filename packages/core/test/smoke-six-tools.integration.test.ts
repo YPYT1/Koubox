@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { defaultPlatformAuth, type KouboxConfig, type TaskSnapshot } from '@koubox/shared'
 import { startLocalApi } from '../src/server.js'
+import { assertValidTranscript, parseSrt } from '../src/srt.js'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const SMOKE_ENABLED = process.env.KOUBOX_SMOKE === '1'
@@ -15,18 +16,75 @@ const SMOKE_DOWNLOAD_URL = process.env.KOUBOX_SMOKE_DOWNLOAD_URL?.trim() || SMOK
 const ffmpegExecutable = join(REPO_ROOT, 'vendor', 'ffmpeg', 'bin', 'ffmpeg.exe')
 const ytdlpExecutable = join(REPO_ROOT, 'vendor', 'yt-dlp', 'yt-dlp.exe')
 const pythonExecutable = join(REPO_ROOT, 'python', '.venv', 'Scripts', 'python.exe')
+const ffprobeExecutable = join(REPO_ROOT, 'vendor', 'ffmpeg', 'bin', 'ffprobe.exe')
+
+type SpeechFixture = { wavPath: string; sourceText: string }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 }
 
-function assertSmokePrerequisites(): void {
-  for (const path of [ffmpegExecutable, ytdlpExecutable, pythonExecutable]) {
+function walkFiles(root: string): string[] {
+  const result: string[] = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name)
+    if (entry.isDirectory()) result.push(...walkFiles(full))
+    else if (entry.isFile()) result.push(full)
+  }
+  return result
+}
+
+function fixtureStem(filePath: string): string {
+  return filePath
+    .split(/[/\\]/).pop()!
+    .replace(/(?:\.txt)+$/i, '')
+    .replace(/\.wav$/i, '')
+    .split(/[（(]/, 1)[0]
+    .trim()
+    .toLowerCase()
+}
+
+function resolveSpeechFixture(): SpeechFixture {
+  const explicitWav = process.env.KOUBOX_SMOKE_SPEECH_WAV?.trim()
+  const explicitText = process.env.KOUBOX_SMOKE_SOURCE_TEXT?.trim()
+  if (explicitWav) {
+    if (!existsSync(explicitWav)) throw new Error(`冒烟口播不存在：${explicitWav}`)
+    const sourceText = explicitText && existsSync(explicitText)
+      ? readFileSync(explicitText, 'utf8').replace(/^\uFEFF/, '').trim()
+      : explicitText ?? ''
+    if (!sourceText) throw new Error('使用 KOUBOX_SMOKE_SPEECH_WAV 时还需提供 KOUBOX_SMOKE_SOURCE_TEXT 文本或文本文件路径。')
+    return { wavPath: explicitWav, sourceText }
+  }
+
+  const fixtureRoot = process.env.KOUBOX_SMOKE_FIXTURE_ROOT?.trim()
+    || join(process.env.USERPROFILE ?? '', 'Desktop', '文案')
+  if (!fixtureRoot || !existsSync(fixtureRoot)) {
+    throw new Error(`冒烟缺少真实口播目录：${fixtureRoot || '<empty>'}`)
+  }
+  const files = walkFiles(fixtureRoot)
+  const textFiles = files.filter((file) => /\.txt$/i.test(file))
+  const candidates = files
+    .filter((file) => /\.wav$/i.test(file))
+    .sort((left, right) => statSync(left).size - statSync(right).size)
+
+  for (const wavPath of candidates) {
+    const stem = fixtureStem(wavPath)
+    const textPath = textFiles.find((file) => fixtureStem(file) === stem)
+    if (!textPath) continue
+    const sourceText = readFileSync(textPath, 'utf8').replace(/^\uFEFF/, '').trim()
+    if (sourceText) return { wavPath, sourceText }
+  }
+  throw new Error(`冒烟目录没有找到 WAV 与对应文案：${fixtureRoot}`)
+}
+
+function assertSmokePrerequisites(): SpeechFixture {
+  for (const path of [ffmpegExecutable, ffprobeExecutable, ytdlpExecutable, pythonExecutable]) {
     if (!existsSync(path)) throw new Error(`冒烟缺少依赖：${path}`)
   }
-  if (!existsSync(join(REPO_ROOT, 'models', 'faster-whisper-large-v3'))) {
-    throw new Error('冒烟缺少 ASR 模型：models/faster-whisper-large-v3')
+  if (!existsSync(join(REPO_ROOT, 'models', 'faster-whisper-large-v3-turbo-int8-ct2'))) {
+    throw new Error('冒烟缺少 ASR 轻量模型：models/faster-whisper-large-v3-turbo-int8-ct2')
   }
+  return resolveSpeechFixture()
 }
 
 function buildConfig(outputDirectory: string): KouboxConfig {
@@ -34,6 +92,8 @@ function buildConfig(outputDirectory: string): KouboxConfig {
     modelsDirectory: join(REPO_ROOT, 'models'),
     outputDirectory,
     asrModelDirectory: join(REPO_ROOT, 'models', 'faster-whisper-large-v3'),
+    asrLightModelDirectory: join(REPO_ROOT, 'models', 'faster-whisper-large-v3-turbo-int8-ct2'),
+    defaultAsrModel: 'faster-whisper-large-v3-turbo',
     translationModelDirectory: join(REPO_ROOT, 'models', 'HYMT21.8B'),
     demucsModelDirectory: join(REPO_ROOT, 'models', 'demucs'),
     ytdlpDirectory: join(REPO_ROOT, 'vendor', 'yt-dlp'),
@@ -56,26 +116,32 @@ function buildConfig(outputDirectory: string): KouboxConfig {
   }
 }
 
-function generateFixtures(fixtureDir: string): { wavPath: string; mp4Path: string } {
+function generateFixtures(fixtureDir: string, speech: SpeechFixture): { wavPath: string; mp4Path: string } {
   mkdirSync(fixtureDir, { recursive: true })
   const wavPath = join(fixtureDir, 'smoke.wav')
   const mp4Path = join(fixtureDir, 'smoke.mp4')
-  const wavResult = spawnSync(ffmpegExecutable, [
-    '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-ar', '16000', '-ac', '1', wavPath
-  ], { encoding: 'utf8' })
-  if (wavResult.status !== 0) {
-    throw new Error(`生成测试音频失败：${wavResult.stderr || wavResult.stdout}`)
-  }
+  copyFileSync(speech.wavPath, wavPath)
   const mp4Result = spawnSync(ffmpegExecutable, [
     '-y',
-    '-f', 'lavfi', '-i', 'color=c=black:s=320x240:d=3',
-    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3',
+    '-f', 'lavfi', '-i', 'color=c=black:s=320x240:r=15',
+    '-i', wavPath,
     '-shortest', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', mp4Path
   ], { encoding: 'utf8' })
   if (mp4Result.status !== 0) {
     throw new Error(`生成测试视频失败：${mp4Result.stderr || mp4Result.stdout}`)
   }
   return { wavPath, mp4Path }
+}
+
+function assertMediaStream(filePath: string, streamType: 'audio' | 'video'): void {
+  expect(existsSync(filePath)).toBe(true)
+  expect(statSync(filePath).size).toBeGreaterThan(0)
+  const probe = spawnSync(ffprobeExecutable, [
+    '-v', 'error', '-select_streams', `${streamType === 'audio' ? 'a' : 'v'}:0`,
+    '-show_entries', 'stream=codec_type', '-of', 'default=noprint_wrappers=1:nokey=1', filePath
+  ], { encoding: 'utf8' })
+  expect(probe.status, probe.stderr || probe.stdout).toBe(0)
+  expect(probe.stdout.trim()).toBe(streamType)
 }
 
 type SmokeApi = Awaited<ReturnType<typeof startLocalApi>>
@@ -117,12 +183,14 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
   let outputRoot: string
   let wavPath: string
   let mp4Path: string
+  let sourceText: string
 
   beforeAll(async () => {
-    assertSmokePrerequisites()
+    const speech = assertSmokePrerequisites()
+    sourceText = speech.sourceText
     fixtureDir = mkdtempSync(join(tmpdir(), 'koubox-smoke-fixtures-'))
     outputRoot = mkdtempSync(join(tmpdir(), 'koubox-smoke-output-'))
-    ;({ wavPath, mp4Path } = generateFixtures(fixtureDir))
+    ;({ wavPath, mp4Path } = generateFixtures(fixtureDir, speech))
     api = await startLocalApi({
       configFile: join(outputRoot, 'runtime.json'),
       defaults: buildConfig(outputRoot),
@@ -162,7 +230,7 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
     })
     const task = await waitForTask(api, queued.taskId, 120_000)
     expect(task.artifacts.audio).toBeTruthy()
-    expect(existsSync(task.artifacts.audio!)).toBe(true)
+    assertMediaStream(task.artifacts.audio!, 'audio')
   }, 180_000)
 
   it('语音转文字', async () => {
@@ -172,6 +240,8 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
     })
     const task = await waitForTask(api, queued.taskId, 300_000)
     expect(task.transcript?.segments?.length).toBeGreaterThan(0)
+    expect(task.artifacts.transcriptText).toBeTruthy()
+    expect(readFileSync(task.artifacts.transcriptText!, 'utf8').trim()).not.toBe('')
   }, 360_000)
 
   it('人声分离', async () => {
@@ -181,19 +251,22 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
     })
     const task = await waitForTask(api, queued.taskId, 600_000)
     expect(task.artifacts.vocals).toBeTruthy()
-    expect(existsSync(task.artifacts.vocals!)).toBe(true)
+    assertMediaStream(task.artifacts.vocals!, 'audio')
   }, 660_000)
 
-  it('精准 SRT（纯音频识别）', async () => {
+  it('精准 SRT（真实文案对齐）', async () => {
     const queued = await postPipeline(api, '/pipelines/req2', {
       outputDirectory: outputRoot,
       audioPath: wavPath,
+      sourceText,
       language: 'auto',
       speechRateMode: 'auto'
     })
     const task = await waitForTask(api, queued.taskId, 900_000)
     expect(task.artifacts.srt).toBeTruthy()
-    expect(existsSync(task.artifacts.srt!)).toBe(true)
+    const transcript = parseSrt(readFileSync(task.artifacts.srt!, 'utf8'))
+    expect(transcript.segments.length).toBeGreaterThan(0)
+    assertValidTranscript({ ...transcript, language: task.detectedLanguage })
   }, 960_000)
 
   it('爆款素材获取（本地视频）', async () => {
@@ -204,9 +277,9 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
     })
     const task = await waitForTask(api, queued.taskId, 900_000)
     expect(task.artifacts.audio).toBeTruthy()
-    expect(existsSync(task.artifacts.audio!)).toBe(true)
+    assertMediaStream(task.artifacts.audio!, 'audio')
     expect(task.artifacts.vocals).toBeTruthy()
-    expect(existsSync(task.artifacts.vocals!)).toBe(true)
+    assertMediaStream(task.artifacts.vocals!, 'audio')
     const transcriptReady = Boolean(task.artifacts.transcriptText && existsSync(task.artifacts.transcriptText))
       || (task.transcript?.segments?.length ?? 0) > 0
     expect(transcriptReady).toBe(true)
@@ -219,6 +292,7 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
     })
     const task = await waitForTask(api, queued.taskId, 300_000)
     expect(task.artifacts.video).toBeTruthy()
-    expect(existsSync(task.artifacts.video!)).toBe(true)
+    assertMediaStream(task.artifacts.video!, 'video')
+    assertMediaStream(task.artifacts.video!, 'audio')
   }, 360_000)
 })

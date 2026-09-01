@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { assertLocalSpeechMediaPath } from '@koubox/shared'
 import type { KouboxConfig } from '@koubox/shared'
 import { TaskManager } from '../src/tasks.js'
+import { testModelPaths } from './test-model-paths.js'
 
 const temporaryRoots: string[] = []
 
@@ -44,7 +45,7 @@ describe('speech-to-text task', () => {
     const outputRoot = join(root, 'Koubox Outputs')
     const manager = createManager(root)
 
-    const task = manager.startSpeechToText(join(root, 'sample.wav'), outputRoot, { asr: '', translation: '' })
+    const task = manager.startSpeechToText(join(root, 'sample.wav'), outputRoot, testModelPaths())
 
     expect(task.kind).toBe('speech-to-text')
     expect(task.outputDirectory).toBe(join(outputRoot, task.taskId))

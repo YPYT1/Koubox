@@ -3003,6 +3003,17 @@ button:disabled {
   white-space: nowrap;
 }
 
+.history-fallback-notice {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-sm);
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .history-error {
   margin: 0;
   padding: 10px 12px;

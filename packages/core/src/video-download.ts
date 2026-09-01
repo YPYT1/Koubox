@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import {
   assertDownloadableVideoUrl,
   isStalePlatformAuthFailure,
+  isPlatformAuthConfigured,
   normalizeProxyUrl,
   platformAuthIdFromUrlPlatform,
   platformAuthRejectedMessage,
@@ -59,6 +60,7 @@ type DownloadConfig = Pick<
   | 'ytdlpProxy'
   | 'ytdlpMaxHeight'
   | 'ytdlpExtraArgs'
+  | 'ytdlpPlatformAuth'
 >
 
 type RunCommand = (
@@ -110,10 +112,14 @@ function looksLikePublicNetworkFailure(message: string): boolean {
 
 function publicNetworkFailureMessage(
   platform: DownloadableVideoPlatform,
-  failures: VideoDownloadResult['failures']
+  failures: VideoDownloadResult['failures'],
+  platformAuthConfigured: boolean
 ): string | undefined {
   const publicFailures = failures.filter((failure) => failure.strategy !== 'yt-dlp-authenticated')
   if (!publicFailures.some((failure) => looksLikePublicNetworkFailure(failure.message))) return undefined
+  if (platformAuthConfigured) {
+    return `${platform} 下载失败：网络连接超时或较慢，平台页面未完整返回媒体数据。请检查网络或代理后重试。`
+  }
   return `${platform} 公开视频获取失败：当前网络较慢或连接不稳定，平台页面可能没有完整返回媒体数据。请检查网络或代理后重试；无需先配置 Cookie。`
 }
 
@@ -633,8 +639,14 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   }
 
   if (!authenticationResolved) {
-    const networkMessage = publicNetworkFailureMessage(checked.platform, failures)
+    const platformAuthConfigured = isPlatformAuthConfigured(checked.platform, effectiveRequest.config.ytdlpPlatformAuth)
+    const networkMessage = publicNetworkFailureMessage(checked.platform, failures, platformAuthConfigured)
     if (networkMessage) throw new Error(networkMessage)
+  }
+
+  const platformAuthConfigured = isPlatformAuthConfigured(checked.platform, effectiveRequest.config.ytdlpPlatformAuth)
+  if (platformAuthConfigured) {
+    throw new Error(`${checked.platform} 视频下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请检查网络、代理或平台登录状态后重试。`)
   }
 
   throw new Error(`${checked.platform} 公开视频解析失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。请到【全局设置】→【平台登录配置】配置该平台。`)

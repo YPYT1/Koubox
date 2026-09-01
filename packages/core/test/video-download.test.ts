@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { downloadVideo, type VideoDownloadRequest } from '../src/video-download.js'
 import type { PublicMediaResolution } from '../src/public-video.js'
 
@@ -20,7 +21,8 @@ function createRequest(overrides: Partial<VideoDownloadRequest> = {}): VideoDown
     config: {
       ytdlpProxy: '',
       ytdlpMaxHeight: 0,
-      ytdlpExtraArgs: ''
+      ytdlpExtraArgs: '',
+      ytdlpPlatformAuth: defaultPlatformAuth()
     },
     updateProgress: () => undefined,
     runCommand: async (_command, args) => {
@@ -146,7 +148,8 @@ describe('public video download pipeline', () => {
       config: {
         ytdlpProxy: '',
         ytdlpMaxHeight: 0,
-        ytdlpExtraArgs: '--cookies account.txt --retries 2 --cookies-from-browser chrome --netrc-location auth.netrc -u user -p pass --config-locations secret.conf'
+        ytdlpExtraArgs: '--cookies account.txt --retries 2 --cookies-from-browser chrome --netrc-location auth.netrc -u user -p pass --config-locations secret.conf',
+        ytdlpPlatformAuth: defaultPlatformAuth()
       },
       resolvePublicMedia: async () => {
         calls.push('direct')
@@ -213,6 +216,28 @@ describe('public video download pipeline', () => {
     expect((error as Error).message).not.toContain('请到【全局设置】→【平台登录配置】配置该平台')
   })
 
+  it('reports network timeout without cookie hint when Instagram auth is already configured', async () => {
+    const auth = defaultPlatformAuth()
+    auth.instagram = { mode: 'paste', cookies: 'sessionid=abc\tds_user_id=1' }
+    const request = createRequest({
+      url: 'https://www.instagram.com/reel/network-test',
+      config: {
+        ytdlpProxy: '',
+        ytdlpMaxHeight: 0,
+        ytdlpExtraArgs: '',
+        ytdlpPlatformAuth: auth
+      },
+      resolvePublicMedia: async () => { throw new Error('Instagram 页面没有返回视频链接。') },
+      resolveAuthenticatedCookies: async () => undefined
+    })
+
+    const error = await downloadVideo(request).then(() => undefined, (reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('Instagram 下载失败：网络连接超时或较慢')
+    expect((error as Error).message).not.toContain('无需先配置 Cookie')
+  })
+
   it('keeps capturing Instagram responses long enough for slow audio streams', () => {
     const source = readFileSync(join(import.meta.dirname, '..', 'src', 'public-video.ts'), 'utf8')
 
@@ -237,7 +262,8 @@ describe('public video download pipeline', () => {
       config: {
         ytdlpProxy: '',
         ytdlpMaxHeight: 0,
-        ytdlpExtraArgs: '-U --update --update-to nightly --retries 2'
+        ytdlpExtraArgs: '-U --update --update-to nightly --retries 2',
+        ytdlpPlatformAuth: defaultPlatformAuth()
       },
       resolveAuthenticatedCookies: async () => ({
         path: join(request.directory, 'youtube.cookies.txt'),
@@ -314,7 +340,7 @@ describe('public video download pipeline', () => {
     const commands: Array<{ label?: string; args: string[] }> = []
     const request = createRequest({
       url: 'https://www.youtube.com/watch?v=123',
-      config: { ytdlpProxy: '127.0.0.1:7897', ytdlpMaxHeight: 0, ytdlpExtraArgs: '' },
+      config: { ytdlpProxy: '127.0.0.1:7897', ytdlpMaxHeight: 0, ytdlpExtraArgs: '', ytdlpPlatformAuth: defaultPlatformAuth() },
       resolveAuthenticatedCookies: async () => ({
         path: join(request.directory, 'youtube.cookies.txt'),
         platform: 'YouTube',

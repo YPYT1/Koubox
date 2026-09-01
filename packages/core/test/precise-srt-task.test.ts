@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KouboxConfig } from '@koubox/shared'
 import { TaskManager } from '../src/tasks.js'
+import { testModelPaths } from './test-model-paths.js'
 
 const temporaryRoots: string[] = []
 
@@ -32,7 +33,7 @@ describe('precise SRT task contract', () => {
       join(root, 'voice.wav'),
       '',
       join(root, 'outputs'),
-      { asr: '', translation: '' },
+      testModelPaths(),
       'ja',
       'force'
     )
@@ -40,6 +41,11 @@ describe('precise SRT task contract', () => {
     expect(task.mode).toBe('asr-only')
     expect(task.requestedLanguage).toBe('ja')
     expect(task.speechRateMode).toBe('force')
+    expect(task.asrExecution).toEqual({
+      selectedModel: 'faster-whisper-large-v3',
+      effectiveModel: 'faster-whisper-large-v3',
+      fallbackUsed: false
+    })
     expect(existsSync(task.taskDirectory)).toBe(true)
 
     const restoredManager = new TaskManager(options)
@@ -47,12 +53,13 @@ describe('precise SRT task contract', () => {
     const restored = restoredManager.list().find((item) => item.taskId === task.taskId)
     expect(restored?.requestedLanguage).toBe('ja')
     expect(restored?.speechRateMode).toBe('force')
+    expect(restored?.asrExecution).toEqual(task.asrExecution)
 
     const aligned = manager.startRequirementTwo(
       join(root, 'voice-with-script.wav'),
       '用户文案',
       join(root, 'outputs'),
-      { asr: '', translation: '' },
+      testModelPaths(),
       'zh-Hant',
       'force'
     )

@@ -3,9 +3,19 @@ import { freemem, totalmem } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, SystemMemoryStatus, VendorToolCheck, YtdlpCookiePlatformId } from '@koubox/shared'
+import {
+  ASR_MODEL_CATALOG,
+  asAsrModelId
+} from '@koubox/shared'
 import { defaultPlatformAuth, normalizeKouboxConfigPaths } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
-import { inspectYtdlpRuntime, type ActiveYtdlpRuntime } from './ytdlp-update.js'
+import {
+  migrateLegacyAsrModelDirectory,
+  resolveAsrExecutionPlan,
+  resolveAsrModelPaths,
+  type AsrExecutionPlan
+} from './asr-execution.js'
+import { inspectYtdlpRuntimeFast, type ActiveYtdlpRuntime } from './ytdlp-update.js'
 
 const log = createLogger('runtime')
 const executableVersionCache = new Map<string, string>()
@@ -20,7 +30,6 @@ const asrModelFiles = [
 ]
 
 const legacyAsrModelDirectory = 'whisperlargev3turbo'
-const fasterWhisperAsrModelDirectory = 'faster-whisper-large-v3'
 
 const translationModelFiles = [
   'chat_template.jinja', 'config.json', 'configuration.json', 'generation_config.json',
@@ -112,15 +121,18 @@ export class RuntimeStore {
     const config = { ...this.defaults, ...parsed }
     const migratedModelsDirectory = migrateLegacyDevelopmentModelPath(config.modelsDirectory, this.defaults.modelsDirectory)
     const migratedAsrModelDirectory = migrateLegacyDevelopmentModelPath(config.asrModelDirectory, this.defaults.modelsDirectory)
+    const migratedAsrLightModelDirectory = migrateLegacyDevelopmentModelPath(config.asrLightModelDirectory, this.defaults.modelsDirectory)
     const migratedTranslationModelDirectory = migrateLegacyDevelopmentModelPath(config.translationModelDirectory, this.defaults.modelsDirectory)
     const migratedDemucsModelDirectory = migrateLegacyDevelopmentModelPath(config.demucsModelDirectory, this.defaults.modelsDirectory)
     const migratedLegacyModelPaths =
       migratedModelsDirectory !== config.modelsDirectory ||
       migratedAsrModelDirectory !== config.asrModelDirectory ||
+      migratedAsrLightModelDirectory !== config.asrLightModelDirectory ||
       migratedTranslationModelDirectory !== config.translationModelDirectory ||
       migratedDemucsModelDirectory !== config.demucsModelDirectory
     config.modelsDirectory = migratedModelsDirectory
-    config.asrModelDirectory = migratedAsrModelDirectory
+    config.asrModelDirectory = migrateLegacyAsrModelDirectory(migratedAsrModelDirectory, migratedModelsDirectory)
+    config.asrLightModelDirectory = migratedAsrLightModelDirectory || join(migratedModelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].directoryName)
     config.translationModelDirectory = migratedTranslationModelDirectory
     config.demucsModelDirectory = migratedDemucsModelDirectory
     if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
@@ -128,8 +140,12 @@ export class RuntimeStore {
     }
     const usesLegacyAsrModel = basename(config.asrModelDirectory).toLowerCase() === legacyAsrModelDirectory
     if (!config.asrModelDirectory || usesLegacyAsrModel) {
-      config.asrModelDirectory = join(config.modelsDirectory, fasterWhisperAsrModelDirectory)
+      config.asrModelDirectory = join(config.modelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3'].directoryName)
     }
+    if (!config.asrLightModelDirectory) {
+      config.asrLightModelDirectory = join(config.modelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].directoryName)
+    }
+    config.defaultAsrModel = asAsrModelId(config.defaultAsrModel, this.defaults.defaultAsrModel)
     if (!config.translationModelDirectory) config.translationModelDirectory = join(config.modelsDirectory, 'HYMT21.8B')
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
@@ -334,9 +350,18 @@ function inspectDemucs(directory: string): ModelCheck {
   }
 }
 
-export function resolveModelPaths(config: KouboxConfig): { asr: string; translation: string; demucs: string } {
+export function resolveModelPaths(config: KouboxConfig): {
+  asr: string
+  asrLight: string
+  asrPlan: AsrExecutionPlan
+  translation: string
+  demucs: string
+} {
+  const asrPaths = resolveAsrModelPaths(config)
   return {
-    asr: config.asrModelDirectory || join(config.modelsDirectory, fasterWhisperAsrModelDirectory),
+    asr: asrPaths.asr,
+    asrLight: asrPaths.asrLight,
+    asrPlan: resolveAsrExecutionPlan(config),
     translation: config.translationModelDirectory || join(config.modelsDirectory, 'HYMT21.8B'),
     demucs: config.demucsModelDirectory || join(config.modelsDirectory, 'demucs')
   }
@@ -406,11 +431,14 @@ export function getRuntimeStatus(
   const activeYtdlpExecutable = activeYtdlp?.executable ?? vendorPaths.ytdlpExecutable
   const ytdlpStartedAt = Date.now()
   const ytdlpRuntime = activeYtdlp?.runtimeInspection
-    ?? inspectYtdlpRuntime(activeYtdlpExecutable, vendorPaths.denoExecutable)
+    ?? inspectYtdlpRuntimeFast(activeYtdlpExecutable, vendorPaths.denoExecutable)
   log.debug('yt-dlp 运行时诊断完成', { durationMs: Date.now() - ytdlpStartedAt, cached: Boolean(activeYtdlp?.runtimeInspection), executable: activeYtdlpExecutable, denoExecutable: vendorPaths.denoExecutable, version: ytdlpRuntime.version, ejsVersion: ytdlpRuntime.ejsVersion, jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion, providerReady: ytdlpRuntime.providerReady })
   const gpu = detectGpu()
+  const largeV3 = ASR_MODEL_CATALOG['faster-whisper-large-v3']
+  const turbo = ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo']
   const models = [
-    inspectModel('asr', 'Faster-Whisper Large v3（FP16）', modelPaths.asr, asrModelFiles, 'ctranslate2'),
+    inspectModel(largeV3.runtimeModelId, largeV3.label, modelPaths.asr, asrModelFiles, 'ctranslate2'),
+    inspectModel(turbo.runtimeModelId, turbo.label, modelPaths.asrLight, asrModelFiles, 'ctranslate2'),
     inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
     inspectDemucs(modelPaths.demucs)
   ]

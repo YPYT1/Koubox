@@ -55,7 +55,7 @@ describe.runIf(INTEGRATION_ENABLED)('platform download integration', () => {
       directory,
       fileStem,
       vendor: { ytdlpExecutable, ffmpegExecutable, denoExecutable },
-      config: { ytdlpProxy: process.env.KOUBOX_PROXY ?? '', ytdlpMaxHeight: 720, ytdlpExtraArgs: '' },
+      config: { ytdlpProxy: process.env.KOUBOX_PROXY ?? '', ytdlpMaxHeight: 720, ytdlpExtraArgs: '', ytdlpPlatformAuth: defaultPlatformAuth() },
       updateProgress: () => undefined,
       runCommand: async (command, args, onLine, commandLabel) => {
         const { spawn } = await import('node:child_process')

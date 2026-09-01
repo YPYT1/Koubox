@@ -11,7 +11,10 @@ const temporaryRoots: string[] = []
 function defaults(root: string): KouboxConfig {
   return {
     modelsDirectory: join(root, 'models'), outputDirectory: join(root, 'outputs'),
-    asrModelDirectory: join(root, 'models', 'asr'), translationModelDirectory: join(root, 'models', 'translation'),
+    asrModelDirectory: join(root, 'models', 'asr'),
+    asrLightModelDirectory: join(root, 'models', 'asr-turbo'),
+    defaultAsrModel: 'faster-whisper-large-v3-turbo',
+    translationModelDirectory: join(root, 'models', 'translation'),
     demucsModelDirectory: join(root, 'models', 'demucs'), ytdlpDirectory: join(root, 'vendor', 'yt-dlp'),
     ffmpegDirectory: join(root, 'vendor', 'ffmpeg'), denoDirectory: join(root, 'vendor', 'deno'),
     translationTargetLanguage: 'zh-Hans', asrLanguage: 'auto', openOutputOnComplete: false,

@@ -9,6 +9,7 @@ import {
   PauseCircle
 } from '@phosphor-icons/react'
 import type { KouboxConfig, RuntimeStatus } from '@koubox/shared'
+import { ASR_MODEL_CATALOG } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { GpuMemoryLiveChart, SystemMemoryLiveChart } from '../components/common/MemoryLiveChart'
 
@@ -22,18 +23,20 @@ type ModelsPageProps = {
 }
 
 function modelBadge(id: string): string {
-  if (id === 'asr') return '语音识别'
+  if (id === 'asr' || id === 'asr-turbo') return '语音识别'
   if (id === 'translation') return '翻译'
   if (id === 'demucs') return '去除背景音乐'
   return id
 }
 
-function modelFormatBadge(format: RuntimeStatus['models'][number]['format']): string {
-  return format === 'ctranslate2' ? 'CTranslate2 · FP16' : 'Transformers'
+function modelFormatBadge(model: RuntimeStatus['models'][number]): string {
+  if (model.id === 'asr-turbo') return ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].formatLabel
+  return model.format === 'ctranslate2' ? 'CTranslate2 · FP16' : 'Transformers'
 }
 
-function modelPathKey(id: string): 'asrModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory' {
+function modelPathKey(id: string): 'asrModelDirectory' | 'asrLightModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory' {
   if (id === 'asr') return 'asrModelDirectory'
+  if (id === 'asr-turbo') return 'asrLightModelDirectory'
   if (id === 'translation') return 'translationModelDirectory'
   return 'demucsModelDirectory'
 }
@@ -69,7 +72,7 @@ export function ModelsPage({
   }
 
   const handleChooseModel = async (
-    key: 'asrModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory',
+    key: 'asrModelDirectory' | 'asrLightModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory',
     title: string
   ) => {
     if (!config) return
@@ -228,7 +231,7 @@ export function ModelsPage({
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <h4>{model.label}</h4>
                     <span className="panel-title-badge">{modelBadge(model.id)}</span>
-                    <span className="panel-title-badge">{modelFormatBadge(model.format)}</span>
+                    <span className="panel-title-badge">{modelFormatBadge(model)}</span>
                     {shelved && (
                       <span
                         className="panel-title-badge"

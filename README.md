@@ -43,6 +43,7 @@ cd python
 在仓库根目录 `models/` 下放置（不纳入 Git）：
 
 - `faster-whisper-large-v3/` — ASR / 语音转文字 / 爆款素材
+- `faster-whisper-large-v3-turbo-int8-ct2/` — 默认 ASR 模型 / 资源不足时的轻量回退模型
 - `HYMT21.8B/` — 翻译（当前 UI 未启用）
 - `demucs/` — 人声分离（可为空目录，运行时下载权重）
 
@@ -59,9 +60,13 @@ pnpm pack:portable    # 便携包：预检 → 打包 → 后检（推荐发布�
 # 仅预检（改打包脚本后快速验证）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1 -SkipPackage
 
-# 六个工具端到端冒烟（需 GPU、模型、vendor、python venv）
+# 六个工具端到端冒烟（需 GPU、turbo 模型、vendor、python venv，以及桌面“文案”目录中的真实口播）
 pnpm smoke
 ```
+
+冒烟默认从 `%USERPROFILE%\Desktop\文案` 自动选择 WAV 与对应 TXT。也可通过
+`KOUBOX_SMOKE_FIXTURE_ROOT` 指定素材根目录，或同时设置
+`KOUBOX_SMOKE_SPEECH_WAV` 与 `KOUBOX_SMOKE_SOURCE_TEXT` 覆盖单个样本。
 
 **打包注意：** 请使用 `pnpm pack:portable`，不要单独 `pnpm package`。后者跳过预检/后检钩子，易漏文件或运行时依赖。
 

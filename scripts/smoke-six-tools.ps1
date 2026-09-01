@@ -8,3 +8,4 @@ $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $root
 $env:KOUBOX_SMOKE = '1'
 pnpm --filter @koubox/core exec vitest run test/smoke-six-tools.integration.test.ts
+exit $LASTEXITCODE

@@ -334,6 +334,14 @@ export type PreciseSrtDiagnostics = {
   wallTimeS?: number
 }
 
+export type AsrExecutionSummary = {
+  selectedModel: import('./asr-models.js').AsrModelId
+  effectiveModel: import('./asr-models.js').AsrModelId
+  fallbackUsed: boolean
+  fallbackReason?: 'resource-exhausted'
+  notice?: string
+}
+
 export type TaskSnapshot = {
   taskId: string
   kind: TaskKind
@@ -343,6 +351,8 @@ export type TaskSnapshot = {
   speechRateMode?: SpeechRateMode
   speechRateTriggered?: boolean
   preciseSrtDiagnostics?: PreciseSrtDiagnostics
+  /** 语音识别任务的模型选择与自动回退结果；旧任务可缺省。 */
+  asrExecution?: AsrExecutionSummary
   /** req1：链接下载或本地上传；缺省按 url 以 http(s) 判断 */
   sourceMode?: MaterialsSourceMode
   /** req1：是否执行 Demucs 去除背景音乐（完整 BGM 素材效果较好） */
@@ -404,6 +414,15 @@ export function platformAuthIdFromUrlPlatform(platform: KouboxPlatform): YtdlpCo
   if (platform === 'Instagram') return 'instagram'
   if (platform === 'Facebook') return 'facebook'
   return undefined
+}
+
+export function isPlatformAuthConfigured(platform: KouboxPlatform, auth?: PlatformAuthConfig): boolean {
+  if (!auth) return false
+  const id = platformAuthIdFromUrlPlatform(platform)
+  if (!id) return false
+  const entry = auth[id]
+  if (entry.mode === 'paste') return Boolean(entry.cookies.trim())
+  return entry.mode === 'builtin'
 }
 
 export type PlatformCookieRule = {
@@ -577,10 +596,28 @@ export const PLATFORM_HOMEPAGES: Record<YtdlpCookiePlatformId, string> = {
   facebook: 'https://www.facebook.com/'
 }
 
+export type {
+  AsrComputeType,
+  AsrModelCatalogEntry,
+  AsrModelId
+} from './asr-models.js'
+export {
+  ASR_MODEL_CATALOG,
+  ASR_MODEL_OPTIONS,
+  DEFAULT_ASR_MODEL,
+  asAsrModelId,
+  asrFallbackNoticeMessage,
+  asrResourceErrorUserMessage,
+  isAsrResourceError,
+  resolveAsrComputeType
+} from './asr-models.js'
+
 export type KouboxConfig = {
   modelsDirectory: string
   outputDirectory: string
   asrModelDirectory: string
+  asrLightModelDirectory: string
+  defaultAsrModel: import('./asr-models.js').AsrModelId
   translationModelDirectory: string
   demucsModelDirectory: string
   ytdlpDirectory: string
@@ -621,6 +658,7 @@ export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
     modelsDirectory: normalizeOsPath(config.modelsDirectory),
     outputDirectory: normalizeOsPath(config.outputDirectory),
     asrModelDirectory: normalizeOsPath(config.asrModelDirectory),
+    asrLightModelDirectory: normalizeOsPath(config.asrLightModelDirectory),
     translationModelDirectory: normalizeOsPath(config.translationModelDirectory),
     demucsModelDirectory: normalizeOsPath(config.demucsModelDirectory),
     ytdlpDirectory: normalizeOsPath(config.ytdlpDirectory),
@@ -640,11 +678,14 @@ export function toUserTaskMessage(raw: string): string {
   const text = raw.trim()
   if (!text) return '任务失败，请重试。'
 
-  if (/CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够/i.test(text)) {
-    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+  if (/CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够|内存不足|MemoryError|DefaultCPUAllocator|can't allocate memory/i.test(text)) {
+    if (/faster-whisper-large-v3-turbo|轻量模型|最轻量/i.test(text)) {
+      return '显存或内存不足。当前已使用最轻量的语音识别模型 faster-whisper-large-v3-turbo，请关闭其他占用 GPU 的程序后重试，或缩短音频长度。'
+    }
+    return '显卡显存或系统内存不足，请先关闭其他占用 GPU 的程序后重试。'
   }
   if (/torch_dtype.*deprecated|Use 'dtype' instead/i.test(text)) {
-    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+    return '本地模型运行失败，请查看日志。'
   }
   if (/没有音轨|没有原始音频流|没有音频流/.test(text)) {
     return '影片中没有音轨。'

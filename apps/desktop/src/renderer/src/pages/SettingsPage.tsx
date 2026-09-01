@@ -15,6 +15,7 @@ import {
 } from '@phosphor-icons/react'
 import type {
   AsrLanguage,
+  AsrModelId,
   KouboxConfig,
   PlatformAuthMode,
   RuntimeStatus,
@@ -24,7 +25,7 @@ import type {
   YtdlpCookieStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
-import { defaultPlatformAuth } from '@koubox/shared'
+import { ASR_MODEL_OPTIONS, defaultPlatformAuth } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 
@@ -513,6 +514,18 @@ export function SettingsPage({
               onChange={(e) => onChange({ ...config, asrLanguage: e.target.value as AsrLanguage })}
             >
               {ASR_LANGUAGE_OPTIONS.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
+          </FormField>
+
+          <FormField label="默认识别模型" hint="爆款素材获取、精准 SRT、语音转文字共用。显存不足时会自动从 Large v3 回退到 turbo。">
+            <select
+              className="input-text"
+              value={config.defaultAsrModel}
+              onChange={(e) => onChange({ ...config, defaultAsrModel: e.target.value as AsrModelId })}
+            >
+              {ASR_MODEL_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>

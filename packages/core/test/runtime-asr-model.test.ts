@@ -17,6 +17,8 @@ function defaults(modelsDirectory: string): KouboxConfig {
     modelsDirectory,
     outputDirectory: join(modelsDirectory, 'outputs'),
     asrModelDirectory: join(modelsDirectory, 'faster-whisper-large-v3'),
+    asrLightModelDirectory: join(modelsDirectory, 'faster-whisper-large-v3-turbo-int8-ct2'),
+    defaultAsrModel: 'faster-whisper-large-v3-turbo',
     translationModelDirectory: join(modelsDirectory, 'HYMT21.8B'),
     demucsModelDirectory: join(modelsDirectory, 'demucs'),
     ytdlpDirectory: join(modelsDirectory, 'yt-dlp'),
@@ -71,6 +73,8 @@ describe('Faster-Whisper ASR configuration', () => {
     const config = new RuntimeStore(runtimeFile, defaults(modelsDirectory)).read()
 
     expect(config.asrModelDirectory).toBe(join(modelsDirectory, 'faster-whisper-large-v3'))
+    expect(config.asrLightModelDirectory).toBe(join(modelsDirectory, 'faster-whisper-large-v3-turbo-int8-ct2'))
+    expect(config.defaultAsrModel).toBe('faster-whisper-large-v3-turbo')
     expect(existsSync(runtimeFile)).toBe(true)
   })
 

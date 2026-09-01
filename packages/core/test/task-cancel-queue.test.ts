@@ -3,7 +3,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KouboxConfig } from '@koubox/shared'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { TaskManager } from '../src/tasks.js'
+import { testModelPaths } from './test-model-paths.js'
 
 const temporaryRoots: string[] = []
 
@@ -23,7 +25,7 @@ function createManager(root: string, downloadTikTokPublic: () => Promise<string>
       pythonExecutable: '',
       outputDirectory: root,
       translationTargetLanguage: 'zh-Hans',
-      ytdlpPlatformAuth: {}
+      ytdlpPlatformAuth: defaultPlatformAuth()
     } as KouboxConfig),
     resolveVendor: () => ({
       ytdlpExecutable: join(root, 'missing-yt-dlp.exe'),
@@ -54,12 +56,12 @@ describe('task cancel queue', () => {
     const first = manager.startRequirementOne(
       'https://www.tiktok.com/@example/video/7673765267775687956',
       outputRoot,
-      { asr: '', translation: '' }
+      testModelPaths()
     )
     const second = manager.startRequirementOne(
       'https://www.tiktok.com/@example/video/7652209936830582030',
       outputRoot,
-      { asr: '', translation: '' }
+      testModelPaths()
     )
 
     await expect.poll(() => manager.get(first.taskId)?.status, { timeout: 3_000 }).toBe('running')

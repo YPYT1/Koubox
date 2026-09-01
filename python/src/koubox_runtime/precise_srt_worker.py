@@ -45,16 +45,16 @@ from .protocol import fail, send
 _MODEL_CACHE: dict[tuple[str, str, str], object] = {}
 
 
-def _load_model(model_directory: str):
+def _load_model(model_directory: str, compute_type: str = "float16"):
     import stable_whisper
 
-    key = (str(Path(model_directory).resolve()), "cuda", "float16")
+    key = (str(Path(model_directory).resolve()), "cuda", compute_type)
     cached = _MODEL_CACHE.get(key)
     if cached is None:
         cached = stable_whisper.load_faster_whisper(
             model_directory,
             device="cuda",
-            compute_type="float16",
+            compute_type=compute_type,
         )
         _MODEL_CACHE[key] = cached
     return cached
@@ -87,6 +87,7 @@ def run(
     language: str,
     speech_rate_mode: str,
     ffmpeg_executable: str,
+    compute_type: str = "float16",
 ) -> None:
     try:
         validate_request(
@@ -106,7 +107,7 @@ def run(
 
         send("progress", stage="asr", percent=5, message="正在加载精准 SRT 模型")
         started_at = time.perf_counter()
-        model = _load_model(model_directory)
+        model = _load_model(model_directory, compute_type)
         requested_language = normalize_language(language)
         pauses, audio_duration_s, voiced_duration_s = _detect_pauses(audio_path)
         diagnostics: dict[str, object] = {
