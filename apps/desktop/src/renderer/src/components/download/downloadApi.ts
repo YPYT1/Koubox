@@ -25,23 +25,22 @@ export type MaterialsPipelineInput = {
   outputDirectory: string
   url?: string
   videoPath?: string
+  separateVocals?: boolean
 }
 
 async function postVideoMaterialsPipeline(path: string, input: MaterialsPipelineInput): Promise<TaskSnapshot> {
   if (!input.outputDirectory.trim()) throw new Error('请选择保存目录。')
+  const payload: Record<string, string | boolean> = {
+    outputDirectory: input.outputDirectory.trim(),
+    separateVocals: input.separateVocals === true
+  }
   const videoPath = input.videoPath?.trim() ?? ''
   if (videoPath) {
     const checked = assertLocalVideoPath(videoPath)
-    return window.koubox.post<TaskSnapshot>(path, {
-      videoPath: checked,
-      outputDirectory: input.outputDirectory.trim()
-    })
+    return window.koubox.post<TaskSnapshot>(path, { ...payload, videoPath: checked })
   }
   const checked = assertDownloadableVideoUrl(input.url ?? '')
-  return window.koubox.post<TaskSnapshot>(path, {
-    url: checked.url,
-    outputDirectory: input.outputDirectory.trim()
-  })
+  return window.koubox.post<TaskSnapshot>(path, { ...payload, url: checked.url })
 }
 
 /** 下载或本地导入 + 后续素材流水线：爆款素材获取 */

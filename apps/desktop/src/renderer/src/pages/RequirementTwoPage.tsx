@@ -63,7 +63,7 @@ export function RequirementTwoPage({
   const [inputMode, setInputMode] = useState<SrtInputMode>('with-script')
   const [mediaPath, setMediaPath] = useState('')
   const [sourceText, setSourceText] = useState('')
-  const [language, setLanguage] = useState<AsrLanguage>('auto')
+  const [language, setLanguage] = useState<AsrLanguage>('ja')
   const [speechRateMode, setSpeechRateMode] = useState<SpeechRateMode>('auto')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
   const [starting, setStarting] = useState(false)
@@ -169,7 +169,10 @@ export function RequirementTwoPage({
     <div className="page-container viral-page srt-page">
       <div className="page-header-block">
         <h1>精准 SRT 对齐</h1>
-        <p>导入录音与口播文案，或纯音频识别，生成可直接导入剪映的标准 SRT 字幕</p>
+        <p>
+          <span className="srt-page-recommend">推荐选有文案模式，时间轴更准</span>
+          ；无文案时也可纯音频识别，输出可直接导入剪映的标准 SRT
+        </p>
       </div>
 
       <div className="viral-top-grid">
@@ -209,10 +212,7 @@ export function RequirementTwoPage({
             browseDefaultPath={outputDirectory}
           />
 
-          <FormField
-            label="音频语言"
-            hint="自动会先检测语言；已知语言时手动选择可减少误判。"
-          >
+          <FormField label="音频语言">
             <select
               className="input-text"
               value={language}
@@ -229,10 +229,7 @@ export function RequirementTwoPage({
           </FormField>
 
           {inputMode === 'asr-only' ? (
-            <FormField
-              label="快速语音处理"
-              hint="自动仅处理快速且低置信度的片段；最终时间轴始终使用原始音频。"
-            >
+            <FormField label="语速复识别" hint="说得很快时更有用，一般选自动就行">
               <select
                 className="input-text"
                 value={speechRateMode}
@@ -323,10 +320,11 @@ export function RequirementTwoPage({
           <span className="viral-preview-hint">上方试听音频，下方按句查看字幕与时间轴</span>
         </div>
 
-        <div className="speech-audio-row">
+        <div className="speech-audio-row is-centered">
           <div className="viral-audio-slot speech-audio-slot">
             <AudioPreviewSlot
               audioPath={previewAudioPath}
+              adaptiveWidth
               onError={(message) => onShowToast(message, 'error')}
             />
           </div>

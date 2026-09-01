@@ -123,7 +123,14 @@ function formatSegmentTime(seconds: number): string {
 
 }
 
+function syncPairedScroll(source: HTMLElement, target: HTMLElement) {
+  const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+  const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+  if (sourceMax === 0 && targetMax === 0) return
 
+  const ratio = sourceMax > 0 ? source.scrollTop / sourceMax : 0
+  target.scrollTop = ratio * targetMax
+}
 
 export function SpeechToTextPage({
 
@@ -150,6 +157,7 @@ export function SpeechToTextPage({
   const [textExpanded, setTextExpanded] = useState(false)
 
   const [copied, setCopied] = useState(false)
+  const [copiedSegmentIndex, setCopiedSegmentIndex] = useState<number | null>(null)
 
   const [audioPlaying, setAudioPlaying] = useState(false)
 
@@ -161,7 +169,11 @@ export function SpeechToTextPage({
 
   const audioRef = useRef<HTMLAudioElement>(null)
 
+  const segmentsScrollRef = useRef<HTMLDivElement>(null)
 
+  const plainTextScrollRef = useRef<HTMLDivElement>(null)
+
+  const syncingScrollRef = useRef(false)
 
   const { task, setTask, cancel, isTaskRunning } = usePipelineTask({
 
@@ -234,6 +246,33 @@ export function SpeechToTextPage({
   const audioSrc = previewAudioPath ? window.koubox.mediaUrl(previewAudioPath) : ''
 
   const segments = task?.transcript?.segments ?? []
+
+  useEffect(() => {
+    segmentsScrollRef.current?.scrollTo({ top: 0 })
+    plainTextScrollRef.current?.scrollTo({ top: 0 })
+  }, [segments.length, task?.taskId])
+
+  const handleSegmentsScroll = () => {
+    const source = segmentsScrollRef.current
+    const target = plainTextScrollRef.current
+    if (!source || !target || syncingScrollRef.current) return
+    syncingScrollRef.current = true
+    syncPairedScroll(source, target)
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false
+    })
+  }
+
+  const handlePlainTextScroll = () => {
+    const source = plainTextScrollRef.current
+    const target = segmentsScrollRef.current
+    if (!source || !target || syncingScrollRef.current) return
+    syncingScrollRef.current = true
+    syncPairedScroll(source, target)
+    requestAnimationFrame(() => {
+      syncingScrollRef.current = false
+    })
+  }
 
   const transcriptText = segments
 
@@ -334,11 +373,22 @@ export function SpeechToTextPage({
     await navigator.clipboard.writeText(transcriptText)
 
     setCopied(true)
+    setCopiedSegmentIndex(null)
 
     window.setTimeout(() => setCopied(false), 900)
 
-    onShowToast('原文已复制到剪贴板', 'success')
+    onShowToast('纯文本已复制（不含时间轴）', 'success')
 
+  }
+
+  const handleCopySegment = async (text: string, index: number) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    await navigator.clipboard.writeText(trimmed)
+    setCopied(false)
+    setCopiedSegmentIndex(index)
+    window.setTimeout(() => setCopiedSegmentIndex(null), 900)
+    onShowToast('已复制该句纯文本', 'success')
   }
 
 
@@ -482,7 +532,7 @@ export function SpeechToTextPage({
       <section className="panel-box viral-preview-panel">
         <div className="panel-title">
           <h3>结果预览</h3>
-          <span className="viral-preview-hint">上方试听音频，下方查看分句原文与时间轴</span>
+          <span className="viral-preview-hint">左侧按时间轴展示分句，右侧为纯文本；点击复制不含时间</span>
         </div>
 
         <div className="speech-audio-row">
@@ -592,29 +642,67 @@ export function SpeechToTextPage({
                 onClick={() => void handleCopy()}
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? '已复制' : '复制全文'}
+                {copied ? '已复制' : '复制纯文本'}
               </button>
             </div>
           </div>
 
           {segments.length > 0 ? (
-            <div className="segments-table speech-segments-table">
-              {segments.map((seg, idx) => (
-                <div className="segment-row" key={`${seg.start}-${idx}`}>
-                  <span className="segment-index">#{idx + 1}</span>
-                  <span className="segment-time">
-                    {formatSegmentTime(seg.start)} → {formatSegmentTime(seg.end)}
-                  </span>
-                  <span className="segment-text">{seg.text}</span>
+            <div className="speech-transcript-grid">
+              <div className="speech-transcript-col">
+                <div className="speech-transcript-col-head">分句时间轴</div>
+                <div
+                  ref={segmentsScrollRef}
+                  className="segments-table speech-segments-table"
+                  onScroll={handleSegmentsScroll}
+                >
+                  {segments.map((seg, idx) => (
+                    <button
+                      type="button"
+                      className={`segment-row speech-segment-row ${copiedSegmentIndex === idx ? 'is-copied' : ''}`}
+                      key={`${seg.start}-${idx}`}
+                      data-sync-row={idx}
+                      onClick={() => void handleCopySegment(seg.text, idx)}
+                      title="点击复制该句纯文本（不含时间）"
+                    >
+                      <span className="segment-index">#{idx + 1}</span>
+                      <span className="segment-time">
+                        {formatSegmentTime(seg.start)} → {formatSegmentTime(seg.end)}
+                      </span>
+                      <span className="segment-text">{seg.text}</span>
+                    </button>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div className="speech-transcript-col">
+                <div className="speech-transcript-col-head">纯文本</div>
+                <div
+                  ref={plainTextScrollRef}
+                  className="viral-line-list speech-plain-text-list"
+                  onScroll={handlePlainTextScroll}
+                >
+                  {segments.map((seg, idx) => (
+                    <button
+                      type="button"
+                      className={`viral-line-row speech-plain-line ${copiedSegmentIndex === idx ? 'is-copied' : ''}`}
+                      key={`plain-${seg.start}-${idx}`}
+                      data-sync-row={idx}
+                      onClick={() => void handleCopySegment(seg.text, idx)}
+                      title="点击复制该句"
+                    >
+                      <span className="viral-line-index">{idx + 1}</span>
+                      <span className="viral-line-text">{seg.text.trim() || '—'}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           ) : (
             <div className="viral-line-list speech-text-empty">
               <div className="viral-slot-empty">
                 {isTaskRunning
-                  ? '正在识别，完成后按句展示原文与时间轴'
-                  : '识别完成后，分句原文与时间轴将显示在此'}
+                  ? '正在识别，完成后左侧展示时间轴、右侧展示纯文本'
+                  : '识别完成后，左侧按时间轴展示分句，右侧展示纯文本'}
               </div>
             </div>
           )}

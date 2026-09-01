@@ -67,16 +67,12 @@ export class RuntimeStore {
   ) {}
 
   private applyPinned(config: KouboxConfig): KouboxConfig {
-    // 总是锁定下载工具路径（yt-dlp、deno）
-    const bundledDownloadTools = {
+    // 打包后锁定工具路径，但允许用户自定义模型路径
+    if (!this.pinBundledPaths) return config
+    return {
       ...config,
       ytdlpDirectory: this.defaults.ytdlpDirectory,
-      denoDirectory: this.defaults.denoDirectory
-    }
-    // 打包后：额外锁定 ffmpeg 和 Python，但允许用户自定义模型路径
-    if (!this.pinBundledPaths) return bundledDownloadTools
-    return {
-      ...bundledDownloadTools,
+      denoDirectory: this.defaults.denoDirectory,
       ffmpegDirectory: this.defaults.ffmpegDirectory,
       pythonExecutable: this.defaults.pythonExecutable
     }

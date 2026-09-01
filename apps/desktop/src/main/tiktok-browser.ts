@@ -24,7 +24,7 @@ function rankCapturedMedia(candidates: CapturedMedia[], videoId: string | undefi
 }
 
 /** Anonymous, isolated Chromium fallback for public TikTok media. */
-export async function resolveTikTokBrowserMedia(url: string, proxy: string): Promise<PublicMediaResolution> {
+export async function resolveTikTokBrowserMedia(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution> {
   const canonicalUrl = normalizeTikTokVideoUrl(url)
   const partition = `koubox-public-media-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const isolatedSession = session.fromPartition(partition, { cache: false })
@@ -59,6 +59,11 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
     callback({ requestHeaders: details.requestHeaders })
   })
   let disposing = false
+  const onAbort = () => {
+    disposing = true
+    if (!window.isDestroyed()) window.destroy()
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
   window.on('close', (event) => {
     if (!disposing) event.preventDefault()
   })
@@ -67,6 +72,7 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
     const deadline = Date.now() + 50_000
     let firstMediaAt = 0
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new Error('任务已取消。')
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
         const videoUrls = await window.webContents.executeJavaScript(`
           Array.from(document.querySelectorAll('video'))
@@ -104,6 +110,7 @@ export async function resolveTikTokBrowserMedia(url: string, proxy: string): Pro
       cookieHeader: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     isolatedSession.webRequest.onBeforeRequest(null)
     isolatedSession.webRequest.onBeforeSendHeaders(null)
     disposing = true

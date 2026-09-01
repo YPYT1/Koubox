@@ -210,7 +210,7 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.ytdlpPlatformAuth).toEqual(existingAuth)
   })
 
-  it('always pins yt-dlp and Deno to bundled runtime while leaving FFmpeg configurable in development', () => {
+  it('leaves tool paths configurable in development while pinning them when packaged', () => {
     const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-bundled-download-tools-'))
     temporaryRoots.push(root)
     const runtimeFile = join(root, 'runtime.json')
@@ -218,11 +218,17 @@ describe('Faster-Whisper ASR configuration', () => {
     const custom = defaults(join(root, 'custom'))
     writeFileSync(runtimeFile, JSON.stringify(custom), 'utf8')
 
-    const config = new RuntimeStore(runtimeFile, bundled).read()
+    const devConfig = new RuntimeStore(runtimeFile, bundled).read()
 
-    expect(config.ytdlpDirectory).toBe(bundled.ytdlpDirectory)
-    expect(config.denoDirectory).toBe(bundled.denoDirectory)
-    expect(config.ffmpegDirectory).toBe(custom.ffmpegDirectory)
+    expect(devConfig.ytdlpDirectory).toBe(custom.ytdlpDirectory)
+    expect(devConfig.denoDirectory).toBe(custom.denoDirectory)
+    expect(devConfig.ffmpegDirectory).toBe(custom.ffmpegDirectory)
+
+    const packagedConfig = new RuntimeStore(runtimeFile, bundled, true).read()
+
+    expect(packagedConfig.ytdlpDirectory).toBe(bundled.ytdlpDirectory)
+    expect(packagedConfig.denoDirectory).toBe(bundled.denoDirectory)
+    expect(packagedConfig.ffmpegDirectory).toBe(bundled.ffmpegDirectory)
   })
 
   it('writes back stale yt-dlp and Deno paths so the old checkout is removed from runtime.json', () => {

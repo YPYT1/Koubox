@@ -43,4 +43,15 @@ describe('task output directories', () => {
     }
     expect(new Set([videoTask.outputDirectory, audioTask.outputDirectory, speechTask.outputDirectory]).size).toBe(3)
   })
+
+  it('stores req1 separateVocals flag explicitly', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-task-separate-'))
+    temporaryRoots.push(root)
+    const outputRoot = join(root, 'outputs')
+    const manager = createManager(root)
+    const offTask = manager.startRequirementOne('https://www.youtube.com/watch?v=off', outputRoot, { asr: '', translation: '' }, 'url', false)
+    const onTask = manager.startRequirementOne('https://www.youtube.com/watch?v=on', outputRoot, { asr: '', translation: '' }, 'url', true)
+    expect(offTask.separateVocals).toBe(false)
+    expect(onTask.separateVocals).toBe(true)
+  })
 })

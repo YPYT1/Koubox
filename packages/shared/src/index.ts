@@ -647,7 +647,7 @@ export function toUserTaskMessage(raw: string): string {
     return '显卡显存不够，请先关闭其他占用 GPU 的程序'
   }
   if (/没有音轨|没有原始音频流|没有音频流/.test(text)) {
-    return '下载的视频没有音轨，请更新该平台 Cookie 后重试，或稍后再试。'
+    return '影片中没有音轨。'
   }
 
   if (/Deno (?:运行时不存在|运行时检测失败|SHA-256 校验失败)|未能启用 Deno JS Challenge Provider/i.test(text)) {
@@ -737,7 +737,6 @@ export function toUserTaskMessage(raw: string): string {
 }
 
 export {
-  describeParsedPlatformUrl,
   parsePlatformUrl,
   parsePlatformUrlOrThrow,
   type ParsedPlatformUrl,

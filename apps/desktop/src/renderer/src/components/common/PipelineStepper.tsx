@@ -1,4 +1,4 @@
-import { CheckCircle, CircleNotch, WarningCircle } from '@phosphor-icons/react'
+import { CircleNotch, WarningCircle } from '@phosphor-icons/react'
 import { formatTaskPercent } from '../../utils/progress'
 
 export interface StepItemDef {
@@ -44,9 +44,7 @@ export function PipelineStepper({
           <div key={step.stage} className="step-block">
             <div className={`step-item ${state}`} style={{ animationDelay: `${idx * 60}ms` }}>
               <div className="step-num">
-                {state === 'done' ? (
-                  <CheckCircle size={16} weight="fill" color="#10b981" />
-                ) : state === 'error' ? (
+                {state === 'error' ? (
                   <WarningCircle size={16} weight="fill" color="#ef4444" />
                 ) : state === 'current' ? (
                   <CircleNotch className="spin" size={16} color={accentColor} />

@@ -68,25 +68,37 @@ type RunCommand = (
   commandLabel?: string
 ) => Promise<void>
 
+export type VerifyMediaOptions = {
+  requireAudio?: boolean
+}
+
 export type VideoDownloadRequest = {
   url: string
   directory: string
   fileStem: string
   vendor: { ytdlpExecutable: string; ffmpegExecutable: string; denoExecutable: string }
   config: DownloadConfig
+  /** 缺省为 false；设为 true 时下载校验强制要求音轨 */
+  requireAudio?: boolean
   updateProgress(percent: number, message: string): void
+  isCancelled?(): boolean
+  signal?: AbortSignal
   runCommand: RunCommand
   resolvePublicMedia?: typeof resolvePublicMedia
   resolveFacebookPublicMedia?: typeof resolveFacebookPublicMedia
   downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
-  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
-  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
+  resolveTikTokBrowserMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution>
   resolveAuthenticatedCookies?(platform: DownloadableVideoPlatform): Promise<AuthenticatedCookieFile | undefined>
-  verifyMediaFile?(filePath: string, ffmpegExecutable: string): Promise<VerifiedMedia>
+  verifyMediaFile?(filePath: string, ffmpegExecutable: string, options?: VerifyMediaOptions): Promise<VerifiedMedia>
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function ensureActive(request: VideoDownloadRequest): void {
+  if (request.signal?.aborted || request.isCancelled?.()) throw new Error('任务已取消。')
 }
 
 function looksLikePublicNetworkFailure(message: string): boolean {
@@ -114,7 +126,16 @@ function splitExtraArgs(value: string): string[] {
 
 function ytdlpVideoFormat(maxHeight: number): string {
   const height = maxHeight > 0 ? `[height<=${maxHeight}]` : ''
-  return `bv*${height}+ba/b${height}/best${height}`
+  return `bv*${height}+ba/bv*${height}/b${height}/best${height}`
+}
+
+function ytdlpVideoOnlyFormat(maxHeight: number): string {
+  const height = maxHeight > 0 ? `[height<=${maxHeight}]` : ''
+  return `bv*${height}/b${height}/best${height}`
+}
+
+function looksLikeMissingAudioFailure(message: string): boolean {
+  return /没有音轨|没有原始音频流|没有音频流|no audio|audio.?only.*not available|unable to (?:download|extract).*audio|merg(?:e|ing).*(?:audio|formats).*fail|requested format is not available/i.test(message)
 }
 
 function publicYtdlpExtraArgs(value: string): string[] {
@@ -172,7 +193,12 @@ function parseProbeNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-export async function verifyDownloadedMedia(filePath: string, ffmpegExecutable: string): Promise<VerifiedMedia> {
+export async function verifyDownloadedMedia(
+  filePath: string,
+  ffmpegExecutable: string,
+  options: VerifyMediaOptions = {}
+): Promise<VerifiedMedia> {
+  const requireAudio = options.requireAudio === true
   const ffprobe = join(dirname(ffmpegExecutable), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe')
   if (!existsSync(ffprobe)) throw new Error(`ffprobe 不存在：${ffprobe}`)
   const result = spawnSync(ffprobe, [
@@ -191,20 +217,21 @@ export async function verifyDownloadedMedia(filePath: string, ffmpegExecutable: 
   const duration = parseProbeNumber(data.format?.duration)
   const size = parseProbeNumber(data.format?.size)
   if (!video) throw new Error('下载文件没有视频流。')
-  if (!audio) throw new Error('下载的视频没有音轨。')
+  if (!audio && requireAudio) throw new Error('下载的视频没有音轨。')
   if (!(duration > 0)) throw new Error('下载文件时长无效。')
   if (!(size > 0)) throw new Error('下载文件大小无效。')
   return {
     duration,
     size,
     videoCodec: video.codec_name ?? '',
-    audioCodec: audio.codec_name ?? '',
+    audioCodec: audio?.codec_name ?? '',
     width: parseProbeNumber(video.width),
     height: parseProbeNumber(video.height)
   }
 }
 
 async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: PublicMediaResolution): Promise<string> {
+  ensureActive(request)
   const proxy = normalizeProxyUrl(request.config.ytdlpProxy)
   const tempPath = join(request.directory, `_dl_${request.fileStem}.public.mp4`)
   const finalPath = join(request.directory, `${request.fileStem}.mp4`)
@@ -237,6 +264,7 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
   // 监控 FFmpeg 进度
   let lastProgressTime = Date.now()
   await request.runCommand(request.vendor.ffmpegExecutable, args, (line) => {
+    ensureActive(request)
     // FFmpeg progress 格式: time=00:00:10.00
     const timeMatch = line.match(/time=(\d+):(\d+):(\d+\.\d+)/)
     if (timeMatch) {
@@ -257,6 +285,7 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
     }
   }, '公开媒体下载')
 
+  ensureActive(request)
   if (!existsSync(tempPath)) throw new Error('公开媒体流已处理，但没有生成视频文件。')
   if (existsSync(finalPath)) throw new Error(`目标视频文件已存在：${finalPath}`)
   renameSync(tempPath, finalPath)
@@ -272,13 +301,14 @@ async function resolvePrimaryPublicMedia(
     throw new Error('YouTube 需要登录后才能下载。')
   }
   if (platform === 'Facebook') {
-    return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy)
+    return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy, request.signal)
   }
   return (request.resolvePublicMedia ?? resolvePublicMedia)(
     request.url,
     platform,
     request.config.ytdlpProxy,
-    request.config.ytdlpMaxHeight
+    request.config.ytdlpMaxHeight,
+    request.signal
   )
 }
 
@@ -291,14 +321,14 @@ function publicFallbacks(
     fallbacks.push({
       strategy: 'tiktok-browser',
       resolveAttempts: 3,
-      resolve: () => request.resolveTikTokBrowserMedia!(request.url, request.config.ytdlpProxy)
+      resolve: () => request.resolveTikTokBrowserMedia!(request.url, request.config.ytdlpProxy, request.signal)
     })
   }
   if (platform === 'Facebook' && request.resolveFacebookAnonymousMedia) {
     fallbacks.push({
       strategy: 'facebook-browser',
       resolveAttempts: 1,
-      resolve: () => request.resolveFacebookAnonymousMedia!(request.url, request.config.ytdlpProxy)
+      resolve: () => request.resolveFacebookAnonymousMedia!(request.url, request.config.ytdlpProxy, request.signal)
     })
   }
   return fallbacks
@@ -328,7 +358,7 @@ function formatYtdlpAuthenticatedFailure(
   failure: string
 ): string {
   if (/没有音轨|没有原始音频流|没有音频流/.test(failure)) {
-    return `${platform} 下载的视频没有音轨，请更新 Cookie 后重试，或稍后再试。`
+    return '影片中没有音轨。'
   }
   const platformId = platformAuthIdFromUrlPlatform(platform)
   const mode = source === 'paste' ? 'paste' : 'builtin'
@@ -347,18 +377,40 @@ async function runYtdlpAuthenticationPreflight(
   request: VideoDownloadRequest,
   authentication: AuthenticatedCookieFile
 ): Promise<void> {
-  const args = [
-    '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
-    '--skip-download', '--simulate',
-    ...ytdlpAuthenticationArgs(request, authentication),
-    '-f', ytdlpVideoFormat(request.config.ytdlpMaxHeight),
-    request.url
-  ]
-  await request.runCommand(request.vendor.ytdlpExecutable, args, undefined, 'yt-dlp 认证预检')
+  const runPreflight = async (format: string) => {
+    const args = [
+      '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
+      '--skip-download', '--simulate',
+      ...ytdlpAuthenticationArgs(request, authentication),
+      '-f', format,
+      request.url
+    ]
+    await request.runCommand(request.vendor.ytdlpExecutable, args, undefined, 'yt-dlp 认证预检')
+  }
+  try {
+    await runPreflight(ytdlpVideoFormat(request.config.ytdlpMaxHeight))
+  } catch (error) {
+    if (request.requireAudio === true || !looksLikeMissingAudioFailure(errorMessage(error))) throw error
+    await runPreflight(ytdlpVideoOnlyFormat(request.config.ytdlpMaxHeight))
+  }
 }
 
-async function runYtdlp(request: VideoDownloadRequest, authentication?: AuthenticatedCookieFile): Promise<string> {
-  const tempStem = `_dl_${request.fileStem}`
+function ytdlpProgressHandler(request: VideoDownloadRequest): (line: string) => void {
+  return (line) => {
+    const percent = line.match(/(\d+(?:\.\d+)?)%/)
+    if (percent) request.updateProgress(Math.min(28, Math.max(1, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
+    else if (/Extracting URL/i.test(line)) request.updateProgress(2, '正在解析视频链接…')
+    else if (/Downloading webpage|Downloading android|Downloading m3u8|Downloading player/i.test(line)) request.updateProgress(4, '正在获取视频信息…')
+    else if (/\[download\]\s+Destination:/i.test(line)) request.updateProgress(8, '开始下载视频文件…')
+  }
+}
+
+async function runYtdlpWithFormat(
+  request: VideoDownloadRequest,
+  authentication: AuthenticatedCookieFile | undefined,
+  tempStem: string,
+  format: string
+): Promise<void> {
   const args = [
     '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
     '--ffmpeg-location', dirname(request.vendor.ffmpegExecutable),
@@ -366,19 +418,31 @@ async function runYtdlp(request: VideoDownloadRequest, authentication?: Authenti
     '-o', join(request.directory, `${tempStem}.%(ext)s`)
   ]
   args.push(...ytdlpAuthenticationArgs(request, authentication))
-  args.push('-f', ytdlpVideoFormat(request.config.ytdlpMaxHeight))
+  args.push('-f', format)
   if (request.config.ytdlpExtraArgs.trim()) args.push(...publicYtdlpExtraArgs(request.config.ytdlpExtraArgs.trim()))
-  const onLine = (line: string) => {
-    const percent = line.match(/(\d+(?:\.\d+)?)%/)
-    if (percent) request.updateProgress(Math.min(28, Math.max(1, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
-    else if (/Extracting URL/i.test(line)) request.updateProgress(2, '正在解析视频链接…')
-    else if (/Downloading webpage|Downloading android|Downloading m3u8|Downloading player/i.test(line)) request.updateProgress(4, '正在获取视频信息…')
-    else if (/\[download\]\s+Destination:/i.test(line)) request.updateProgress(8, '开始下载视频文件…')
-  }
+  await request.runCommand(request.vendor.ytdlpExecutable, [...args, request.url], ytdlpProgressHandler(request), 'yt-dlp')
+}
+
+async function runYtdlp(request: VideoDownloadRequest, authentication?: AuthenticatedCookieFile): Promise<string> {
+  const tempStem = `_dl_${request.fileStem}`
+  const maxHeight = request.config.ytdlpMaxHeight
   try {
-    await request.runCommand(request.vendor.ytdlpExecutable, [...args, request.url], onLine, 'yt-dlp')
+    await runYtdlpWithFormat(request, authentication, tempStem, ytdlpVideoFormat(maxHeight))
     return finalizeYtdlpDownload(request.directory, tempStem, request.fileStem)
   } catch (error) {
+    const message = errorMessage(error)
+    if (request.requireAudio !== true) {
+      try {
+        return finalizeYtdlpDownload(request.directory, tempStem, request.fileStem)
+      } catch {
+        /* 没有可用的部分下载文件 */
+      }
+      if (looksLikeMissingAudioFailure(message)) {
+        cleanupDownloadTemps(request.directory, tempStem)
+        await runYtdlpWithFormat(request, authentication, tempStem, ytdlpVideoOnlyFormat(maxHeight))
+        return finalizeYtdlpDownload(request.directory, tempStem, request.fileStem)
+      }
+    }
     cleanupDownloadTemps(request.directory, tempStem)
     throw error
   }
@@ -391,14 +455,16 @@ async function verifyResult(
   strategy: VideoDownloadStrategy,
   failures: VideoDownloadResult['failures']
 ): Promise<VideoDownloadResult> {
-  const media = await (request.verifyMediaFile ?? verifyDownloadedMedia)(path, request.vendor.ffmpegExecutable)
+  const verifyOptions: VerifyMediaOptions = { requireAudio: request.requireAudio === true }
+  const media = await (request.verifyMediaFile ?? verifyDownloadedMedia)(path, request.vendor.ffmpegExecutable, verifyOptions)
   return { path, platform, strategy, media, failures }
 }
 
 /** Canonical download pipeline used by both `download` and `req1` tasks. */
 export async function downloadVideo(request: VideoDownloadRequest): Promise<VideoDownloadResult> {
+  ensureActive(request)
   const checked = assertDownloadableVideoUrl(request.url)
-  const prepared = await prepareDownloadUrl(request.url, request.config.ytdlpProxy)
+  const prepared = await prepareDownloadUrl(request.url, request.config.ytdlpProxy, request.signal)
   const effectiveRequest: VideoDownloadRequest = { ...request, url: prepared.downloadUrl }
   const failures: VideoDownloadResult['failures'] = []
   const tryResolved = async (
@@ -407,11 +473,13 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     resolveAttempts = 1
   ): Promise<VideoDownloadResult | undefined> => {
     try {
+      ensureActive(request)
       request.updateProgress(4, strategy === 'public-page' ? '正在解析公开页面最高质量媒体流…' : '正在使用匿名浏览器捕获公开媒体流…')
       const attemptResolution = async (resolution: PublicMediaResolution): Promise<VideoDownloadResult> => {
         const candidates = [resolution.videoUrl, ...(resolution.alternateVideoUrls ?? [])]
         let lastError: unknown
         for (const videoUrl of candidates) {
+          ensureActive(request)
           const finalPath = join(request.directory, `${request.fileStem}.mp4`)
           if (existsSync(finalPath)) unlinkSync(finalPath)
           try {
@@ -436,16 +504,20 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
       const startedAt = Date.now()
       let heartbeat = 0
       const heartbeatTimer = setInterval(() => {
+        if (request.isCancelled?.()) return
         heartbeat += 1
         const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
         request.updateProgress(Math.min(7, 4 + heartbeat), `${resolverLabel}（已等待 ${elapsedSeconds} 秒）…`)
       }, 5_000)
       for (let attempt = 1; attempt <= resolveAttempts; attempt += 1) {
         try {
+          ensureActive(request)
           firstResolution = await resolver()
+          ensureActive(request)
           break
         } catch (error) {
           resolutionError = error
+          ensureActive(request)
           if (attempt < resolveAttempts) {
             request.updateProgress(5, `匿名浏览器未捕获到媒体流，正在重试（${attempt + 1}/${resolveAttempts}）…`)
           }
@@ -456,6 +528,7 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
       try {
         return await attemptResolution(firstResolution)
       } catch {
+        ensureActive(request)
         request.updateProgress(6, '媒体直链已失效或中断，正在重新解析后重试…')
         return await attemptResolution(await resolver())
       }
@@ -472,11 +545,24 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     if (effectiveRequest.downloadTikTokPublic) {
       effectiveRequest.updateProgress(4, '正在使用 TikTok 无 Cookie 下载器…')
       try {
+        const startedAt = Date.now()
+        let sawProgress = false
+        const heartbeatTimer = setInterval(() => {
+          if (effectiveRequest.isCancelled?.() || sawProgress) return
+          const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+          effectiveRequest.updateProgress(5, `正在解析 TikTok 视频信息（已等待 ${elapsedSeconds} 秒）…`)
+        }, 1_200)
         const path = await effectiveRequest.downloadTikTokPublic(effectiveRequest.url, effectiveRequest.directory, effectiveRequest.fileStem, (line) => {
+          ensureActive(effectiveRequest)
           const percent = line.match(/(\d+(?:\.\d+)?)%/)
-          if (percent) effectiveRequest.updateProgress(Math.min(28, Math.max(8, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
-          else if (/Downloading webpage|Solving JS challenge/i.test(line)) effectiveRequest.updateProgress(5, '正在解析 TikTok 视频信息…')
-        })
+          if (percent) {
+            sawProgress = true
+            effectiveRequest.updateProgress(Math.min(28, Math.max(8, Number(percent[1]) * 0.28)), `正在下载视频 ${percent[1]}%`)
+          } else if (/Downloading webpage|Solving JS challenge/i.test(line)) {
+            effectiveRequest.updateProgress(5, '正在解析 TikTok 视频信息…')
+          }
+        }).finally(() => clearInterval(heartbeatTimer))
+        ensureActive(effectiveRequest)
         return await verifyResult(effectiveRequest, path, checked.platform, 'tiktok-reference', failures)
       } catch (error) {
         failures.push({ strategy: 'tiktok-reference', message: errorMessage(error) })
@@ -501,15 +587,19 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   let ytdlpAuthenticationFailure: string | undefined
   if (effectiveRequest.resolveAuthenticatedCookies) {
     try {
+      ensureActive(effectiveRequest)
       effectiveRequest.updateProgress(4, checked.platform === 'YouTube' ? '正在读取平台登录配置…' : '公开解析失败，正在读取平台登录配置…')
       const cookieFile = await effectiveRequest.resolveAuthenticatedCookies(checked.platform)
       if (cookieFile) {
         authenticationResolved = cookieFile
         try {
+          ensureActive(effectiveRequest)
           effectiveRequest.updateProgress(5, `正在验证${cookieFile.source === 'paste' ? '粘贴 Cookie' : '应用内登录'}…`)
           await runYtdlpAuthenticationPreflight(effectiveRequest, cookieFile)
+          ensureActive(effectiveRequest)
           effectiveRequest.updateProgress(6, '平台登录验证通过，正在下载…')
           const path = await runYtdlpAuthenticated(effectiveRequest, cookieFile)
+          ensureActive(effectiveRequest)
           return await verifyResult(effectiveRequest, path, checked.platform, 'yt-dlp-authenticated', failures)
         } catch (error) {
           ytdlpAuthenticationFailure = errorMessage(error)

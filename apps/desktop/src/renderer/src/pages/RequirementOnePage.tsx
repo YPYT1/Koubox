@@ -40,10 +40,15 @@ type RequirementOnePageProps = {
   onTaskStatus?: (status: TaskSnapshot['status'] | null) => void
 }
 
+const SEPARATE_VOCALS_STEP = {
+  stage: 'separate-vocals',
+  label: '去除背景音乐',
+  desc: 'Demucs 分离人声，对完整背景音乐素材效果较好'
+}
+
 const STEPS_URL = [
   { stage: 'download', label: '下载视频', desc: '解析链接并拉取视频文件' },
   { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
-  { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
   { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' }
   // { stage: 'translation', label: '翻译', desc: '按目标语种生成译文' }
 ]
@@ -51,10 +56,15 @@ const STEPS_URL = [
 const STEPS_LOCAL = [
   { stage: 'download', label: '导入视频', desc: '读取本地视频文件（不写入保存目录）' },
   { stage: 'extract-audio', label: '提取原音频', desc: '保留源采样率与声道，避免为识别额外降质' },
-  { stage: 'separate-vocals', label: '分离人声', desc: 'Demucs 去除背景音乐，保留人声' },
   { stage: 'asr', label: '语音识别', desc: 'Faster-Whisper Large-v3 直接识别原音频' }
   // { stage: 'translation', label: '翻译', desc: '按目标语种生成译文' }
 ]
+
+function buildPipelineSteps(sourceMode: MaterialsSourceMode, separateVocals: boolean) {
+  const base = sourceMode === 'local' ? STEPS_LOCAL : STEPS_URL
+  if (!separateVocals) return base
+  return [...base.slice(0, 2), SEPARATE_VOCALS_STEP, ...base.slice(2)]
+}
 
 export function RequirementOnePage({
   defaultOutputDirectory,
@@ -66,6 +76,7 @@ export function RequirementOnePage({
   onTaskStatus
 }: RequirementOnePageProps) {
   const [sourceMode, setSourceMode] = useState<MaterialsSourceMode>('url')
+  const [separateVocals, setSeparateVocals] = useState(false)
   const [url, setUrl] = useState('')
   const [videoPath, setVideoPath] = useState('')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
@@ -115,8 +126,8 @@ export function RequirementOnePage({
     try {
       const createdTask = await startMaterialsPipeline(
         sourceMode === 'local'
-          ? { videoPath, outputDirectory }
-          : { url, outputDirectory }
+          ? { videoPath, outputDirectory, separateVocals }
+          : { url, outputDirectory, separateVocals }
       )
       setTask(createdTask)
       onTaskStatus?.(createdTask.status)
@@ -137,6 +148,14 @@ export function RequirementOnePage({
       onShowToast('任务已取消', 'info')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '取消失败', 'error')
+    }
+  }
+
+  const handleSeparateVocalsToggle = () => {
+    const next = !separateVocals
+    setSeparateVocals(next)
+    if (task && !isTaskRunning && task.separateVocals !== next) {
+      onShowToast('去除背景音乐设置已更新，将在下次开始提取时生效', 'info')
     }
   }
 
@@ -240,8 +259,16 @@ export function RequirementOnePage({
       : (task?.artifacts.video ?? '')
   const videoSrc = videoPreviewPath ? window.koubox.mediaUrl(videoPreviewPath) : ''
   const audioSrc = task?.artifacts.audio ? window.koubox.mediaUrl(task.artifacts.audio) : ''
-  const vocalsSrc = task?.artifacts.vocals ? window.koubox.mediaUrl(task.artifacts.vocals) : ''
-  const pipelineSteps = activeSourceMode === 'local' ? STEPS_LOCAL : STEPS_URL
+  const separateVocalsEnabled = task ? task.separateVocals === true : separateVocals
+  const separateVocalsPendingNextTask =
+    Boolean(task && !isTaskRunning && task.separateVocals !== separateVocals)
+  const vocalsSrc =
+    separateVocalsEnabled && task?.artifacts.vocals
+      ? window.koubox.mediaUrl(task.artifacts.vocals)
+      : ''
+  const pipelineSteps = buildPipelineSteps(activeSourceMode, separateVocalsEnabled)
+  const stepperStage =
+    !separateVocalsEnabled && task?.stage === 'separate-vocals' ? 'asr' : task?.stage
 
   useEffect(() => {
     setVideoOrientation('unknown')
@@ -284,6 +311,33 @@ export function RequirementOnePage({
               disabled={isTaskRunning}
             />
           </FormField>
+
+          <div className="form-group">
+            <div className={`viral-separate-vocals-row ${isTaskRunning ? 'is-disabled' : ''}`}>
+              <span className="viral-separate-vocals-label">去除背景音乐</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={separateVocals}
+                aria-label="去除背景音乐"
+                className={`ui-switch ${separateVocals ? 'on' : ''}`}
+                disabled={isTaskRunning}
+                onClick={handleSeparateVocalsToggle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    handleSeparateVocalsToggle()
+                  }
+                }}
+              >
+                <span className="ui-switch-thumb" />
+              </button>
+              <span className="viral-separate-vocals-desc">去除背景音乐（保留人声）</span>
+            </div>
+            {separateVocalsPendingNextTask ? (
+              <small className="field-hint viral-separate-vocals-pending">将在下次开始提取时生效，本次任务结果不变</small>
+            ) : null}
+          </div>
 
           {/* <FormField label="翻译目标语言">
             <select
@@ -362,7 +416,7 @@ export function RequirementOnePage({
 
           <PipelineStepper
             steps={pipelineSteps}
-            currentStage={task?.stage}
+            currentStage={stepperStage}
             status={task?.status}
             percent={task?.percent}
             message={task?.status === 'error' && task.message ? toUserTaskMessage(task.message) : task?.message}
@@ -473,6 +527,7 @@ export function RequirementOnePage({
               )}
             </div>
 
+            {separateVocalsEnabled ? (
             <div className="viral-audio-slot">
               <div className="viral-slot-label">
                 <Waveform size={15} />
@@ -529,9 +584,10 @@ export function RequirementOnePage({
                   </div>
                 </div>
               ) : (
-                <div className="viral-slot-empty">人声分离完成后可在此对比试听</div>
+                <div className="viral-slot-empty">去除背景音乐完成后可在此对比试听</div>
               )}
             </div>
+            ) : null}
           </div>
         </div>
       </section>

@@ -26,8 +26,8 @@ type ServerOptions = {
   openPath(targetPath: string): Promise<void>
   openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
   getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string, platformId?: YtdlpCookiePlatformId): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
-  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveTikTokBrowserMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<import('./public-video.js').PublicMediaResolution>
   resolvePlatformAuthentication?(platformId: YtdlpCookiePlatformId, auth: PlatformAuthEntry): Promise<import('./video-download.js').AuthenticatedCookieFile>
   resolveActiveYtdlp(): ActiveYtdlpRuntime
   checkYtdlpUpdate(): Promise<YtdlpUpdateStatus>
@@ -157,18 +157,20 @@ function readVideoMaterialsPipelineInput(body: Record<string, unknown>, defaultO
   outputDirectory: string
   source: string
   sourceMode: 'url' | 'local'
+  separateVocals: boolean
 } {
   const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
     ? normalizeOsPath(body.outputDirectory.trim())
     : normalizeOsPath(defaultOutputDirectory)
+  const separateVocals = asBoolean(body.separateVocals, false)
   const videoPathRaw = typeof body.videoPath === 'string' ? body.videoPath : ''
   if (videoPathRaw.trim()) {
     const videoPath = assertLocalVideoPath(videoPathRaw)
     if (!existsSync(videoPath)) throw new Error('本地视频文件不存在。')
-    return { outputDirectory, source: videoPath, sourceMode: 'local' }
+    return { outputDirectory, source: videoPath, sourceMode: 'local', separateVocals }
   }
   const { url } = readVideoPipelineInput(body, defaultOutputDirectory)
-  return { outputDirectory, source: url, sourceMode: 'url' }
+  return { outputDirectory, source: url, sourceMode: 'url', separateVocals }
 }
 
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
@@ -499,9 +501,10 @@ export async function startLocalApi(options: ServerOptions) {
         }
         if (method === 'GET' && !action) return json(response, 200, task)
         if (method === 'DELETE' && !action) {
+          const deleteFiles = new URL(request.url ?? '', 'http://127.0.0.1').searchParams.get('deleteFiles') === '1'
           try {
-            tasks.remove(taskId)
-            return json(response, 200, { ok: true })
+            tasks.remove(taskId, { deleteFiles })
+            return json(response, 200, { ok: true, deleteFiles })
           } catch (error) {
             return json(response, 409, { error: error instanceof Error ? error.message : String(error) })
           }
@@ -521,9 +524,9 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/pipelines/req1') {
         const body = await readJson(request)
-        const { outputDirectory, source, sourceMode } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
+        const { outputDirectory, source, sourceMode, separateVocals } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
-        return json(response, 202, tasks.startRequirementOne(source, outputDirectory, resolveModelPaths(store.read()), sourceMode))
+        return json(response, 202, tasks.startRequirementOne(source, outputDirectory, resolveModelPaths(store.read()), sourceMode, separateVocals))
       }
       if (method === 'POST' && url.pathname === '/pipelines/req2') {
         const body = await readJson(request)

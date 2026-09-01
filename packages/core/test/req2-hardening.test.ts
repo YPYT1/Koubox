@@ -43,7 +43,14 @@ function workerManager(root: string, workerTimeoutMs?: number): TaskManager {
 }
 
 function workerRecord(root: string) {
-  return { task: { taskId: 'fixture', taskDirectory: root, outputDirectory: root } as never, listeners: new Set(), processes: new Set(), cancelled: false }
+  return {
+    task: { taskId: 'fixture', taskDirectory: root, outputDirectory: root } as never,
+    listeners: new Set(),
+    processes: new Set(),
+    cancelled: false,
+    slotReleased: false,
+    abortController: new AbortController()
+  }
 }
 
 function writeWorker(root: string, source: string): void {

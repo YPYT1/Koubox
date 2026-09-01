@@ -1,4 +1,4 @@
-import { assertDownloadableVideoUrl, describeParsedPlatformUrl, detectPlatform, parsePlatformUrl } from '@koubox/shared'
+import { assertDownloadableVideoUrl, detectPlatform } from '@koubox/shared'
 import { FormField } from '../common/FormControls'
 import { DOWNLOAD_PLATFORM_META, isSupportedDownloadPlatform } from './platforms'
 
@@ -11,7 +11,7 @@ type VideoUrlFieldProps = {
   showPlatformChips?: boolean
 }
 
-function formatHint(value: string): { status?: string; canonical?: string; error?: string } {
+function formatHint(value: string): { error?: string } {
   const trimmed = value.trim()
   if (!trimmed) return {}
   try {
@@ -19,12 +19,7 @@ function formatHint(value: string): { status?: string; canonical?: string; error
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) }
   }
-  const parsed = parsePlatformUrl(trimmed)
-  if (!parsed) return {}
-  return {
-    status: describeParsedPlatformUrl(parsed),
-    canonical: parsed.canonicalUrl !== trimmed ? parsed.canonicalUrl : undefined
-  }
+  return {}
 }
 
 /** 两个下载相关工具共用的链接输入 + 平台识别条 */
@@ -69,12 +64,6 @@ export function VideoUrlField({
         </div>
       )}
 
-      {hint.status && <div className="downloader-platform-hint">{hint.status}</div>}
-      {hint.canonical && (
-        <div className="downloader-platform-hint">
-          规范化后：{hint.canonical}
-        </div>
-      )}
       {hint.error && <div className="downloader-platform-warn">{hint.error}</div>}
       {!hint.error && value.trim() && platform && !supported && (
         <div className="downloader-platform-warn">当前链接平台不在支持范围内</div>

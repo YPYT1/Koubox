@@ -1,5 +1,4 @@
 import { FileAudio } from '@phosphor-icons/react'
-import { LOCAL_AUDIO_EXTENSIONS, LOCAL_VIDEO_EXTENSIONS } from '@koubox/shared'
 import { FormField, PathPicker } from '../common/FormControls'
 
 type LocalSpeechMediaFieldProps = {
@@ -19,10 +18,9 @@ export function LocalSpeechMediaField({
   browseDefaultPath = ''
 }: LocalSpeechMediaFieldProps) {
   const fileName = value.replace(/^.*[/\\]/, '')
-  const extensions = [...LOCAL_AUDIO_EXTENSIONS, ...LOCAL_VIDEO_EXTENSIONS]
 
   return (
-    <FormField label="本地音频 / 视频" hint={`支持 ${extensions.join(' / ')}`}>
+    <FormField label="本地音频 / 视频">
       <PathPicker
         value={value}
         onChange={onChange}

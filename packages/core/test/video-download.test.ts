@@ -435,4 +435,23 @@ describe('public video download pipeline', () => {
     const result = await downloadVideo(request)
     expect(result.strategy).toBe('public-page')
   })
+
+  it('allows video-only files when requireAudio is false', async () => {
+    const request = createRequest({
+      url: 'https://www.instagram.com/p/abc',
+      requireAudio: false,
+      resolvePublicMedia: async () => directResolution,
+      verifyMediaFile: async () => ({
+        duration: 1,
+        size: 5,
+        videoCodec: 'h264',
+        audioCodec: '',
+        width: 1080,
+        height: 1920
+      })
+    })
+
+    const result = await downloadVideo(request)
+    expect(result.media.audioCodec).toBe('')
+  })
 })

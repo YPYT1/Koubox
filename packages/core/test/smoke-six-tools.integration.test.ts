@@ -199,7 +199,8 @@ describe.skipIf(!SMOKE_ENABLED)('six tools smoke', () => {
   it('爆款素材获取（本地视频）', async () => {
     const queued = await postPipeline(api, '/pipelines/req1', {
       outputDirectory: outputRoot,
-      videoPath: mp4Path
+      videoPath: mp4Path,
+      separateVocals: true
     })
     const task = await waitForTask(api, queued.taskId, 900_000)
     expect(task.artifacts.audio).toBeTruthy()

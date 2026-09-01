@@ -5,10 +5,10 @@ import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStatusPanel } from '../components/common/PipelineStatusPanel'
 import {
-  AudioPreviewSlot,
   LocalAudioField,
   startVocalSeparationPipeline,
-  usePipelineTask
+  usePipelineTask,
+  ViralAudioPlayer
 } from '../components/download'
 
 type VocalSeparationPageProps = {
@@ -23,7 +23,7 @@ type VocalSeparationPageProps = {
 const STEPS = [
   { stage: 'download', label: '导入音频', desc: '读取本地音频文件（不写入保存目录）' },
   { stage: 'extract-audio', label: '转换音频', desc: '临时生成 Demucs 可处理的高精度 WAV' },
-  { stage: 'separate-vocals', label: '分离人声', desc: '去除背景音乐，仅输出人声轨' },
+  { stage: 'separate-vocals', label: '去除背景音乐', desc: '对完整背景音乐素材分离效果更好' },
   { stage: 'complete', label: '完成', desc: '人声文件已写入保存目录' }
 ]
 
@@ -57,7 +57,7 @@ export function VocalSeparationPage({
     const key = `${task.taskId}:${task.status}:${task.error?.code ?? task.message}`
     if (notifiedRef.current === key) return
     notifiedRef.current = key
-    if (task.status === 'complete') onShowToast('人声分离完成。', 'success')
+    if (task.status === 'complete') onShowToast('去除背景音乐完成。', 'success')
   }, [task, onShowToast])
 
   useEffect(() => {
@@ -76,7 +76,7 @@ export function VocalSeparationPage({
       const created = await startVocalSeparationPipeline(audioPath, outputDirectory)
       setTask(created)
       onTaskStatus?.(created.status)
-      onShowToast('人声分离任务已启动…', 'info')
+      onShowToast('去除背景音乐任务已启动…', 'info')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '任务启动失败', 'error')
     } finally {
@@ -99,8 +99,8 @@ export function VocalSeparationPage({
   return (
     <div className="page-container viral-page">
       <div className="page-header-block">
-        <h1>人声分离</h1>
-        <p>上传本地音频，用 Demucs 去除背景音乐，仅保留人声轨</p>
+        <h1>去除背景音乐</h1>
+        <p>上传本地音频，用 Demucs 去除背景音乐并保留人声；对带有完整背景音乐的素材效果较好</p>
       </div>
 
       <div className="viral-top-grid">
@@ -169,21 +169,23 @@ export function VocalSeparationPage({
           <h3>音频预览</h3>
         </div>
         <div className="vocal-preview-stack">
-          <div className="viral-audio-slot">
+          <div className="viral-audio-slot speech-audio-slot">
             <div className="viral-slot-label">
               <span>原始音频</span>
             </div>
-            <AudioPreviewSlot
+            <ViralAudioPlayer
               audioPath={originalPreviewPath}
+              emptyHint="选择音频后可在此试听"
               onError={(message) => onShowToast(message, 'error')}
             />
           </div>
-          <div className="viral-audio-slot">
+          <div className="viral-audio-slot speech-audio-slot">
             <div className="viral-slot-label">
               <span>人声音频</span>
             </div>
-            <AudioPreviewSlot
+            <ViralAudioPlayer
               audioPath={vocalsPreviewPath}
+              emptyHint="分离完成后可在此试听人声"
               onError={(message) => onShowToast(message, 'error')}
             />
           </div>

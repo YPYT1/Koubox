@@ -12,7 +12,6 @@ export {
 export { createTemporaryPlatformCookieFile } from './platform-auth.js'
 export { extractFacebookMedia, extractFacebookVideoId, isFacebookShareUrl, resolveFacebookPublicMedia, resolveFacebookShareUrl } from './facebook.js'
 export {
-  describeParsedPlatformUrl,
   parsePlatformUrl,
   parsePlatformUrlOrThrow,
   type ParsedPlatformUrl,

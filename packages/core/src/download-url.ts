@@ -12,14 +12,14 @@ export type PreparedDownloadUrl = {
   redirectChain?: string[]
 }
 
-export async function prepareDownloadUrl(inputUrl: string, proxy: string): Promise<PreparedDownloadUrl> {
+export async function prepareDownloadUrl(inputUrl: string, proxy: string, signal?: AbortSignal): Promise<PreparedDownloadUrl> {
   const originalUrl = inputUrl.trim()
   const parsed = parsePlatformUrlOrThrow(originalUrl)
   let downloadUrl = parsed.canonicalUrl
   let redirectChain: string[] | undefined
 
   if (parsed.needsRedirect && parsed.platform === 'Facebook' && parsed.kind === 'facebook-share') {
-    const resolved = await resolveFacebookShareUrl(originalUrl, proxy)
+    const resolved = await resolveFacebookShareUrl(originalUrl, proxy, signal)
     redirectChain = resolved.redirectChain
     downloadUrl = resolved.finalUrl
     const finalParsed = parsePlatformUrl(resolved.finalUrl)

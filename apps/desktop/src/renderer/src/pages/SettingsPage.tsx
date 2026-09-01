@@ -11,7 +11,6 @@ import {
   ArrowsClockwise,
   FloppyDiskBack,
   ClipboardText,
-  DownloadSimple,
   Trash
 } from '@phosphor-icons/react'
 import type {
@@ -23,7 +22,6 @@ import type {
   VendorToolCheck,
   YtdlpCookiePlatformId,
   YtdlpCookieStatus,
-  YtdlpUpdateStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
 import { defaultPlatformAuth } from '@koubox/shared'
@@ -104,7 +102,7 @@ const guides: Record<GuideKind, {
   ytdlp: {
     title: 'yt-dlp 使用说明',
     role: '负责按视频链接下载各大平台素材（视频文件）。爆款素材获取工具依赖它。',
-    download: '口播匣内置经过验证的 nightly。需要更新时在设置中手动检查并由用户确认。',
+    download: '口播匣内置经过验证的 nightly，也可自行下载替换。',
     downloadUrl: 'https://github.com/yt-dlp/yt-dlp-nightly-builds/releases',
     layout: '选择的目录内直接放置 yt-dlp.exe（不要再套一层子文件夹）。',
     files: ['yt-dlp.exe']
@@ -197,9 +195,6 @@ export function SettingsPage({
   const [savingPlatformId, setSavingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
   const [checkingPlatformId, setCheckingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
   const [readingClipboard, setReadingClipboard] = useState<YtdlpCookiePlatformId | null>(null)
-  const [ytdlpUpdate, setYtdlpUpdate] = useState<YtdlpUpdateStatus | null>(null)
-  const [checkingYtdlpUpdate, setCheckingYtdlpUpdate] = useState(false)
-  const [installingYtdlpUpdate, setInstallingYtdlpUpdate] = useState(false)
   const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
   const activeGuide = guide ? guides[guide] : null
@@ -372,46 +367,6 @@ export function SettingsPage({
     }
   }
 
-  const handleCheckYtdlpUpdate = async () => {
-    setCheckingYtdlpUpdate(true)
-    try {
-      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/check-update')
-      setYtdlpUpdate(status)
-      onShowToast(status.updateAvailable ? `发现 yt-dlp nightly ${status.latestVersion}` : 'yt-dlp 已是最新 nightly。', status.updateAvailable ? 'info' : 'success')
-    } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '检查 yt-dlp 更新失败', 'error')
-    } finally {
-      setCheckingYtdlpUpdate(false)
-    }
-  }
-
-  const handleInstallYtdlpUpdate = async () => {
-    if (!ytdlpUpdate?.latestVersion) return
-    setInstallingYtdlpUpdate(true)
-    try {
-      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/install-update', { version: ytdlpUpdate.latestVersion })
-      setYtdlpUpdate(status)
-      onShowToast(`yt-dlp 已更新到 ${status.currentVersion}。`, 'success')
-    } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '更新 yt-dlp 失败', 'error')
-    } finally {
-      setInstallingYtdlpUpdate(false)
-    }
-  }
-
-  const handleRestoreYtdlp = async () => {
-    setInstallingYtdlpUpdate(true)
-    try {
-      const status = await window.koubox.post<YtdlpUpdateStatus>('/runtime/ytdlp/restore-bundled')
-      setYtdlpUpdate(status)
-      onShowToast(`已恢复内置 yt-dlp ${status.currentVersion}。`, 'success')
-    } catch (error) {
-      onShowToast(error instanceof Error ? error.message : '恢复内置 yt-dlp 失败', 'error')
-    } finally {
-      setInstallingYtdlpUpdate(false)
-    }
-  }
-
   return (
     <div className="page-container" style={{ maxWidth: 840 }}>
       <div className="page-header-block">
@@ -469,52 +424,22 @@ export function SettingsPage({
             )}
             hint="目录内需包含 yt-dlp.exe。"
           >
-            <code>{runtime?.vendor.ytdlp.executable ?? config.ytdlpDirectory}</code>
+            <PathPicker
+              value={config.ytdlpDirectory}
+              onChange={(val) => onChange({ ...config, ytdlpDirectory: val })}
+              onBrowse={() => handleSelectPath('ytdlpDirectory', '选择 yt-dlp 目录')}
+              placeholder="例如 D:/Project/Koubox/vendor/yt-dlp"
+            />
             <VendorIntegrity check={runtime?.vendor.ytdlp} />
-            <div className="platform-auth-toolbar">
-              <span className="chrome-account-scan-meta">
-                当前 {ytdlpUpdate?.currentVersion ?? runtime?.vendor.ytdlp.version ?? '未知'}
-                {' · nightly · '}
-                {(ytdlpUpdate?.currentSource ?? runtime?.vendor.ytdlp.source) === 'user-update' ? '用户更新' : '内置版本'}
-              </span>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                loading={checkingYtdlpUpdate}
-                icon={<ArrowsClockwise size={15} weight="bold" />}
-                onClick={() => void handleCheckYtdlpUpdate()}
-              >
-                检查更新
-              </Button>
-              {ytdlpUpdate?.updateAvailable && ytdlpUpdate.latestVersion ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={installingYtdlpUpdate}
-                  icon={<DownloadSimple size={15} weight="bold" />}
-                  onClick={() => void handleInstallYtdlpUpdate()}
-                >
-                  更新到 {ytdlpUpdate.latestVersion}
-                </Button>
-              ) : null}
-              {(ytdlpUpdate?.currentSource ?? runtime?.vendor.ytdlp.source) === 'user-update' ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  loading={installingYtdlpUpdate}
-                  onClick={() => void handleRestoreYtdlp()}
-                >
-                  恢复内置版本
-                </Button>
-              ) : null}
-            </div>
           </FormField>
 
           <FormField label="Deno 目录" hint="YouTube EJS 解算使用随软件携带的 Deno 2.x；目录内需包含 deno.exe。">
-            <code>{runtime?.vendor.deno.executable ?? config.denoDirectory}</code>
+            <PathPicker
+              value={config.denoDirectory}
+              onChange={(val) => onChange({ ...config, denoDirectory: val })}
+              onBrowse={() => handleSelectPath('denoDirectory', '选择 Deno 目录')}
+              placeholder="例如 D:/Project/Koubox/vendor/deno"
+            />
             <VendorIntegrity check={runtime?.vendor.deno} />
           </FormField>
 

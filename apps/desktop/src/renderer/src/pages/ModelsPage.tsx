@@ -24,7 +24,7 @@ type ModelsPageProps = {
 function modelBadge(id: string): string {
   if (id === 'asr') return '语音识别'
   if (id === 'translation') return '翻译'
-  if (id === 'demucs') return '人声分离'
+  if (id === 'demucs') return '去除背景音乐'
   return id
 }
 

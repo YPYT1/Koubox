@@ -1,9 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join, resolve, delimiter } from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { detectGpu } from './runtime.js'
 import { assertValidTranscript, transcriptToSrt } from './srt.js'
-import { downloadVideo, type PublicMediaResolution } from './video-download.js'
+import { downloadVideo, verifyDownloadedMedia, type PublicMediaResolution } from './video-download.js'
 import type {
   AsrLanguage,
   KouboxConfig,
@@ -18,7 +18,7 @@ import type {
   Transcript,
   TranslationTargetLanguage
 } from '@koubox/shared'
-import { detectPlatform, platformAuthIdFromUrlPlatform, toUserTaskMessage, normalizeOsPath, normalizeProxyUrl, LOCAL_VIDEO_EXTENSIONS } from '@koubox/shared'
+import { detectPlatform, platformAuthIdFromUrlPlatform, req1UsesSeparateVocals, toUserTaskMessage, normalizeOsPath, normalizeProxyUrl, LOCAL_VIDEO_EXTENSIONS } from '@koubox/shared'
 import { createLogger, getLoggerEnv } from '@koubox/shared/logger'
 import type { AuthenticatedCookieFile } from './video-download.js'
 
@@ -34,8 +34,8 @@ type TaskManagerOptions = {
   workerTimeoutMs?: number
   taskIndexFile: string
   downloadTikTokPublic?(url: string, directory: string, fileStem: string, onLine?: (line: string) => void): Promise<string>
-  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
-  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<PublicMediaResolution>
+  resolveTikTokBrowserMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution>
   resolvePlatformAuthentication?(
     platformId: 'youtube' | 'tiktok' | 'instagram' | 'facebook',
     auth: PlatformAuthEntry
@@ -49,6 +49,8 @@ type TaskRecord = {
   listeners: Set<(event: TaskEvent) => void>
   processes: Set<ChildProcess>
   cancelled: boolean
+  slotReleased: boolean
+  abortController: AbortController
 }
 
 type QueuedJob = {
@@ -205,6 +207,24 @@ export class TaskManager {
 
   constructor(private readonly options: TaskManagerOptions) {}
 
+  private createRecord(task: TaskSnapshot, restored = false): TaskRecord {
+    return {
+      task,
+      listeners: new Set(),
+      processes: new Set(),
+      cancelled: false,
+      slotReleased: restored,
+      abortController: new AbortController()
+    }
+  }
+
+  private releaseJobSlot(record: TaskRecord): void {
+    if (record.slotReleased) return
+    record.slotReleased = true
+    this.runningCount = Math.max(0, this.runningCount - 1)
+    this.pumpQueue()
+  }
+
   private recordsDirectory(): string {
     return join(dirname(this.options.taskIndexFile), 'records')
   }
@@ -245,7 +265,8 @@ export class TaskManager {
     source: string,
     outputDirectory: string,
     modelPaths: ModelPaths,
-    sourceMode: 'url' | 'local' = 'url'
+    sourceMode: 'url' | 'local' = 'url',
+    separateVocals = false
   ): TaskSnapshot {
     const outputRoot = resolve(normalizeOsPath(outputDirectory))
     mkdirSync(outputRoot, { recursive: true })
@@ -257,6 +278,7 @@ export class TaskManager {
       taskId: id,
       kind: 'req1',
       sourceMode,
+      separateVocals,
       status: 'queued',
       stage: 'queued',
       percent: 0,
@@ -268,7 +290,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, modelPaths, kind: 'req1' })
@@ -309,7 +331,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, modelPaths, kind: 'req2' })
@@ -336,7 +358,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, kind: 'download' })
@@ -369,7 +391,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, kind: 'video-audio' })
@@ -389,7 +411,7 @@ export class TaskManager {
       status: 'queued',
       stage: 'queued',
       percent: 0,
-      message: '人声分离任务已排队',
+      message: '去除背景音乐任务已排队',
       url: resolvedAudio,
       outputDirectory: taskDir,
       taskDirectory: taskDir,
@@ -397,7 +419,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, kind: 'vocal-separation' })
@@ -425,7 +447,7 @@ export class TaskManager {
       createdAt: now(),
       updatedAt: now()
     }
-    const record: TaskRecord = { task, listeners: new Set(), processes: new Set(), cancelled: false }
+    const record = this.createRecord(task)
     this.records.set(id, record)
     this.persist(record)
     this.enqueue({ record, modelPaths, kind: 'speech-to-text' })
@@ -448,26 +470,40 @@ export class TaskManager {
   cancel(taskIdValue: string): TaskSnapshot | undefined {
     const record = this.records.get(taskIdValue)
     if (!record || ['complete', 'error', 'cancelled'].includes(record.task.status)) return record ? this.clone(record.task) : undefined
+    const wasRunning = record.task.status === 'running'
     record.cancelled = true
+    record.abortController.abort()
     const queuedIndex = this.queue.findIndex((job) => job.record.task.taskId === taskIdValue)
     if (queuedIndex >= 0) this.queue.splice(queuedIndex, 1)
-    for (const child of record.processes) killProcessTree(child)
+    for (const child of [...record.processes]) killProcessTree(child)
+    if (wasRunning) this.releaseJobSlot(record)
     this.update(record, { status: 'cancelled', stage: 'cancelled', message: '任务已取消' })
     return this.clone(record.task)
   }
 
-  remove(taskIdValue: string): void {
+  remove(taskIdValue: string, options?: { deleteFiles?: boolean }): void {
     const record = this.records.get(taskIdValue)
     if (!record) throw new Error('任务不存在。')
     if (record.task.status === 'running' || record.task.status === 'queued') {
       throw new Error('任务进行中，无法删除记录。')
     }
+    const taskDirectory = record.task.taskDirectory || record.task.outputDirectory
     this.records.delete(taskIdValue)
     const path = this.recordFile(taskIdValue)
     if (existsSync(path)) unlinkSync(path)
     mkdirSync(dirname(this.options.taskIndexFile), { recursive: true })
     const files = [...this.records.values()].map((item) => this.recordFile(item.task.taskId))
     writeFileSync(this.options.taskIndexFile, JSON.stringify(files, null, 2), 'utf8')
+    if (options?.deleteFiles) this.deleteTaskDirectory(taskIdValue, taskDirectory)
+  }
+
+  private deleteTaskDirectory(taskIdValue: string, taskDirectory: string): void {
+    const resolved = resolve(normalizeOsPath(taskDirectory))
+    if (!resolved || !existsSync(resolved)) return
+    if (basename(resolved) !== taskIdValue) {
+      throw new Error('任务目录校验失败，已中止删除文件。')
+    }
+    rmSync(resolved, { recursive: true, force: true })
   }
 
   /** Wipe in-memory tasks and on-disk task index/records. Does not delete output media folders. */
@@ -477,7 +513,8 @@ export class TaskManager {
       if (!record) continue
       if (record.task.status === 'running' || record.task.status === 'queued') {
         record.cancelled = true
-        for (const child of record.processes) killProcessTree(child)
+        record.abortController.abort()
+        for (const child of [...record.processes]) killProcessTree(child)
       }
     }
     this.queue.length = 0
@@ -571,8 +608,7 @@ export class TaskManager {
                 ? this.executeSpeechToText(job.record, job.modelPaths!)
                 : this.executeDownloadOnly(job.record)
       void run.finally(() => {
-        this.runningCount = Math.max(0, this.runningCount - 1)
-        this.pumpQueue()
+        this.releaseJobSlot(job.record)
       })
     }
   }
@@ -581,24 +617,29 @@ export class TaskManager {
     return task.sourceMode ?? (/^https?:\/\//i.test(task.url) ? 'url' : 'local')
   }
 
-  private async acquireVideo(record: TaskRecord, root: string, taskId: string, sourceMode: 'url' | 'local'): Promise<string> {
+  private async probeVideoHasAudio(filePath: string): Promise<boolean> {
+    const media = await verifyDownloadedMedia(
+      filePath,
+      this.options.resolveVendor().ffmpegExecutable,
+      { requireAudio: false }
+    )
+    return Boolean(media.audioCodec)
+  }
+
+  private async acquireVideo(
+    record: TaskRecord,
+    root: string,
+    taskId: string,
+    sourceMode: 'url' | 'local'
+  ): Promise<{ path: string; hasAudio: boolean }> {
     if (sourceMode === 'local') {
       this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在读取本地视频' })
       const sourcePath = resolve(record.task.url)
       if (!existsSync(sourcePath)) throw this.failWithCode(record, 'VIDEO_NOT_FOUND', '选择的本地视频不存在。')
-      return sourcePath
+      return { path: sourcePath, hasAudio: await this.probeVideoHasAudio(sourcePath) }
     }
     this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在下载视频' })
     return this.download(record, root, taskId)
-  }
-
-  private async importLocalAudio(record: TaskRecord, root: string, taskId: string, sourcePath: string): Promise<string> {
-    if (!existsSync(sourcePath)) throw this.failWithCode(record, 'AUDIO_NOT_FOUND', '选择的音频文件不存在。')
-    const sourceAudio = join(root, `${taskId}_source${extname(sourcePath).toLowerCase() || '.audio'}`)
-    copyFileSync(sourcePath, sourceAudio)
-    record.task.artifacts.sourceAudio = sourceAudio
-    this.persist(record)
-    return sourceAudio
   }
 
   private async executeRequirementOne(record: TaskRecord, modelPaths: ModelPaths): Promise<void> {
@@ -606,24 +647,43 @@ export class TaskManager {
     const root = resolve(task.outputDirectory)
     mkdirSync(root, { recursive: true })
     const sourceMode = this.resolveSourceMode(task)
-    log.info('任务开始', { taskId: task.taskId, url: task.url, sourceMode })
+    log.info('任务开始', { taskId: task.taskId, url: task.url, sourceMode, separateVocals: task.separateVocals === true })
     try {
-      const video = await this.acquireVideo(record, root, task.taskId, sourceMode)
+      const { path: video, hasAudio } = await this.acquireVideo(record, root, task.taskId, sourceMode)
       if (sourceMode === 'url') {
         record.task.artifacts.video = video
         this.persist(record)
       }
+      if (!hasAudio) {
+        this.update(record, {
+          status: 'complete',
+          stage: 'complete',
+          percent: 100,
+          message: sourceMode === 'local'
+            ? '本地视频中没有音轨，无法继续识别。'
+            : '视频已下载，但影片中没有音轨，无法继续识别。'
+        })
+        return
+      }
       this.update(record, { stage: 'extract-audio', percent: 28, message: '正在提取原音频' })
       const audio = await this.extractAudio(record, video, join(root, `${task.taskId}.wav`))
       record.task.artifacts.audio = audio
+      if (!req1UsesSeparateVocals(task)) this.clearReq1VocalsArtifact(record, root)
       this.persist(record)
       const gpu = detectGpu()
-      if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '视频和音频已保存，但当前没有可用的 NVIDIA GPU，无法执行人声分离与语音识别。')
-      this.update(record, { stage: 'separate-vocals', percent: 36, message: '正在分离人声（加载模型 / 去除背景音乐）' })
-      const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`))
-      record.task.artifacts.vocals = vocals
-      this.persist(record)
-      await this.performAsr(record, audio, modelPaths.asr, 55)
+      if (!gpu.available) {
+        const gpuWork = req1UsesSeparateVocals(task) ? '去除背景音乐与语音识别' : '语音识别'
+        throw this.failWithCode(record, 'GPU_REQUIRED', `视频和音频已保存，但当前没有可用的 NVIDIA GPU，无法执行${gpuWork}。`)
+      }
+      if (req1UsesSeparateVocals(task)) {
+        this.update(record, { stage: 'separate-vocals', percent: 36, message: '正在去除背景音乐（加载模型 / 分离人声）' })
+        const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`))
+        record.task.artifacts.vocals = vocals
+        this.persist(record)
+      } else {
+        this.update(record, { stage: 'asr', percent: 32, message: '正在准备语音识别…' })
+      }
+      await this.performAsr(record, audio, modelPaths.asr, req1UsesSeparateVocals(task) ? 55 : 36)
       // const target = this.options.getConfig().translationTargetLanguage
       // this.update(record, { stage: 'translation', percent: 84, message: '正在翻译文案' })
       // const sourceLines = (record.task.transcript?.segments ?? []).map((segment) => segment.text.trim()).filter(Boolean)
@@ -645,10 +705,21 @@ export class TaskManager {
     mkdirSync(root, { recursive: true })
     const sourceMode = this.resolveSourceMode(task)
     try {
-      const video = await this.acquireVideo(record, root, task.taskId, sourceMode)
+      const { path: video, hasAudio } = await this.acquireVideo(record, root, task.taskId, sourceMode)
       if (sourceMode === 'url') {
         record.task.artifacts.video = video
         this.persist(record)
+      }
+      if (!hasAudio) {
+        this.update(record, {
+          status: 'complete',
+          stage: 'complete',
+          percent: 100,
+          message: sourceMode === 'local'
+            ? '本地视频中没有音轨，无法提取音频。'
+            : '视频已下载，但影片中没有音轨，无法提取音频。'
+        })
+        return
       }
       this.update(record, { stage: 'extract-audio', percent: 65, message: '正在提取原音频' })
       const audio = await this.extractAudio(record, video, join(root, `${task.taskId}.wav`))
@@ -676,18 +747,18 @@ export class TaskManager {
       const audio = await this.extractAudio(record, sourcePath, tempAudio)
       const gpu = detectGpu()
       if (!gpu.available) {
-        throw this.failWithCode(record, 'GPU_REQUIRED', '当前没有可用的 NVIDIA GPU，无法执行人声分离。')
+        throw this.failWithCode(record, 'GPU_REQUIRED', '当前没有可用的 NVIDIA GPU，无法执行去除背景音乐。')
       }
-      this.update(record, { stage: 'separate-vocals', percent: 25, message: '正在分离人声（加载模型 / 去除背景音乐）' })
+      this.update(record, { stage: 'separate-vocals', percent: 25, message: '正在去除背景音乐（加载模型 / 分离人声）' })
       const vocals = await this.separateVocals(record, audio, join(root, `${task.taskId}_人声.wav`), { min: 25, max: 95 })
       record.task.artifacts = { vocals }
       this.persist(record)
-      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '人声分离完成' })
+      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '去除背景音乐完成' })
     } catch (error) {
       if (record.cancelled) return
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
       else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
-      log.error('人声分离任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
+      log.error('去除背景音乐任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
     } finally {
       if (existsSync(tempAudio)) unlinkSync(tempAudio)
     }
@@ -745,10 +816,17 @@ export class TaskManager {
     mkdirSync(root, { recursive: true })
     try {
       this.update(record, { status: 'running', stage: 'download', percent: 1, message: '正在解析并下载视频…' })
-      const video = await this.download(record, root, record.task.taskId)
+      const { path: video, hasAudio } = await this.download(record, root, record.task.taskId)
       record.task.artifacts.video = video
       this.persist(record)
-      this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '视频下载完成（原始媒体流未转码）' })
+      this.update(record, {
+        status: 'complete',
+        stage: 'complete',
+        percent: 100,
+        message: hasAudio
+          ? '视频下载完成（原始媒体流未转码）'
+          : '视频已下载，但影片中没有音轨。'
+      })
     } catch (error) {
       if (record.cancelled) return
       this.fail(record, 'DOWNLOAD_FAILED', errorMessage(error))
@@ -760,14 +838,26 @@ export class TaskManager {
     const { task } = record
     const root = resolve(task.outputDirectory)
     mkdirSync(root, { recursive: true })
+    const sourcePath = resolve(task.url)
+    const tempAudio = join(root, `.${task.taskId}.processing.wav`)
+    const isVideo = this.isLocalVideoPath(sourcePath)
     try {
-      const sourceAudio = await this.importLocalAudio(record, root, task.taskId, task.url)
-      this.update(record, { status: 'running', stage: 'extract-audio', percent: 8, message: '正在转换音频' })
-      const audio = await this.extractAudio(record, sourceAudio, join(root, `${task.taskId}.wav`))
-      record.task.artifacts.audio = audio
-      this.persist(record)
+      if (!existsSync(sourcePath)) {
+        throw this.failWithCode(
+          record,
+          isVideo ? 'VIDEO_NOT_FOUND' : 'AUDIO_NOT_FOUND',
+          isVideo ? '选择的本地视频不存在。' : '选择的音频文件不存在。'
+        )
+      }
+      this.update(record, {
+        status: 'running',
+        stage: 'extract-audio',
+        percent: 8,
+        message: isVideo ? '正在提取音频' : '正在转换音频'
+      })
+      const audio = await this.extractAudio(record, sourcePath, tempAudio)
       const gpu = detectGpu()
-      if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '音频已保存，但当前没有可用的 NVIDIA GPU，无法执行语音识别。')
+      if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '音频已处理，但当前没有可用的 NVIDIA GPU，无法执行语音识别。')
       const finalTranscript = await this.performPreciseSrt(
         record,
         audio,
@@ -777,7 +867,7 @@ export class TaskManager {
       assertValidTranscript(finalTranscript)
       const srtPath = join(root, `${task.taskId}.srt`)
       writeFileSync(srtPath, transcriptToSrt(finalTranscript), 'utf8')
-      record.task.artifacts.srt = srtPath
+      record.task.artifacts = { srt: srtPath }
       this.persist(record)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: 'SRT 已生成' })
     } catch (error) {
@@ -785,6 +875,8 @@ export class TaskManager {
       if (isTaskError(error)) this.fail(record, error.taskError.code, error.taskError.message)
       else this.fail(record, 'PIPELINE_FAILED', errorMessage(error))
       log.error('任务失败', { taskId: record.task.taskId, error: errorMessage(error) })
+    } finally {
+      if (existsSync(tempAudio)) unlinkSync(tempAudio)
     }
   }
 
@@ -939,7 +1031,7 @@ export class TaskManager {
     delete record.task.artifacts.transcript
   }
 
-  private async download(record: TaskRecord, directory: string, fileStem: string): Promise<string> {
+  private async download(record: TaskRecord, directory: string, fileStem: string): Promise<{ path: string; hasAudio: boolean }> {
     const config = this.options.getConfig()
     const result = await downloadVideo({
       url: record.task.url,
@@ -947,12 +1039,19 @@ export class TaskManager {
       fileStem,
       vendor: this.options.resolveVendor(),
       config,
+      requireAudio: false,
+      isCancelled: () => record.cancelled,
+      signal: record.abortController.signal,
       updateProgress: (percent, message) => this.update(record, { percent, message }),
       runCommand: (command, args, onLine, commandLabel) =>
         this.runCommand(record, command, args, onLine, commandLabel),
       downloadTikTokPublic: this.options.downloadTikTokPublic,
-      resolveTikTokBrowserMedia: this.options.resolveTikTokBrowserMedia,
-      resolveFacebookAnonymousMedia: this.options.resolveFacebookAnonymousMedia,
+      resolveTikTokBrowserMedia: this.options.resolveTikTokBrowserMedia
+        ? (url, proxy, signal) => this.options.resolveTikTokBrowserMedia!(url, proxy, signal)
+        : undefined,
+      resolveFacebookAnonymousMedia: this.options.resolveFacebookAnonymousMedia
+        ? (url, proxy, signal) => this.options.resolveFacebookAnonymousMedia!(url, proxy, signal)
+        : undefined,
       resolveAuthenticatedCookies: async (platform) => {
         const platformId = platformAuthIdFromUrlPlatform(platform)
         if (!platformId || !this.options.resolvePlatformAuthentication) return undefined
@@ -966,9 +1065,16 @@ export class TaskManager {
       videoCodec: result.media.videoCodec,
       audioCodec: result.media.audioCodec,
       width: result.media.width,
-      height: result.media.height
+      height: result.media.height,
+      hasAudio: Boolean(result.media.audioCodec)
     })
-    return result.path
+    return { path: result.path, hasAudio: Boolean(result.media.audioCodec) }
+  }
+
+  private clearReq1VocalsArtifact(record: TaskRecord, root: string): void {
+    delete record.task.artifacts.vocals
+    const vocalsPath = join(root, `${record.task.taskId}_人声.wav`)
+    if (existsSync(vocalsPath)) unlinkSync(vocalsPath)
   }
 
   private async separateVocals(
@@ -989,11 +1095,11 @@ export class TaskManager {
       if (message.type === 'progress') {
         this.update(record, {
           percent: Math.max(progress.min, Math.min(progress.max, message.percent ?? progress.min)),
-          message: message.message ?? '正在分离人声'
+          message: message.message ?? '正在去除背景音乐'
         })
       }
     }, { TORCH_HOME: modelsDirectory })
-    if (response.type !== 'separated' || !response.vocalsPath) throw new Error('人声分离没有返回有效文件。')
+    if (response.type !== 'separated' || !response.vocalsPath) throw new Error('去除背景音乐没有返回有效文件。')
     if (!existsSync(response.vocalsPath)) throw new Error('人声文件未生成。')
     return response.vocalsPath
   }
@@ -1234,11 +1340,14 @@ export class TaskManager {
       if (!task.taskId || !task.taskDirectory) return
       if (this.records.has(task.taskId)) return
       task.kind ??= task.taskId.startsWith('req2-') || task.taskId.startsWith('Audio_') ? 'req2' : 'req1'
+      if (task.kind === 'req1' && task.separateVocals !== true && task.artifacts.vocals) {
+        delete task.artifacts.vocals
+      }
       if (task.status === 'running' || task.status === 'queued') {
         task.status = 'error'; task.stage = 'error'; task.message = '应用退出导致任务中断。'; task.error = { code: 'INTERRUPTED', message: task.message }; task.updatedAt = now()
         writeFileSync(taskFile, JSON.stringify(task, null, 2), 'utf8')
       }
-      this.records.set(task.taskId, { task, listeners: new Set(), processes: new Set(), cancelled: false })
+      this.records.set(task.taskId, this.createRecord(task, true))
     } catch { /* Ignore malformed task records. */ }
   }
 

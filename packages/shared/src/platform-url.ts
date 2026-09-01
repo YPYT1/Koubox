@@ -241,26 +241,3 @@ export function parsePlatformUrlOrThrow(input: string): ParsedPlatformUrl {
   return parsed
 }
 
-export function describeParsedPlatformUrl(parsed: ParsedPlatformUrl): string {
-  switch (parsed.kind) {
-    case 'youtube-watch': return '已识别：YouTube 视频'
-    case 'youtube-short': return '已识别：YouTube Shorts'
-    case 'youtube-short-link': return '已识别：YouTube 短链'
-    case 'tiktok-video':
-      return parsed.strippedParams.length
-        ? '已识别：TikTok 视频，已忽略分享参数'
-        : '已识别：TikTok 视频'
-    case 'tiktok-short-link': return '已识别：TikTok 短链，下载时会跟随重定向'
-    case 'instagram-post': return '已识别：Instagram Post'
-    case 'instagram-reel':
-    case 'instagram-reels':
-      return parsed.strippedParams.length
-        ? '已识别：Instagram Reel，已忽略分享参数'
-        : '已识别：Instagram Reel'
-    case 'facebook-watch': return '已识别：Facebook 视频'
-    case 'facebook-reel': return '已识别：Facebook Reel'
-    case 'facebook-video': return '已识别：Facebook 视频'
-    case 'facebook-share': return '已识别：Facebook 分享链接，下载时会自动跳转到视频页面'
-    default: return `已识别：${parsed.platform}`
-  }
-}
