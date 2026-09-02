@@ -1,4 +1,4 @@
-import { detectPlatform } from '@koubox/shared'
+import { assertDownloadableVideoUrl, detectPlatform } from '@koubox/shared'
 import { FormField } from '../common/FormControls'
 import { DOWNLOAD_PLATFORM_META, isSupportedDownloadPlatform } from './platforms'
 
@@ -9,6 +9,17 @@ type VideoUrlFieldProps = {
   label?: string
   placeholder?: string
   showPlatformChips?: boolean
+}
+
+function formatHint(value: string): { error?: string } {
+  const trimmed = value.trim()
+  if (!trimmed) return {}
+  try {
+    assertDownloadableVideoUrl(trimmed)
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+  return {}
 }
 
 /** 两个下载相关工具共用的链接输入 + 平台识别条 */
@@ -22,6 +33,7 @@ export function VideoUrlField({
 }: VideoUrlFieldProps) {
   const platform = value.trim() ? detectPlatform(value.trim()) : undefined
   const supported = isSupportedDownloadPlatform(platform)
+  const hint = formatHint(value)
 
   return (
     <>
@@ -52,7 +64,8 @@ export function VideoUrlField({
         </div>
       )}
 
-      {value.trim() && platform && !supported && (
+      {hint.error && <div className="downloader-platform-warn">{hint.error}</div>}
+      {!hint.error && value.trim() && platform && !supported && (
         <div className="downloader-platform-warn">当前链接平台不在支持范围内</div>
       )}
     </>

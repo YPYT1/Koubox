@@ -9,7 +9,8 @@ import {
   Subtitles,
   DownloadSimple,
   Waveform,
-  Microphone
+  Microphone,
+  MicrophoneStage
 } from '@phosphor-icons/react'
 import type { RuntimeStatus, TaskStatus, ToolId, ToolManifest } from '@koubox/shared'
 import kouboxIcon from '../assets/koubox-icon.png'
@@ -33,7 +34,8 @@ const toolIcons: Record<ToolId, React.ComponentType<{ size?: number; weight?: 'b
   'precise-srt': Subtitles,
   'video-downloader': DownloadSimple,
   'video-audio': Waveform,
-  'vocal-separation': Microphone
+  'vocal-separation': Microphone,
+  'speech-to-text': MicrophoneStage
 }
 
 const STATUS_LABEL: Record<TaskStatus, string> = {

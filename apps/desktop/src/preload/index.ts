@@ -9,17 +9,24 @@ function requestLabel(method: string, path: string): string {
   return `${method} ${path}`
 }
 
+function isSilentMonitorGet(method: string, path: string): boolean {
+  return method === 'GET' && (path === '/runtime/memory' || path === '/runtime/gpu')
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!apiUrl || !token) throw new Error('本地服务尚未启动。')
   const startTime = Date.now()
   const requestId = ++requestSequence
   const method = init?.method || 'GET'
-  void ipcRenderer.invoke('log:debug', 'preload 请求开始', {
-    requestId,
-    request: requestLabel(method, path),
-    hasBody: Boolean(init?.body),
-    bodyBytes: typeof init?.body === 'string' ? init.body.length : 0
-  })
+  const silent = isSilentMonitorGet(method, path)
+  if (!silent) {
+    void ipcRenderer.invoke('log:debug', 'preload 请求开始', {
+      requestId,
+      request: requestLabel(method, path),
+      hasBody: Boolean(init?.body),
+      bodyBytes: typeof init?.body === 'string' ? init.body.length : 0
+    })
+  }
   try {
     const response = await fetch(`${apiUrl}${path}`, {
       ...init,
@@ -28,19 +35,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const payload = await response.json() as T & { error?: string; detail?: string }
     const duration = Date.now() - startTime
 
-    void ipcRenderer.invoke('log:debug', 'preload 请求收到响应', {
-      requestId,
-      request: requestLabel(method, path),
-      status: response.status,
-      ok: response.ok,
-      durationMs: duration,
-      payloadType: typeof payload
-    })
+    if (!silent) {
+      void ipcRenderer.invoke('log:debug', 'preload 请求收到响应', {
+        requestId,
+        request: requestLabel(method, path),
+        status: response.status,
+        ok: response.ok,
+        durationMs: duration,
+        payloadType: typeof payload
+      })
+    }
 
     if (!response.ok) {
-      // 优先显示 detail（包含真实错误信息），其次是 error
       const message = payload.detail || payload.error || `本地服务错误 (${response.status})`
-      // 记录错误到日志文件
       void ipcRenderer.invoke('log:error', `API 请求失败: ${init?.method || 'GET'} ${path}`, {
         status: response.status,
         error: message,
@@ -50,12 +57,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(message)
     }
 
-    // 成功请求全部写入 debug，开发模式下可定位初始化和重复请求。
-    void ipcRenderer.invoke('log:debug', 'preload 请求完成', {
-      requestId,
-      request: requestLabel(method, path),
-      durationMs: duration
-    })
+    if (!silent) {
+      void ipcRenderer.invoke('log:debug', 'preload 请求完成', {
+        requestId,
+        request: requestLabel(method, path),
+        durationMs: duration
+      })
+    }
     if (init?.method && init.method !== 'GET') {
       void ipcRenderer.invoke('log:info', `API 请求成功: ${init.method} ${path}`, { duration: `${duration}ms` })
     }
@@ -77,7 +85,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 function get<T>(path: string): Promise<T> {
   const existing = inFlightGets.get(path)
   if (existing) {
-    void ipcRenderer.invoke('log:debug', 'preload 复用进行中的 GET 请求', { path })
+    if (!isSilentMonitorGet('GET', path)) {
+      void ipcRenderer.invoke('log:debug', 'preload 复用进行中的 GET 请求', { path })
+    }
     return existing as Promise<T>
   }
 

@@ -6,11 +6,12 @@ import type { Transcript } from '@koubox/shared'
 type SrtPreviewProps = {
   transcript: Transcript
   audioPath?: string
+  embedded?: boolean
   onExport?: () => void
   onCopy?: () => void
 }
 
-export function SrtPreview({ transcript, audioPath, onExport, onCopy }: SrtPreviewProps) {
+export function SrtPreview({ transcript, audioPath, embedded = false, onExport, onCopy }: SrtPreviewProps) {
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
@@ -96,47 +97,13 @@ export function SrtPreview({ transcript, audioPath, onExport, onCopy }: SrtPrevi
     onCopy?.()
   }
 
-  return (
-    <div className="panel-box">
-      <div className="panel-title">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Eye size={20} weight="duotone" />
-          <h3>SRT 字幕预览</h3>
-          <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-            {transcript.segments.length} 条字幕
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="secondary" size="sm" onClick={handleCopyAll} icon={<Copy size={16} />}>
-            复制全部
-          </Button>
-          {onExport && (
-            <Button
-              variant="primary-blue"
-              size="sm"
-              onClick={onExport}
-              icon={<Download size={16} />}
-            >
-              导出 SRT
-            </Button>
-          )}
-        </div>
-      </div>
+  const audioSrc = audioPath ? window.koubox.mediaUrl(audioPath) : ''
 
-      {/* 音频播放器（如果有音频） */}
-      {audioPath && (
-        <div
-          style={{
-            padding: '12px 16px',
-            background: 'var(--bg-tertiary)',
-            borderRadius: 8,
-            marginBottom: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12
-          }}
-        >
-          <audio ref={audioRef} src={`file://${audioPath}`} />
+  const content = (
+    <>
+      {audioSrc ? (
+        <div className="srt-preview-audio">
+          <audio ref={audioRef} preload="metadata" src={audioSrc} />
           <Button
             variant="secondary"
             size="sm"
@@ -145,23 +112,17 @@ export function SrtPreview({ transcript, audioPath, onExport, onCopy }: SrtPrevi
           >
             {isPlaying ? '暂停' : '播放'}
           </Button>
-          <div style={{ flex: 1, fontSize: 14, color: 'var(--text-secondary)' }}>
+          <div className="srt-preview-audio-time">
             {formatTime(currentTime)}
-            {audioRef.current?.duration && ` / ${formatTime(audioRef.current.duration)}`}
+            {audioRef.current?.duration ? ` / ${formatTime(audioRef.current.duration)}` : ''}
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* 字幕列表 */}
       <div
         ref={containerRef}
-        style={{
-          maxHeight: 500,
-          overflowY: 'auto',
-          border: '1px solid var(--border-primary)',
-          borderRadius: 8,
-          background: 'var(--bg-primary)'
-        }}
+        className={`srt-preview-list ${embedded ? 'is-embedded' : ''}`}
       >
         {transcript.segments.map((segment, index) => {
           const isActive = index === activeIndex
@@ -268,6 +229,40 @@ export function SrtPreview({ transcript, audioPath, onExport, onCopy }: SrtPrevi
           {transcript.segments.length}
         </div>
       </div>
+    </>
+  )
+
+  if (embedded) {
+    return <div className="srt-preview-embedded">{content}</div>
+  }
+
+  return (
+    <div className="panel-box">
+      <div className="panel-title">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Eye size={20} weight="duotone" />
+          <h3>SRT 字幕预览</h3>
+          <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+            {transcript.segments.length} 条字幕
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="secondary" size="sm" onClick={handleCopyAll} icon={<Copy size={16} />}>
+            复制全部
+          </Button>
+          {onExport && (
+            <Button
+              variant="primary-blue"
+              size="sm"
+              onClick={onExport}
+              icon={<Download size={16} />}
+            >
+              导出 SRT
+            </Button>
+          )}
+        </div>
+      </div>
+      {content}
     </div>
   )
 }

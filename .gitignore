@@ -27,7 +27,13 @@ vendor/**/*
 !.vscode/extensions.json
 tests/
 packages/core/test/
-链接.txt
+!python/tests/
+!python/tests/test_precise_srt.py
+!packages/core/test/
+!packages/core/test/precise-srt-task.test.ts
+!packages/core/test/speech-to-text-task.test.ts
+!packages/core/test/req2-hardening.test.ts
+!packages/core/test/smoke-six-tools.integration.test.ts
 verification
 apps/desktop/release-test-20260826.deleted.fail
 apps/desktop/release-test-20260826/win-unpacked/resources/app.asar
@@ -35,7 +41,7 @@ apps/desktop/release-test-20260826/win-unpacked/resources/default_app.asar
 data/state_store.db/mem%3Aaudit.bin
 data/state_store.db/mem%3Ahealth.bin
 docs/技术分析/并发下载优化方案.md
-docs/技术分析/并发下载优化方案.md
+docs/ASR模型对比报告.md
 链接.txt
 链接 copy.txt
-链接.txt
+.tmp

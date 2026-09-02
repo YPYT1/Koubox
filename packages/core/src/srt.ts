@@ -1,16 +1,34 @@
 import type { Transcript } from '@koubox/shared'
+import { formatSrtTime, transcriptToSrt } from '@koubox/shared'
 
-function pad(value: number, digits = 2): string {
-  return String(value).padStart(digits, '0')
-}
+export { formatSrtTime, transcriptToSrt }
 
-export function formatSrtTime(seconds: number): string {
-  const milliseconds = Math.max(0, Math.round(seconds * 1000))
-  const hours = Math.floor(milliseconds / 3_600_000)
-  const minutes = Math.floor((milliseconds % 3_600_000) / 60_000)
-  const secs = Math.floor((milliseconds % 60_000) / 1000)
-  const millis = milliseconds % 1000
-  return `${pad(hours)}:${pad(minutes)}:${pad(secs)},${pad(millis, 3)}`
+export function assertValidTranscript(transcript: Transcript): void {
+  if (transcript.segments.length === 0) throw new Error('SRT 没有字幕片段。')
+  const language = transcript.language?.toLowerCase().replace('_', '-')
+  let previousEnd = -1
+  for (const [index, segment] of transcript.segments.entries()) {
+    if (!segment.text.trim()) throw new Error(`第 ${index + 1} 条字幕为空。`)
+    if (!Number.isFinite(segment.start) || !Number.isFinite(segment.end)) {
+      throw new Error(`第 ${index + 1} 条字幕时间不是有效数字。`)
+    }
+    if (segment.start < 0) throw new Error(`第 ${index + 1} 条字幕开始时间小于 0。`)
+    if (segment.end <= segment.start) throw new Error(`第 ${index + 1} 条字幕不是正时长。`)
+    if (segment.start < previousEnd) throw new Error(`第 ${index + 1} 条字幕时间轴重叠或倒退。`)
+    if (segment.end - segment.start > 3.001) throw new Error(`第 ${index + 1} 条字幕超过 3 秒。`)
+    const visibleCharacters = segment.text.replace(/\s+/g, '').length
+    if ((language === 'ja' || language === 'zh' || language?.startsWith('zh-')) && visibleCharacters > 14) {
+      throw new Error(`第 ${index + 1} 条字幕超过语言字符上限。`)
+    }
+    if (language === 'ko' && visibleCharacters > 18) {
+      throw new Error(`第 ${index + 1} 条字幕超过语言字符上限。`)
+    }
+    if (language === 'en') {
+      if (visibleCharacters > 42) throw new Error(`第 ${index + 1} 条英文字幕超过字符上限。`)
+      if (segment.text.trim().split(/\s+/).length > 8) throw new Error(`第 ${index + 1} 条英文字幕超过单词上限。`)
+    }
+    previousEnd = segment.end
+  }
 }
 
 /**
@@ -23,67 +41,6 @@ export function formatSrtTime(seconds: number): string {
  * 4. 换行符：建议 CRLF（Windows）
  * 5. 时间不能倒退或重叠
  */
-export function transcriptToSrt(transcript: Transcript, options?: { addBom?: boolean }): string {
-  const segments = transcript.segments
-    .filter((segment) => segment.text.trim() && segment.end >= segment.start)
-    // 确保时间不重叠：如果当前开始时间早于上一个结束时间，调整为上一个结束时间
-    .reduce<Array<{ text: string; start: number; end: number }>>((acc, segment) => {
-      const prevEnd = acc.length > 0 ? acc[acc.length - 1].end : 0
-      const start = Math.max(segment.start, prevEnd)
-      const end = Math.max(segment.end, start + 0.001) // 至少 1ms
-      acc.push({ text: segment.text.trim(), start, end })
-      return acc
-    }, [])
-
-  const srtContent = segments
-    .map((segment, index) => {
-      // 剪映支持多行字幕，但每行不宜过长（建议 15-20 字一行）
-      const lines = splitTextForSubtitle(segment.text, 20)
-      return `${index + 1}\n${formatSrtTime(segment.start)} --> ${formatSrtTime(segment.end)}\n${lines.join('\n')}`
-    })
-    .join('\n\n')
-
-  // 添加 UTF-8 BOM 标记（剪映在 Windows 上推荐）
-  const bom = options?.addBom !== false ? '﻿' : ''
-  return bom + srtContent + '\n'
-}
-
-/**
- * 智能断行：将长文本按合理长度拆分为多行，方便阅读
- * 优先在标点符号处断行
- */
-function splitTextForSubtitle(text: string, maxCharsPerLine = 20): string[] {
-  if (text.length <= maxCharsPerLine) return [text]
-
-  const lines: string[] = []
-  let currentLine = ''
-
-  // 按逗号、句号等标点符号预分段
-  const segments = text.split(/([，。、；：！？,;:!?])/g).filter(Boolean)
-
-  for (const segment of segments) {
-    if (currentLine.length + segment.length <= maxCharsPerLine) {
-      currentLine += segment
-    } else {
-      if (currentLine) lines.push(currentLine)
-      currentLine = segment
-    }
-  }
-
-  if (currentLine) lines.push(currentLine)
-
-  // 如果没有标点符号或断行失败，强制按字数切分
-  if (lines.length === 0 || lines.some((line) => line.length > maxCharsPerLine * 1.5)) {
-    const chars = [...text]
-    lines.length = 0
-    for (let i = 0; i < chars.length; i += maxCharsPerLine) {
-      lines.push(chars.slice(i, i + maxCharsPerLine).join(''))
-    }
-  }
-
-  return lines
-}
-
 /**
  * 解析 SRT 文件为 Transcript 结构（用于导入和验证）
  */

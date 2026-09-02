@@ -1,5 +1,5 @@
 import { DownloadSimple, FilmStrip, LinkSimple, UploadSimple } from '@phosphor-icons/react'
-import { LOCAL_VIDEO_EXTENSIONS, type MaterialsSourceMode } from '@koubox/shared'
+import { type MaterialsSourceMode } from '@koubox/shared'
 import { FormField, PathPicker } from '../common/FormControls'
 import { VideoUrlField } from './VideoUrlField'
 
@@ -61,7 +61,7 @@ export function VideoSourceFields({
       {sourceMode === 'url' ? (
         <VideoUrlField value={url} onChange={onUrlChange} disabled={disabled} label={urlLabel} />
       ) : (
-        <FormField label="本地视频" hint={`支持 ${LOCAL_VIDEO_EXTENSIONS.join(' / ')}`}>
+        <FormField label="本地视频">
           <PathPicker
             value={videoPath}
             onChange={onVideoPathChange}

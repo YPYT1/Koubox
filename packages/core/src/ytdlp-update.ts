@@ -22,10 +22,10 @@ type Release = {
 type ActiveMetadata = { version: string; sha256: string; filename: string; installedAt: string }
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
 
-function commandOutput(executable: string, args: string[]): { status: number | null; output: string } {
+function commandOutput(executable: string, args: string[], timeout = 50_000): { status: number | null; output: string } {
   const startedAt = Date.now()
   log.debug('外部命令开始', { executable, args })
-  const result = spawnSync(executable, args, { encoding: 'utf8', windowsHide: true, timeout: 50_000 })
+  const result = spawnSync(executable, args, { encoding: 'utf8', windowsHide: true, timeout })
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim()
   log.debug('外部命令完成', {
     executable,
@@ -122,6 +122,33 @@ export function inspectYtdlpRuntime(
   probeProvider = false
 ): YtdlpRuntimeInspection {
   return inspectYtdlpRuntimeWithKnownVersion(executable, denoExecutable, probeProvider)
+}
+
+/**
+ * Fast startup check. It verifies executable versions without invoking
+ * yt-dlp's extractor/provider discovery, which can block the Electron API on
+ * hosts where the bundled JS runtime is slow to initialize.
+ */
+export function inspectYtdlpRuntimeFast(
+  executable: string,
+  denoExecutable: string
+): YtdlpRuntimeInspection {
+  const versionResult = existsSync(executable)
+    ? commandOutput(executable, ['--version'], 5_000)
+    : { status: null, output: '' }
+  const denoResult = existsSync(denoExecutable)
+    ? commandOutput(denoExecutable, ['--version'], 5_000)
+    : { status: null, output: '' }
+  const version = versionResult.status === 0 ? versionResult.output.split(/\r?\n/)[0]?.trim() || undefined : undefined
+  const denoVersion = denoResult.status === 0 ? denoResult.output.split(/\r?\n/)[0]?.trim() || undefined : undefined
+  const jsRuntimeVersion = denoVersion?.match(/^deno\s+([^\s]+)/i)?.[1]
+  return {
+    version,
+    denoVersion,
+    jsRuntimeVersion,
+    providerReady: false,
+    output: `${versionResult.output}\n${denoResult.output}`.trim()
+  }
 }
 
 function releaseAsset(release: Release): { version: string; url: string; sha256: string } {

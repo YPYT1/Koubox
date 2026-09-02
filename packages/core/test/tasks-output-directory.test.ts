@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KouboxConfig } from '@koubox/shared'
 import { TaskManager } from '../src/tasks.js'
+import { testModelPaths } from './test-model-paths.js'
 
 const temporaryRoots: string[] = []
 
@@ -32,14 +33,26 @@ describe('task output directories', () => {
     const outputRoot = join(root, 'Koubox Outputs')
     const manager = createManager(root)
 
-    const videoTask = manager.startRequirementOne('https://www.youtube.com/watch?v=example', outputRoot, { asr: '', translation: '' })
-    const audioTask = manager.startRequirementTwo(join(root, 'missing.wav'), '', outputRoot, { asr: '', translation: '' })
+    const videoTask = manager.startRequirementOne('https://www.youtube.com/watch?v=example', outputRoot, testModelPaths())
+    const audioTask = manager.startRequirementTwo(join(root, 'missing.wav'), '', outputRoot, testModelPaths())
+    const speechTask = manager.startSpeechToText(join(root, 'missing.wav'), outputRoot, testModelPaths())
 
-    for (const task of [videoTask, audioTask]) {
+    for (const task of [videoTask, audioTask, speechTask]) {
       expect(task.outputDirectory).toBe(join(outputRoot, task.taskId))
       expect(task.taskDirectory).toBe(task.outputDirectory)
       expect(existsSync(task.outputDirectory)).toBe(true)
     }
-    expect(videoTask.outputDirectory).not.toBe(audioTask.outputDirectory)
+    expect(new Set([videoTask.outputDirectory, audioTask.outputDirectory, speechTask.outputDirectory]).size).toBe(3)
+  })
+
+  it('stores req1 separateVocals flag explicitly', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-task-separate-'))
+    temporaryRoots.push(root)
+    const outputRoot = join(root, 'outputs')
+    const manager = createManager(root)
+    const offTask = manager.startRequirementOne('https://www.youtube.com/watch?v=off', outputRoot, testModelPaths(), 'url', false)
+    const onTask = manager.startRequirementOne('https://www.youtube.com/watch?v=on', outputRoot, testModelPaths(), 'url', true)
+    expect(offTask.separateVocals).toBe(false)
+    expect(onTask.separateVocals).toBe(true)
   })
 })

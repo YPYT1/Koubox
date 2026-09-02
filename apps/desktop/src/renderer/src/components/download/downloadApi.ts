@@ -1,8 +1,10 @@
 import {
   assertDownloadableVideoUrl,
   assertLocalAudioPath,
+  assertLocalSpeechMediaPath,
   assertLocalVideoPath,
   type TaskSnapshot,
+  SPEECH_TO_TEXT_PIPELINE_PATH,
   VIDEO_AUDIO_PIPELINE_PATH,
   VIDEO_DOWNLOAD_PIPELINE_PATH,
   VIDEO_MATERIALS_PIPELINE_PATH,
@@ -23,23 +25,22 @@ export type MaterialsPipelineInput = {
   outputDirectory: string
   url?: string
   videoPath?: string
+  separateVocals?: boolean
 }
 
 async function postVideoMaterialsPipeline(path: string, input: MaterialsPipelineInput): Promise<TaskSnapshot> {
   if (!input.outputDirectory.trim()) throw new Error('请选择保存目录。')
+  const payload: Record<string, string | boolean> = {
+    outputDirectory: input.outputDirectory.trim(),
+    separateVocals: input.separateVocals === true
+  }
   const videoPath = input.videoPath?.trim() ?? ''
   if (videoPath) {
     const checked = assertLocalVideoPath(videoPath)
-    return window.koubox.post<TaskSnapshot>(path, {
-      videoPath: checked,
-      outputDirectory: input.outputDirectory.trim()
-    })
+    return window.koubox.post<TaskSnapshot>(path, { ...payload, videoPath: checked })
   }
   const checked = assertDownloadableVideoUrl(input.url ?? '')
-  return window.koubox.post<TaskSnapshot>(path, {
-    url: checked.url,
-    outputDirectory: input.outputDirectory.trim()
-  })
+  return window.koubox.post<TaskSnapshot>(path, { ...payload, url: checked.url })
 }
 
 /** 下载或本地导入 + 后续素材流水线：爆款素材获取 */
@@ -58,6 +59,16 @@ export async function startVocalSeparationPipeline(audioPath: string, outputDire
   if (!outputDirectory.trim()) throw new Error('请选择保存目录。')
   return window.koubox.post<TaskSnapshot>(VOCAL_SEPARATION_PIPELINE_PATH, {
     audioPath: checked,
+    outputDirectory: outputDirectory.trim()
+  })
+}
+
+/** 本地上传音频或视频 + 语音识别 */
+export async function startSpeechToTextPipeline(mediaPath: string, outputDirectory: string): Promise<TaskSnapshot> {
+  const checked = assertLocalSpeechMediaPath(mediaPath)
+  if (!outputDirectory.trim()) throw new Error('请选择保存目录。')
+  return window.koubox.post<TaskSnapshot>(SPEECH_TO_TEXT_PIPELINE_PATH, {
+    mediaPath: checked,
     outputDirectory: outputDirectory.trim()
   })
 }

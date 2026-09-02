@@ -1,6 +1,6 @@
 {
   "name": "koubox",
-  "version": "0.8.2",
+  "version": "0.9.1",
   "private": true,
   "description": "口播匣 — 本地桌面工具箱",
   "type": "module",
@@ -10,12 +10,13 @@
     "package": "pnpm --filter @koubox/desktop package",
     "pack:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-portable.ps1",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @koubox/core test"
+    "test": "pnpm --filter @koubox/core test",
+    "smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-six-tools.ps1"
   },
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@11.1.2",
+  "packageManager": "pnpm@11.24.0",
   "devDependencies": {
     "playwright": "^1.62.1",
     "typescript": "^5.9.3"

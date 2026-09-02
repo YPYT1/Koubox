@@ -1,5 +1,4 @@
-export { alignKnownText } from './align.js'
-export { formatSrtTime, transcriptToSrt } from './srt.js'
+export { assertValidTranscript, formatSrtTime, transcriptToSrt } from './srt.js'
 export { startLocalApi } from './server.js'
 export { TaskManager } from './tasks.js'
 export {
@@ -11,7 +10,14 @@ export {
   BUNDLED_DENO_SHA256
 } from './ytdlp-update.js'
 export { createTemporaryPlatformCookieFile } from './platform-auth.js'
-export { extractFacebookMedia, extractFacebookVideoId, resolveFacebookPublicMedia } from './facebook.js'
+export { extractFacebookMedia, extractFacebookVideoId, isFacebookShareUrl, resolveFacebookPublicMedia, resolveFacebookShareUrl } from './facebook.js'
+export {
+  parsePlatformUrl,
+  parsePlatformUrlOrThrow,
+  type ParsedPlatformUrl,
+  type ParsedPlatformUrlKind
+} from '@koubox/shared'
+export { prepareDownloadUrl, type PreparedDownloadUrl } from './download-url.js'
 export { normalizeTikTokVideoUrl } from './public-video.js'
 export type { PublicMediaResolution } from './public-video.js'
 export {

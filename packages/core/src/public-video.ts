@@ -111,17 +111,24 @@ function cookieHeaderFromResponse(headers: Record<string, string | string[] | un
   return cookies.length > 0 ? cookies.join('; ') : undefined
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('任务已取消。')
+}
+
 async function fetchPage(
   url: string,
   proxy: string,
   timeoutMs = 50_000,  // 慢速网络最多等待 50 秒
-  userAgent = DEFAULT_USER_AGENT
+  userAgent = DEFAULT_USER_AGENT,
+  signal?: AbortSignal
 ): Promise<{ text: string; cookieHeader?: string }> {
+  throwIfAborted(signal)
   const normalizedProxy = normalizeProxyUrl(proxy)
   const dispatcher = normalizedProxy ? new ProxyAgent(normalizedProxy) : undefined
   try {
     const response = await request(url, {
       dispatcher,
+      signal,
       headers: {
         accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
         'accept-language': 'en-US,en;q=0.9',
@@ -138,17 +145,26 @@ async function fetchPage(
       text: await response.body.text(),
       cookieHeader: cookieHeaderFromResponse(response.headers)
     }
+  } catch (error) {
+    if (signal?.aborted) throw new Error('任务已取消。')
+    throw error
   } finally {
     await dispatcher?.close()
   }
 }
 
-async function fetchText(url: string, proxy: string, timeoutMs = 50_000, userAgent = DEFAULT_USER_AGENT): Promise<string> {
-  return (await fetchPage(url, proxy, timeoutMs, userAgent)).text
+async function fetchText(
+  url: string,
+  proxy: string,
+  timeoutMs = 50_000,
+  userAgent = DEFAULT_USER_AGENT,
+  signal?: AbortSignal
+): Promise<string> {
+  return (await fetchPage(url, proxy, timeoutMs, userAgent, signal)).text
 }
 
-async function fetchJson<T>(url: string, proxy: string, timeoutMs = 50_000): Promise<T> {
-  return JSON.parse(await fetchText(url, proxy, timeoutMs)) as T
+async function fetchJson<T>(url: string, proxy: string, timeoutMs = 50_000, signal?: AbortSignal): Promise<T> {
+  return JSON.parse(await fetchText(url, proxy, timeoutMs, DEFAULT_USER_AGENT, signal)) as T
 }
 
 function isTikTokShortHost(hostname: string): boolean {
@@ -163,14 +179,16 @@ export function normalizeTikTokVideoUrl(inputUrl: string): string {
   return canonical.toString()
 }
 
-async function expandTikTokUrl(inputUrl: string, proxy: string): Promise<string> {
+async function expandTikTokUrl(inputUrl: string, proxy: string, signal?: AbortSignal): Promise<string> {
   let current = inputUrl
   for (let hop = 0; hop < 6; hop += 1) {
+    throwIfAborted(signal)
     const normalizedProxy = normalizeProxyUrl(proxy)
     const dispatcher = normalizedProxy ? new ProxyAgent(normalizedProxy) : undefined
     try {
       const response = await request(current, {
         dispatcher,
+        signal,
         maxRedirections: 0,
         headers: { 'user-agent': DEFAULT_USER_AGENT },
         headersTimeout: 20_000,
@@ -183,6 +201,9 @@ async function expandTikTokUrl(inputUrl: string, proxy: string): Promise<string>
         continue
       }
       return current
+    } catch (error) {
+      if (signal?.aborted) throw new Error('任务已取消。')
+      throw error
     } finally {
       await dispatcher?.close()
     }
@@ -325,9 +346,10 @@ export function selectPipedStreams(data: PipedResponse, maxHeight: number): { vi
   return { videoUrl: video.url, audioUrl: audio?.url }
 }
 
-async function resolveTikTok(url: string, proxy: string): Promise<PublicMediaResolution> {
+async function resolveTikTok(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution> {
+  throwIfAborted(signal)
   const input = new URL(url)
-  const expandedUrl = isTikTokShortHost(input.hostname) ? await expandTikTokUrl(url, proxy) : url
+  const expandedUrl = isTikTokShortHost(input.hostname) ? await expandTikTokUrl(url, proxy, signal) : url
   const canonicalUrl = normalizeTikTokVideoUrl(expandedUrl)
   const canonical = new URL(canonicalUrl)
   const videoId = canonical.pathname.match(/\/video\/(\d+)/)?.[1]
@@ -336,8 +358,9 @@ async function resolveTikTok(url: string, proxy: string): Promise<PublicMediaRes
   const failures: string[] = []
   for (const userAgent of [DEFAULT_USER_AGENT, MOBILE_USER_AGENT]) {
     for (const endpoint of endpoints) {
+      throwIfAborted(signal)
       try {
-        const page = await fetchPage(endpoint, proxy, 25_000, userAgent)
+        const page = await fetchPage(endpoint, proxy, 25_000, userAgent, signal)
         const videoUrls = extractTikTokPlayUrls(page.text, videoId)
         const videoUrl = videoUrls[0]
         if (!videoUrl) throw new Error('页面没有返回目标公开视频 playAddr')
@@ -350,6 +373,7 @@ async function resolveTikTok(url: string, proxy: string): Promise<PublicMediaRes
           cookieHeader: page.cookieHeader
         }
       } catch (error) {
+        if (signal?.aborted) throw new Error('任务已取消。')
         failures.push(`${new URL(endpoint).pathname}: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
@@ -357,13 +381,15 @@ async function resolveTikTok(url: string, proxy: string): Promise<PublicMediaRes
   throw new Error(`TikTok 静态公开页面解析失败：${failures.join('；')}`)
 }
 
-async function resolveYoutube(url: string, proxy: string, maxHeight: number): Promise<PublicMediaResolution> {
+async function resolveYoutube(url: string, proxy: string, maxHeight: number, signal?: AbortSignal): Promise<PublicMediaResolution> {
+  throwIfAborted(signal)
   const videoId = extractYoutubeVideoId(url)
   if (!videoId) throw new Error('YouTube 链接中没有视频 ID。')
   const failures: string[] = []
   for (const instance of PIPED_INSTANCES) {
+    throwIfAborted(signal)
     try {
-      const data = await fetchJson<PipedResponse>(`${instance}/streams/${encodeURIComponent(videoId)}`, proxy, 20_000)
+      const data = await fetchJson<PipedResponse>(`${instance}/streams/${encodeURIComponent(videoId)}`, proxy, 20_000, signal)
       if (data.error) throw new Error(data.error)
       const streams = selectPipedStreams(data, maxHeight)
       if (!streams) throw new Error('没有可用的视频流')
@@ -374,6 +400,7 @@ async function resolveYoutube(url: string, proxy: string, maxHeight: number): Pr
         userAgent: DEFAULT_USER_AGENT
       }
     } catch (error) {
+      if (signal?.aborted) throw new Error('任务已取消。')
       failures.push(`${new URL(instance).hostname}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
@@ -389,14 +416,15 @@ async function resolveYoutube(url: string, proxy: string, maxHeight: number): Pr
  *
  * 两种格式都支持无登录公开解析。
  */
-type InstagramUrlFormat = 'reels' | 'post' | 'unknown'
+type InstagramUrlFormat = 'reels' | 'reel' | 'post' | 'unknown'
 
 function extractInstagramInfo(url: string): { shortcode: string; format: InstagramUrlFormat } | undefined {
-  const match = url.match(/instagram\.com\/(p|reels)\/([A-Za-z0-9_-]+)/)
+  const match = url.match(/instagram\.com\/(p|reel|reels)\/([A-Za-z0-9_-]+)/)
   if (!match) return undefined
 
   const [, formatPath, shortcode] = match
-  const format: InstagramUrlFormat = formatPath === 'reels' ? 'reels' : 'post'
+  const format: InstagramUrlFormat =
+    formatPath === 'p' ? 'post' : formatPath === 'reel' ? 'reel' : 'reels'
 
   return { shortcode, format }
 }
@@ -416,9 +444,10 @@ function extractInstagramShortcode(url: string): string | undefined {
  * 使用 Playwright 打开页面并捕获 CDN 网络请求来获取视频直链。
  * 通过 efg 参数（Base64 编码的元数据）来筛选最高质量的视频流。
  */
-async function resolveInstagram(url: string, proxy: string): Promise<PublicMediaResolution> {
+async function resolveInstagram(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution> {
+  throwIfAborted(signal)
   const info = extractInstagramInfo(url)
-  if (!info) throw new Error('Instagram 链接格式不正确。仅支持 /reels/ 和 /p/ 格式。')
+  if (!info) throw new Error('Instagram 链接格式不正确，支持 /p/、/reel/、/reels/。')
 
   const normalizedProxy = normalizeProxyUrl(proxy)
   const { spawn } = await import('node:child_process')
@@ -516,6 +545,11 @@ const executablePath = process.env.KOUBOX_PLAYWRIGHT_EXECUTABLE || ${executableL
       windowsHide: true,
       env
     })
+    const onAbort = () => {
+      child.kill()
+      finishError(new Error('任务已取消。'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -534,6 +568,7 @@ const executablePath = process.env.KOUBOX_PLAYWRIGHT_EXECUTABLE || ${executableL
     child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
     child.on('error', (error) => finishError(new Error(`Instagram 匿名解析进程启动失败：${error.message}`)))
     child.on('close', (code) => {
+      signal?.removeEventListener('abort', onAbort)
       if (settled) return
       const videoUrl = stdout.split(/\r?\n/).find((line) => line.startsWith('VIDEO_URL='))?.slice('VIDEO_URL='.length).trim() ?? ''
       const audioUrl = stdout.split(/\r?\n/).find((line) => line.startsWith('AUDIO_URL='))?.slice('AUDIO_URL='.length).trim() ?? ''
@@ -565,14 +600,16 @@ export async function resolvePublicMedia(
   url: string,
   platform: string,
   proxy: string,
-  maxHeight: number
+  maxHeight: number,
+  signal?: AbortSignal
 ): Promise<PublicMediaResolution> {
-  if (platform === 'TikTok') return resolveTikTok(url, proxy)
-  if (platform === 'YouTube') return resolveYoutube(url, proxy, maxHeight)
-  if (platform === 'Instagram') return resolveInstagram(url, proxy)
+  throwIfAborted(signal)
+  if (platform === 'TikTok') return resolveTikTok(url, proxy, signal)
+  if (platform === 'YouTube') return resolveYoutube(url, proxy, maxHeight, signal)
+  if (platform === 'Instagram') return resolveInstagram(url, proxy, signal)
   if (platform === 'Facebook') {
     const { resolveFacebookPublicMedia } = await import('./facebook')
-    return resolveFacebookPublicMedia(url, proxy)
+    return resolveFacebookPublicMedia(url, proxy, signal)
   }
   throw new Error(`${platform} 没有配置公开页面回退解析器。`)
 }

@@ -1,5 +1,4 @@
 import { MusicNotes } from '@phosphor-icons/react'
-import { LOCAL_AUDIO_EXTENSIONS } from '@koubox/shared'
 import { FormField, PathPicker } from '../common/FormControls'
 
 type LocalAudioFieldProps = {
@@ -21,7 +20,7 @@ export function LocalAudioField({
   const fileName = value.replace(/^.*[/\\]/, '')
 
   return (
-    <FormField label="本地音频" hint={`支持 ${LOCAL_AUDIO_EXTENSIONS.join(' / ')}`}>
+    <FormField label="本地音频">
       <PathPicker
         value={value}
         onChange={onChange}

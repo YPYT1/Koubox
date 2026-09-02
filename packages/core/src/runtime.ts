@@ -1,20 +1,35 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { freemem, totalmem } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, VendorToolCheck, YtdlpCookiePlatformId } from '@koubox/shared'
+import type { GpuStatus, KouboxConfig, ModelCheck, PlatformAuthConfig, PlatformAuthMode, RuntimeStatus, SystemMemoryStatus, VendorToolCheck, YtdlpCookiePlatformId } from '@koubox/shared'
+import {
+  ASR_MODEL_CATALOG,
+  asAsrModelId
+} from '@koubox/shared'
 import { defaultPlatformAuth, normalizeKouboxConfigPaths } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
-import { inspectYtdlpRuntime, type ActiveYtdlpRuntime } from './ytdlp-update.js'
+import {
+  migrateLegacyAsrModelDirectory,
+  resolveAsrExecutionPlan,
+  resolveAsrModelPaths,
+  type AsrExecutionPlan
+} from './asr-execution.js'
+import { inspectYtdlpRuntimeFast, type ActiveYtdlpRuntime } from './ytdlp-update.js'
 
 const log = createLogger('runtime')
 const executableVersionCache = new Map<string, string>()
+
+/** 实时图表轮询用：短缓存内复用上次 nvidia-smi 结果，避免每秒起子进程 */
+export const GPU_RUNTIME_PROBE_MAX_AGE_MS = 2500
+
+let gpuProbeCache: { at: number; value: GpuStatus } | undefined
 
 const asrModelFiles = [
   'config.json', 'model.bin', 'preprocessor_config.json', 'tokenizer.json', 'vocabulary.json'
 ]
 
 const legacyAsrModelDirectory = 'whisperlargev3turbo'
-const fasterWhisperAsrModelDirectory = 'faster-whisper-large-v3'
 
 const translationModelFiles = [
   'chat_template.jinja', 'config.json', 'configuration.json', 'generation_config.json',
@@ -25,6 +40,7 @@ const translationModelFiles = [
 const ytdlpExpectedFiles = ['yt-dlp.exe']
 const denoExpectedFiles = ['deno.exe']
 
+// 与 scripts/pack/manifests/pack-manifest.json 的 ffmpegExpectedFiles 保持一致。
 const ffmpegExpectedFiles = [
   'ffmpeg.exe',
   'ffprobe.exe',
@@ -60,16 +76,12 @@ export class RuntimeStore {
   ) {}
 
   private applyPinned(config: KouboxConfig): KouboxConfig {
-    // 总是锁定下载工具路径（yt-dlp、deno）
-    const bundledDownloadTools = {
+    // 打包后锁定工具路径，但允许用户自定义模型路径
+    if (!this.pinBundledPaths) return config
+    return {
       ...config,
       ytdlpDirectory: this.defaults.ytdlpDirectory,
-      denoDirectory: this.defaults.denoDirectory
-    }
-    // 打包后：额外锁定 ffmpeg 和 Python，但允许用户自定义模型路径
-    if (!this.pinBundledPaths) return bundledDownloadTools
-    return {
-      ...bundledDownloadTools,
+      denoDirectory: this.defaults.denoDirectory,
       ffmpegDirectory: this.defaults.ffmpegDirectory,
       pythonExecutable: this.defaults.pythonExecutable
     }
@@ -109,15 +121,18 @@ export class RuntimeStore {
     const config = { ...this.defaults, ...parsed }
     const migratedModelsDirectory = migrateLegacyDevelopmentModelPath(config.modelsDirectory, this.defaults.modelsDirectory)
     const migratedAsrModelDirectory = migrateLegacyDevelopmentModelPath(config.asrModelDirectory, this.defaults.modelsDirectory)
+    const migratedAsrLightModelDirectory = migrateLegacyDevelopmentModelPath(config.asrLightModelDirectory, this.defaults.modelsDirectory)
     const migratedTranslationModelDirectory = migrateLegacyDevelopmentModelPath(config.translationModelDirectory, this.defaults.modelsDirectory)
     const migratedDemucsModelDirectory = migrateLegacyDevelopmentModelPath(config.demucsModelDirectory, this.defaults.modelsDirectory)
     const migratedLegacyModelPaths =
       migratedModelsDirectory !== config.modelsDirectory ||
       migratedAsrModelDirectory !== config.asrModelDirectory ||
+      migratedAsrLightModelDirectory !== config.asrLightModelDirectory ||
       migratedTranslationModelDirectory !== config.translationModelDirectory ||
       migratedDemucsModelDirectory !== config.demucsModelDirectory
     config.modelsDirectory = migratedModelsDirectory
-    config.asrModelDirectory = migratedAsrModelDirectory
+    config.asrModelDirectory = migrateLegacyAsrModelDirectory(migratedAsrModelDirectory, migratedModelsDirectory)
+    config.asrLightModelDirectory = migratedAsrLightModelDirectory || join(migratedModelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].directoryName)
     config.translationModelDirectory = migratedTranslationModelDirectory
     config.demucsModelDirectory = migratedDemucsModelDirectory
     if (basename(config.modelsDirectory).toLowerCase() === 'model' && !existsSync(config.modelsDirectory) && existsSync(this.defaults.modelsDirectory)) {
@@ -125,8 +140,12 @@ export class RuntimeStore {
     }
     const usesLegacyAsrModel = basename(config.asrModelDirectory).toLowerCase() === legacyAsrModelDirectory
     if (!config.asrModelDirectory || usesLegacyAsrModel) {
-      config.asrModelDirectory = join(config.modelsDirectory, fasterWhisperAsrModelDirectory)
+      config.asrModelDirectory = join(config.modelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3'].directoryName)
     }
+    if (!config.asrLightModelDirectory) {
+      config.asrLightModelDirectory = join(config.modelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].directoryName)
+    }
+    config.defaultAsrModel = asAsrModelId(config.defaultAsrModel, this.defaults.defaultAsrModel)
     if (!config.translationModelDirectory) config.translationModelDirectory = join(config.modelsDirectory, 'HYMT21.8B')
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
@@ -195,16 +214,24 @@ export class RuntimeStore {
   }
 }
 
-export function detectGpu(): GpuStatus {
+export function detectGpu(options?: { maxAgeMs?: number }): GpuStatus {
+  const maxAgeMs = options?.maxAgeMs ?? 0
+  if (maxAgeMs > 0 && gpuProbeCache && Date.now() - gpuProbeCache.at < maxAgeMs) {
+    return gpuProbeCache.value
+  }
+  const value = probeGpu()
+  if (maxAgeMs > 0) gpuProbeCache = { at: Date.now(), value }
+  return value
+}
+
+function probeGpu(): GpuStatus {
   const startedAt = Date.now()
-  log.debug('GPU 检测开始')
   const result = spawnSync('nvidia-smi', ['--query-gpu=name,memory.total,memory.used,memory.free', '--format=csv,noheader,nounits'], { encoding: 'utf8', windowsHide: true })
   if (result.status !== 0 || !result.stdout.trim()) {
-    log.debug('GPU 检测完成', { durationMs: Date.now() - startedAt, available: false, exitCode: result.status })
+    log.warn('GPU 检测失败', { durationMs: Date.now() - startedAt, exitCode: result.status })
     return { available: false, message: '未检测到可用的 NVIDIA GPU；下载和抽音可继续，ASR 与翻译需要 GPU。' }
   }
   const [name, total, used, free] = result.stdout.trim().split('\n')[0].split(',').map((item) => item.trim())
-  log.debug('GPU 检测完成', { durationMs: Date.now() - startedAt, available: true, name, totalMemoryMiB: Number(total), freeMemoryMiB: Number(free) })
   return {
     available: true,
     name,
@@ -212,6 +239,16 @@ export function detectGpu(): GpuStatus {
     usedMemoryMiB: Number(used),
     freeMemoryMiB: Number(free),
     message: 'NVIDIA GPU 已就绪'
+  }
+}
+
+export function detectSystemMemory(): SystemMemoryStatus {
+  const totalMemoryMiB = Math.round(totalmem() / 1024 / 1024)
+  const freeMemoryMiB = Math.round(freemem() / 1024 / 1024)
+  return {
+    totalMemoryMiB,
+    freeMemoryMiB,
+    usedMemoryMiB: totalMemoryMiB - freeMemoryMiB
   }
 }
 
@@ -313,9 +350,18 @@ function inspectDemucs(directory: string): ModelCheck {
   }
 }
 
-export function resolveModelPaths(config: KouboxConfig): { asr: string; translation: string; demucs: string } {
+export function resolveModelPaths(config: KouboxConfig): {
+  asr: string
+  asrLight: string
+  asrPlan: AsrExecutionPlan
+  translation: string
+  demucs: string
+} {
+  const asrPaths = resolveAsrModelPaths(config)
   return {
-    asr: config.asrModelDirectory || join(config.modelsDirectory, fasterWhisperAsrModelDirectory),
+    asr: asrPaths.asr,
+    asrLight: asrPaths.asrLight,
+    asrPlan: resolveAsrExecutionPlan(config),
     translation: config.translationModelDirectory || join(config.modelsDirectory, 'HYMT21.8B'),
     demucs: config.demucsModelDirectory || join(config.modelsDirectory, 'demucs')
   }
@@ -385,11 +431,14 @@ export function getRuntimeStatus(
   const activeYtdlpExecutable = activeYtdlp?.executable ?? vendorPaths.ytdlpExecutable
   const ytdlpStartedAt = Date.now()
   const ytdlpRuntime = activeYtdlp?.runtimeInspection
-    ?? inspectYtdlpRuntime(activeYtdlpExecutable, vendorPaths.denoExecutable)
+    ?? inspectYtdlpRuntimeFast(activeYtdlpExecutable, vendorPaths.denoExecutable)
   log.debug('yt-dlp 运行时诊断完成', { durationMs: Date.now() - ytdlpStartedAt, cached: Boolean(activeYtdlp?.runtimeInspection), executable: activeYtdlpExecutable, denoExecutable: vendorPaths.denoExecutable, version: ytdlpRuntime.version, ejsVersion: ytdlpRuntime.ejsVersion, jsRuntimeVersion: ytdlpRuntime.jsRuntimeVersion, providerReady: ytdlpRuntime.providerReady })
   const gpu = detectGpu()
+  const largeV3 = ASR_MODEL_CATALOG['faster-whisper-large-v3']
+  const turbo = ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo']
   const models = [
-    inspectModel('asr', 'Faster-Whisper Large v3（FP16）', modelPaths.asr, asrModelFiles, 'ctranslate2'),
+    inspectModel(largeV3.runtimeModelId, largeV3.label, modelPaths.asr, asrModelFiles, 'ctranslate2'),
+    inspectModel(turbo.runtimeModelId, turbo.label, modelPaths.asrLight, asrModelFiles, 'ctranslate2'),
     inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
     inspectDemucs(modelPaths.demucs)
   ]

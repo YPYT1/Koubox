@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { ClipboardText, Clock, FileText, FolderOpen, Trash, X, Copy, Check } from '@phosphor-icons/react'
-import { detectPlatform, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
+import { detectPlatform, req1UsesSeparateVocals, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 
 type TaskHistoryPageProps = {
@@ -28,6 +28,25 @@ const ARTIFACT_LABEL: Partial<Record<keyof TaskArtifacts, string>> = {
 }
 
 const HIDDEN_ARTIFACT_KEYS = new Set(['transcript', 'translation'])
+const DELETE_FILES_STORAGE_KEY = 'koubox.task-center.delete-files'
+
+function readDeleteFilesPreference(): boolean {
+  try {
+    return localStorage.getItem(DELETE_FILES_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeDeleteFilesPreference(enabled: boolean): void {
+  try {
+    localStorage.setItem(DELETE_FILES_STORAGE_KEY, enabled ? '1' : '0')
+  } catch { /* ignore */ }
+}
+
+function deleteTaskPath(taskId: string, deleteFiles: boolean): string {
+  return `/tasks/${encodeURIComponent(taskId)}${deleteFiles ? '?deleteFiles=1' : ''}`
+}
 
 function isDeletable(task: TaskSnapshot): boolean {
   return task.status !== 'running' && task.status !== 'queued'
@@ -36,7 +55,9 @@ function isDeletable(task: TaskSnapshot): boolean {
 type PlatformBadge = { label: string; className: string }
 
 function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
-  if (kind === 'req2' || kind === 'vocal-separation') return { label: '本地音频', className: 'platform-local' }
+  if (kind === 'req2' || kind === 'vocal-separation' || kind === 'speech-to-text') {
+    return { label: '本地媒体', className: 'platform-local' }
+  }
   if (kind === 'video-audio' && !/^https?:\/\//i.test(url)) return { label: '本地视频', className: 'platform-local' }
   const platform = detectPlatform(url)
   if (platform === 'YouTube') return { label: platform, className: 'platform-youtube' }
@@ -57,6 +78,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
   const [previewTextLoading, setPreviewTextLoading] = useState(false)
   const [activeChipKey, setActiveChipKey] = useState<string | null>(null)
   const [previewCopied, setPreviewCopied] = useState(false)
+  const [deleteFilesOnRemove, setDeleteFilesOnRemove] = useState(readDeleteFilesPreference)
 
   const loadTasks = () => {
     setLoading(true)
@@ -135,13 +157,21 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
     }
   }
 
+  const handleDeleteFilesToggle = () => {
+    setDeleteFilesOnRemove((current) => {
+      const next = !current
+      writeDeleteFilesPreference(next)
+      return next
+    })
+  }
+
   const handleDelete = async (taskId: string) => {
     if (deletingIds.has(taskId)) return
     setDeletingIds((current) => new Set(current).add(taskId))
     try {
-      await window.koubox.del(`/tasks/${encodeURIComponent(taskId)}`)
+      await window.koubox.del(deleteTaskPath(taskId, deleteFilesOnRemove))
       setTasks((current) => current.filter((item) => item.taskId !== taskId))
-      onShowToast('记录已删除')
+      onShowToast(deleteFilesOnRemove ? '记录与任务文件已删除' : '记录已删除')
     } catch (err) {
       onShowToast(err instanceof Error ? err.message : '删除失败')
     } finally {
@@ -155,13 +185,12 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
 
   const handleClearAll = async () => {
     if (deletableTasks.length === 0 || clearing) return
-    if (!window.confirm(`确定清空 ${deletableTasks.length} 条任务记录？已下载的文件不会被删除。`)) return
     setClearing(true)
     let deleted = 0
     const deletedIds = new Set<string>()
     for (const item of deletableTasks) {
       try {
-        await window.koubox.del(`/tasks/${encodeURIComponent(item.taskId)}`)
+        await window.koubox.del(deleteTaskPath(item.taskId, deleteFilesOnRemove))
         deletedIds.add(item.taskId)
         deleted += 1
       } catch (err) {
@@ -171,7 +200,7 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
     }
     if (deleted > 0) {
       setTasks((current) => current.filter((item) => !deletedIds.has(item.taskId)))
-      onShowToast(`已删除 ${deleted} 条记录`)
+      onShowToast(deleteFilesOnRemove ? `已删除 ${deleted} 条记录及对应文件` : `已删除 ${deleted} 条记录`)
     }
     setClearing(false)
   }
@@ -183,7 +212,24 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
           <h1>{title}</h1>
           <p>{subtitle}</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="history-page-actions">
+          <span className="history-delete-files-label">删除时同时删除文件</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={deleteFilesOnRemove}
+            aria-label="删除时同时删除文件"
+            className={`ui-switch ${deleteFilesOnRemove ? 'on' : ''}`}
+            onClick={handleDeleteFilesToggle}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                handleDeleteFilesToggle()
+              }
+            }}
+          >
+            <span className="ui-switch-thumb" />
+          </button>
           {outputDirectory && (
             <Button
               variant="secondary"
@@ -225,7 +271,10 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
             const deleting = deletingIds.has(item.taskId)
             const platform = detectPlatformBadge(item.url, item.kind)
             const artifactsList = Object.entries(item.artifacts).filter(
-              ([key, path]) => Boolean(path) && !HIDDEN_ARTIFACT_KEYS.has(key)
+              ([key, path]) =>
+                Boolean(path) &&
+                !HIDDEN_ARTIFACT_KEYS.has(key) &&
+                !(key === 'vocals' && item.kind === 'req1' && !req1UsesSeparateVocals(item))
             ) as Array<[keyof TaskArtifacts, string]>
 
             return (
@@ -276,6 +325,10 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
                   <p className="history-error">{toUserTaskMessage(item.message)}</p>
                 ) : null}
 
+                {item.asrExecution?.fallbackUsed && item.asrExecution.notice ? (
+                  <p className="history-fallback-notice">{item.asrExecution.notice}</p>
+                ) : null}
+
                 <footer className="history-card-foot">
                   {!isError && item.message ? (
                     <span className="history-message" title={item.message}>{item.message}</span>
@@ -296,7 +349,11 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
                       icon={<Trash size={14} />}
                       disabled={!canDelete}
                       loading={deleting}
-                      title={canDelete ? '删除这条记录' : '任务进行中，无法删除'}
+                      title={canDelete
+                        ? deleteFilesOnRemove
+                          ? '删除记录并删除任务文件'
+                          : '仅删除这条记录'
+                        : '任务进行中，无法删除'}
                       onClick={() => void handleDelete(item.taskId)}
                     >
                       删除

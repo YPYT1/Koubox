@@ -3,6 +3,16 @@ import { normalizeProxyUrl } from '@koubox/shared'
 
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36'
 
+const FACEBOOK_DOCUMENT_HEADERS = {
+  accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'accept-language': 'en-US,en;q=0.9',
+  'user-agent': DEFAULT_USER_AGENT,
+  'sec-fetch-dest': 'document',
+  'sec-fetch-mode': 'navigate',
+  'sec-fetch-site': 'none',
+  'upgrade-insecure-requests': '1'
+}
+
 export type FacebookMediaResolution = {
   source: 'facebook-page' | 'facebook-browser'
   videoUrl: string
@@ -136,6 +146,79 @@ export function extractFacebookMedia(html: string, referer: string): FacebookMed
   return undefined
 }
 
+export function isFacebookShareUrl(url: string): boolean {
+  try {
+    return /\/share\/[rv]\//i.test(new URL(url).pathname)
+  } catch {
+    return false
+  }
+}
+
+function normalizeFacebookFinalUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const reel = parsed.pathname.match(/\/reel\/(\d+)/i)
+    if (reel) return `https://www.facebook.com/reel/${reel[1]}`
+    const video = parsed.pathname.match(/\/videos\/(\d+)/i)
+    if (video) return `https://www.facebook.com/videos/${video[1]}`
+    const watchId = parsed.searchParams.get('v')
+    if (watchId && /^\d+$/.test(watchId)) return `https://www.facebook.com/watch?v=${watchId}`
+  } catch { /* ignore */ }
+  return url
+}
+
+export async function resolveFacebookShareUrl(
+  inputUrl: string,
+  proxy: string,
+  signal?: AbortSignal
+): Promise<{ finalUrl: string; redirectChain: string[] }> {
+  const redirectChain = [inputUrl]
+  const seen = new Set<string>([inputUrl])
+  let current = inputUrl
+
+  for (let hop = 0; hop < 5; hop += 1) {
+    if (signal?.aborted) throw new Error('任务已取消。')
+    const normalizedProxy = normalizeProxyUrl(proxy)
+    const dispatcher = normalizedProxy ? new ProxyAgent(normalizedProxy) : undefined
+    try {
+      const response = await request(current, {
+        dispatcher,
+        signal,
+        maxRedirections: 0,
+        headers: FACEBOOK_DOCUMENT_HEADERS,
+        headersTimeout: 20_000,
+        bodyTimeout: 20_000
+      })
+      await response.body.dump()
+      const location = response.headers.location
+      if (response.statusCode >= 300 && response.statusCode < 400 && location) {
+        const next = new URL(String(location), current).toString()
+        if (seen.has(next)) throw new Error('Facebook 分享链接重定向出现循环。')
+        seen.add(next)
+        redirectChain.push(next)
+        if (!isFacebookShareUrl(next)) {
+          return { finalUrl: normalizeFacebookFinalUrl(next), redirectChain }
+        }
+        current = next
+        continue
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300 && !isFacebookShareUrl(current)) {
+        return { finalUrl: normalizeFacebookFinalUrl(current), redirectChain }
+      }
+      if (response.statusCode >= 200 && response.statusCode < 300 && isFacebookShareUrl(current)) {
+        throw new Error('Facebook 分享链接无法跳转到视频页面。')
+      }
+      throw new Error(`Facebook 分享链接返回 HTTP ${response.statusCode}，没有可用的重定向目标。`)
+    } catch (error) {
+      if (signal?.aborted) throw new Error('任务已取消。')
+      throw error
+    } finally {
+      await dispatcher?.close()
+    }
+  }
+  throw new Error('Facebook 分享链接重定向次数过多。')
+}
+
 export function extractFacebookVideoId(url: string): string | undefined {
   try {
     const parsed = new URL(url)
@@ -149,21 +232,18 @@ export function extractFacebookVideoId(url: string): string | undefined {
   return undefined
 }
 
-async function fetchFacebookHtml(url: string, proxy: string): Promise<string> {
+async function fetchFacebookHtml(url: string, proxy: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new Error('任务已取消。')
   const normalizedProxy = normalizeProxyUrl(proxy)
   const dispatcher = normalizedProxy ? new ProxyAgent(normalizedProxy) : undefined
   try {
     const response = await request(url, {
       dispatcher,
+      signal,
       maxRedirections: 5,
       headers: {
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'accept-language': 'en-US,en;q=0.9',
-        'user-agent': DEFAULT_USER_AGENT,
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'none',
-        'upgrade-insecure-requests': '1'
+        ...FACEBOOK_DOCUMENT_HEADERS,
+        'sec-fetch-site': 'none'
       },
       headersTimeout: 25_000,
       bodyTimeout: 25_000
@@ -173,20 +253,25 @@ async function fetchFacebookHtml(url: string, proxy: string): Promise<string> {
       throw new Error(`Facebook 页面返回 HTTP ${response.statusCode}`)
     }
     return response.body.text()
+  } catch (error) {
+    if (signal?.aborted) throw new Error('任务已取消。')
+    throw error
   } finally {
     await dispatcher?.close()
   }
 }
 
-export async function resolveFacebookPublicMedia(url: string, proxy: string): Promise<FacebookMediaResolution> {
+export async function resolveFacebookPublicMedia(url: string, proxy: string, signal?: AbortSignal): Promise<FacebookMediaResolution> {
   const failures: string[] = []
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (signal?.aborted) throw new Error('任务已取消。')
     try {
-      const html = await fetchFacebookHtml(url, proxy)
+      const html = await fetchFacebookHtml(url, proxy, signal)
       const media = extractFacebookMedia(html, url)
       if (media) return media
       failures.push(`第 ${attempt + 1} 次页面没有媒体字段`)
     } catch (error) {
+      if (signal?.aborted) throw new Error('任务已取消。')
       failures.push(`第 ${attempt + 1} 次：${error instanceof Error ? error.message : String(error)}`)
     }
     if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500))

@@ -1,4 +1,4 @@
-export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader' | 'video-audio' | 'vocal-separation'
+export type ToolId = 'viral-materials' | 'precise-srt' | 'video-downloader' | 'video-audio' | 'vocal-separation' | 'speech-to-text'
 
 export type ToolManifest = {
   id: ToolId
@@ -23,8 +23,8 @@ export const tools: ToolManifest[] = [
   },
   {
     id: 'precise-srt',
-    name: '精准 SRT 对齐（待完成）',
-    description: '（功能暂未实现）导入音频和可选原文，输出可直接导入剪映的标准 SRT。',
+    name: '精准 SRT 对齐',
+    description: '推荐选有文案模式，时间轴更准；无文案时也可纯音频识别，输出可直接导入剪映的标准 SRT。',
     accent: 'blue',
     artifactTags: ['Audio', 'Transcript', 'Text', 'SRT'],
     menus: [
@@ -56,12 +56,23 @@ export const tools: ToolManifest[] = [
   },
   {
     id: 'vocal-separation',
-    name: '人声分离',
-    description: '上传本地音频，用 Demucs 去除背景音乐，仅保留人声轨。',
+    name: '去除背景音乐',
+    description: '上传本地音频，用 Demucs 去除背景音乐并保留人声；对带有完整背景音乐的素材效果较好。',
     accent: 'teal',
     artifactTags: ['Audio'],
     menus: [
-      { id: 'run', label: '开始分离' },
+      { id: 'run', label: '开始处理' },
+      { id: 'history', label: '任务中心' }
+    ]
+  },
+  {
+    id: 'speech-to-text',
+    name: '语音转文字',
+    description: '上传本地音频或视频，用 Faster-Whisper 识别原文并输出带时间轴的分句结果。',
+    accent: 'teal',
+    artifactTags: ['Audio', 'Transcript'],
+    menus: [
+      { id: 'run', label: '开始识别' },
       { id: 'history', label: '任务中心' }
     ]
   }
@@ -77,6 +88,8 @@ export type Transcript = {
   language?: string
   segments: TranscriptSegment[]
 }
+
+export { formatSrtTime, transcriptToSrt } from './srt.js'
 
 export type ModelCheck = {
   id: string
@@ -97,6 +110,12 @@ export type GpuStatus = {
   usedMemoryMiB?: number
   freeMemoryMiB?: number
   message: string
+}
+
+export type SystemMemoryStatus = {
+  totalMemoryMiB: number
+  usedMemoryMiB: number
+  freeMemoryMiB: number
 }
 
 export type VendorToolCheck = {
@@ -136,9 +155,10 @@ export type RuntimeStatus = {
   }
 }
 
-export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation'
+export type TaskKind = 'req1' | 'req2' | 'download' | 'video-audio' | 'vocal-separation' | 'speech-to-text'
 export type RequirementTwoMode = 'align' | 'asr-only'
-export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'align' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
+export type SpeechRateMode = 'off' | 'auto' | 'force'
+export type TaskStage = 'queued' | 'download' | 'extract-audio' | 'separate-vocals' | 'asr' | 'retry-asr' | 'align' | 'segment' | 'export-srt' | 'translation' | 'complete' | 'error' | 'cancelled'
 export type TaskStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled'
 
 /** 工具侧栏 / 任务中心与后端 TaskKind 的固定映射 */
@@ -147,7 +167,8 @@ export const TOOL_TASK_KIND = {
   'precise-srt': 'req2',
   'video-downloader': 'download',
   'video-audio': 'video-audio',
-  'vocal-separation': 'vocal-separation'
+  'vocal-separation': 'vocal-separation',
+  'speech-to-text': 'speech-to-text'
 } as const satisfies Record<ToolId, TaskKind>
 
 export type KouboxPlatform = 'YouTube' | 'TikTok' | 'Instagram' | 'Facebook' | 'Twitter' | 'Bilibili' | 'Douyin' | 'Video' | 'Audio'
@@ -174,15 +195,62 @@ export function isDownloadableVideoPlatform(platform: KouboxPlatform): platform 
   return (DOWNLOADABLE_VIDEO_PLATFORMS as readonly string[]).includes(platform)
 }
 
+function hasRecognizableVideoPath(url: string, platform: DownloadableVideoPlatform): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.toLowerCase()
+    if (platform === 'YouTube') {
+      if (host === 'youtu.be') return Boolean(parsed.pathname.split('/').filter(Boolean)[0])
+      if (!/(^|\.)youtube\.com$/i.test(host)) return false
+      if (parsed.searchParams.get('v')) return true
+      const parts = parsed.pathname.split('/').filter(Boolean)
+      return (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live') && Boolean(parts[1])
+    }
+    if (platform === 'TikTok') {
+      if (/^(?:vm|vt)\.tiktok\.com$/i.test(host)) return Boolean(parsed.pathname.split('/').filter(Boolean)[0])
+      return /\/@[^/]+\/video\/\d+/.test(parsed.pathname)
+    }
+    if (platform === 'Instagram') {
+      return /^\/(p|reel|reels)\/[A-Za-z0-9_-]+/.test(parsed.pathname)
+    }
+    if (platform === 'Facebook') {
+      if (/\/share\/[rv]\//i.test(parsed.pathname)) return true
+      if (parsed.searchParams.get('v') && /^\d+$/.test(parsed.searchParams.get('v') ?? '')) return true
+      return /\/(?:videos|reel|reels)\/\d+/i.test(parsed.pathname)
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function platformFormatError(platform: DownloadableVideoPlatform): string {
+  if (platform === 'YouTube') return 'YouTube 链接格式不正确，未找到有效视频 ID。'
+  if (platform === 'TikTok') return 'TikTok 链接格式不正确，需要 /@用户名/video/数字 或短链。'
+  if (platform === 'Instagram') return 'Instagram 链接格式不正确，支持 /p/、/reel/、/reels/。'
+  return 'Facebook 链接格式不正确，支持 watch、reel、videos 或分享链接。'
+}
+
 /** 校验链接后返回 trim 后的 URL；不合法直接抛错 */
 export function assertDownloadableVideoUrl(url: string): { url: string; platform: DownloadableVideoPlatform } {
   const trimmed = url.trim()
+  if (!trimmed) throw new Error('请输入合法的视频链接（http/https）。')
   if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error('请输入合法的视频链接（http/https）。')
+  }
+  let hostname = ''
+  try {
+    hostname = new URL(trimmed).hostname
+    if (!hostname) throw new Error('invalid')
+  } catch {
     throw new Error('请输入合法的视频链接（http/https）。')
   }
   const platform = detectPlatform(trimmed)
   if (!isDownloadableVideoPlatform(platform)) {
     throw new Error('仅支持 YouTube / Facebook / Instagram / TikTok。')
+  }
+  if (!hasRecognizableVideoPath(trimmed, platform)) {
+    throw new Error(platformFormatError(platform))
   }
   return { url: trimmed, platform }
 }
@@ -219,6 +287,17 @@ export function assertLocalAudioPath(filePath: string): string {
   return trimmed
 }
 
+/** 语音转文字：本地音频或视频路径 */
+export function assertLocalSpeechMediaPath(filePath: string): string {
+  const trimmed = normalizeOsPath(filePath.trim())
+  if (!trimmed) throw new Error('请选择本地音频或视频文件。')
+  try {
+    return assertLocalAudioPath(trimmed)
+  } catch {
+    return assertLocalVideoPath(trimmed)
+  }
+}
+
 /** 爆款素材获取的视频来源：链接下载或本地上传 */
 export type MaterialsSourceMode = 'url' | 'local'
 
@@ -227,6 +306,7 @@ export const VIDEO_DOWNLOAD_PIPELINE_PATH = '/pipelines/download'
 export const VIDEO_MATERIALS_PIPELINE_PATH = '/pipelines/req1'
 export const VIDEO_AUDIO_PIPELINE_PATH = '/pipelines/video-audio'
 export const VOCAL_SEPARATION_PIPELINE_PATH = '/pipelines/vocal-separation'
+export const SPEECH_TO_TEXT_PIPELINE_PATH = '/pipelines/speech-to-text'
 
 export type TaskArtifacts = {
   video?: string
@@ -245,12 +325,38 @@ export type TaskError = {
   message: string
 }
 
+export type PreciseSrtDiagnostics = {
+  multirateSpanCount?: number
+  correctionCount?: number
+  unresolvedLowConfidenceCount?: number
+  speechRateUnitsPerSecond?: number
+  speechRateThreshold?: number
+  wallTimeS?: number
+}
+
+export type AsrExecutionSummary = {
+  selectedModel: import('./asr-models.js').AsrModelId
+  effectiveModel: import('./asr-models.js').AsrModelId
+  fallbackUsed: boolean
+  fallbackReason?: 'resource-exhausted' | 'alignment-quality'
+  notice?: string
+}
+
 export type TaskSnapshot = {
   taskId: string
   kind: TaskKind
   mode?: RequirementTwoMode
+  requestedLanguage?: AsrLanguage
+  detectedLanguage?: Exclude<AsrLanguage, 'auto'>
+  speechRateMode?: SpeechRateMode
+  speechRateTriggered?: boolean
+  preciseSrtDiagnostics?: PreciseSrtDiagnostics
+  /** 语音识别任务的模型选择与自动回退结果；旧任务可缺省。 */
+  asrExecution?: AsrExecutionSummary
   /** req1：链接下载或本地上传；缺省按 url 以 http(s) 判断 */
   sourceMode?: MaterialsSourceMode
+  /** req1：是否执行 Demucs 去除背景音乐（完整 BGM 素材效果较好） */
+  separateVocals?: boolean
   status: TaskStatus
   stage: TaskStage
   percent: number
@@ -268,6 +374,11 @@ export type TaskSnapshot = {
   error?: TaskError
   createdAt: string
   updatedAt: string
+}
+
+/** req1 是否实际执行去除背景音乐；必须显式为 true */
+export function req1UsesSeparateVocals(task: Pick<TaskSnapshot, 'kind' | 'separateVocals'>): boolean {
+  return task.kind === 'req1' && task.separateVocals === true
 }
 
 export type TaskEvent = {
@@ -303,6 +414,15 @@ export function platformAuthIdFromUrlPlatform(platform: KouboxPlatform): YtdlpCo
   if (platform === 'Instagram') return 'instagram'
   if (platform === 'Facebook') return 'facebook'
   return undefined
+}
+
+export function isPlatformAuthConfigured(platform: KouboxPlatform, auth?: PlatformAuthConfig): boolean {
+  if (!auth) return false
+  const id = platformAuthIdFromUrlPlatform(platform)
+  if (!id) return false
+  const entry = auth[id]
+  if (entry.mode === 'paste') return Boolean(entry.cookies.trim())
+  return entry.mode === 'builtin'
 }
 
 export type PlatformCookieRule = {
@@ -416,6 +536,24 @@ export function detectAuthPlatformFromText(text: string): YtdlpCookiePlatformId 
   return undefined
 }
 
+export function isStalePlatformAuthFailure(text: string): boolean {
+  return /Sign in to confirm|not a bot|login required|Please log in|Use --cookies|已被平台拒绝|登录态无效|Cookie 未生效|Cookie 可能已过期|应用内登录可能已失效|cookie.*(?:invalid|expired)|session.*expired/i.test(
+    text
+  )
+}
+
+/** Cookie / 应用内登录已配置，但 yt-dlp 仍被平台拒绝（多为过期或会话失效） */
+export function platformAuthRejectedMessage(
+  platformId: YtdlpCookiePlatformId,
+  mode: PlatformAuthMode
+): string {
+  const label = platformLabel(platformId)
+  if (mode === 'paste') {
+    return `${label} Cookie 可能已过期或失效。请用插件重新导出 ${label} Cookie，粘贴到「全局设置 → 平台登录」后保存，再重试。`
+  }
+  return `${label} 应用内登录可能已失效。请到「全局设置 → 平台登录」重新打开登录窗口，登录 ${label} 后点击「保存应用内登录」。`
+}
+
 export function platformAuthMissingMessage(
   platformId: YtdlpCookiePlatformId,
   mode: PlatformAuthMode,
@@ -458,10 +596,30 @@ export const PLATFORM_HOMEPAGES: Record<YtdlpCookiePlatformId, string> = {
   facebook: 'https://www.facebook.com/'
 }
 
+export type {
+  AsrComputeType,
+  AsrModelCatalogEntry,
+  AsrModelId
+} from './asr-models.js'
+export {
+  ASR_MODEL_CATALOG,
+  ASR_MODEL_OPTIONS,
+  DEFAULT_ASR_MODEL,
+  asAsrModelId,
+  asrAlignmentFallbackNoticeMessage,
+  asrFallbackNoticeMessage,
+  asrResourceErrorUserMessage,
+  isAsrAlignmentQualityError,
+  isAsrResourceError,
+  resolveAsrComputeType
+} from './asr-models.js'
+
 export type KouboxConfig = {
   modelsDirectory: string
   outputDirectory: string
   asrModelDirectory: string
+  asrLightModelDirectory: string
+  defaultAsrModel: import('./asr-models.js').AsrModelId
   translationModelDirectory: string
   demucsModelDirectory: string
   ytdlpDirectory: string
@@ -502,6 +660,7 @@ export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
     modelsDirectory: normalizeOsPath(config.modelsDirectory),
     outputDirectory: normalizeOsPath(config.outputDirectory),
     asrModelDirectory: normalizeOsPath(config.asrModelDirectory),
+    asrLightModelDirectory: normalizeOsPath(config.asrLightModelDirectory),
     translationModelDirectory: normalizeOsPath(config.translationModelDirectory),
     demucsModelDirectory: normalizeOsPath(config.demucsModelDirectory),
     ytdlpDirectory: normalizeOsPath(config.ytdlpDirectory),
@@ -521,14 +680,17 @@ export function toUserTaskMessage(raw: string): string {
   const text = raw.trim()
   if (!text) return '任务失败，请重试。'
 
-  if (/CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够/i.test(text)) {
-    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+  if (/CUDA.*out of memory|out of memory|OutOfMemoryError|CUDA error|显存不足|显存不够|内存不足|MemoryError|DefaultCPUAllocator|can't allocate memory/i.test(text)) {
+    if (/faster-whisper-large-v3-turbo|轻量模型|最轻量/i.test(text)) {
+      return '显存或内存不足。当前已使用最轻量的语音识别模型 faster-whisper-large-v3-turbo，请关闭其他占用 GPU 的程序后重试，或缩短音频长度。'
+    }
+    return '显卡显存或系统内存不足，请先关闭其他占用 GPU 的程序后重试。'
   }
   if (/torch_dtype.*deprecated|Use 'dtype' instead/i.test(text)) {
-    return '显卡显存不够，请先关闭其他占用 GPU 的程序'
+    return '本地模型运行失败，请查看日志。'
   }
   if (/没有音轨|没有原始音频流|没有音频流/.test(text)) {
-    return '下载的视频没有音轨，请更新该平台 Cookie 后重试，或稍后再试。'
+    return '影片中没有音轨。'
   }
 
   if (/Deno (?:运行时不存在|运行时检测失败|SHA-256 校验失败)|未能启用 Deno JS Challenge Provider/i.test(text)) {
@@ -541,10 +703,15 @@ export function toUserTaskMessage(raw: string): string {
     return 'Cookie 格式不对。请使用「口播匣 Cookie 导出」插件复制 Netscape 格式全文，不能使用 JSON。'
   }
   if (/(粘贴 Cookie 已配置|应用内登录已保存)，?但 yt-dlp (?:鉴权失败|下载失败)/i.test(text)) {
+    const authPlatform = detectAuthPlatformFromText(text)
+    if (authPlatform && isStalePlatformAuthFailure(text)) {
+      const mode: PlatformAuthMode = text.includes('粘贴 Cookie 已配置') ? 'paste' : 'builtin'
+      return platformAuthRejectedMessage(authPlatform, mode)
+    }
     return text
   }
-  if (/DEMUCS|demucs|torchaudio|人声分离|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
-    return '人声分离启动失败：检测到系统代理环境变量可能指向错误端口。请到「全局设置 → 下载（yt-dlp）」确认代理为 http://127.0.0.1:7897，或清空系统 HTTP_PROXY。'
+  if (/DEMUCS|demucs|torchaudio|人声分离|去除背景音乐|koubox_runtime/i.test(text) && /10061|积极拒绝|actively refused|Connect/i.test(text)) {
+    return '去除背景音乐启动失败：检测到系统代理环境变量可能指向错误端口。请到「全局设置 → 下载（yt-dlp）」确认代理为 http://127.0.0.1:7897，或清空系统 HTTP_PROXY。'
   }
   if (/Unable to connect to proxy|ProxyError|\[download\]|yt-dlp|yt_dlp/i.test(text) && /10061|积极拒绝|actively refused|proxy/i.test(text)) {
     const host = text.match(/host=['"]?([^'"\s,)]+)/i)?.[1]
@@ -571,9 +738,9 @@ export function toUserTaskMessage(raw: string): string {
   if (/\[Instagram\]|instagram\.com/i.test(text) && /login required|rate-limit|not available|Please wait|challenge|cookie/i.test(text)) {
     return platformAuthMissingMessage('instagram', 'paste', 'login-required')
   }
-  if (/Sign in to confirm|not a bot|login required|Please log in|Use --cookies/i.test(text)) {
+  if (isStalePlatformAuthFailure(text)) {
     if (authPlatform) {
-      return `${platformLabel(authPlatform)} Cookie 或应用内登录已被平台拒绝。请到「全局设置 → 平台登录」检查当前选择的登录方式。`
+      return platformAuthRejectedMessage(authPlatform, 'paste')
     }
     return '该视频需要登录后才能下载。请到「全局设置 → 平台登录」为对应平台配置登录后再试。'
   }
@@ -611,3 +778,10 @@ export function toUserTaskMessage(raw: string): string {
   }
   return text
 }
+
+export {
+  parsePlatformUrl,
+  parsePlatformUrlOrThrow,
+  type ParsedPlatformUrl,
+  type ParsedPlatformUrlKind
+} from './platform-url.js'

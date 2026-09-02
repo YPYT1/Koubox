@@ -6,6 +6,7 @@ import preciseSrtIcon from '../../../../../../png/精准 SRT 对齐.png'
 import videoDownloaderIcon from '../../../../../../png/downloder.png'
 import videoAudioIcon from '../../../../../../png/视频提取音频.png'
 import vocalSeparationIcon from '../../../../../../png/人声分离.png'
+import speechToTextIcon from '../../../../../../png/语音转文字.png'
 
 type HomePageProps = {
   tools: ToolManifest[]
@@ -19,7 +20,8 @@ const toolImages: Record<string, string> = {
   'precise-srt': preciseSrtIcon,
   'video-downloader': videoDownloaderIcon,
   'video-audio': videoAudioIcon,
-  'vocal-separation': vocalSeparationIcon
+  'vocal-separation': vocalSeparationIcon,
+  'speech-to-text': speechToTextIcon
 }
 
 const chipClassByTag: Record<string, string> = {

@@ -19,7 +19,7 @@ async function waitForFacebookMedia(window: BrowserWindow, url: string) {
   throw new Error('Facebook 页面加载完成，但 8 秒内没有暴露可下载的视频流。')
 }
 
-export async function resolveFacebookAnonymousWithChromium(url: string, proxy: string): Promise<PublicMediaResolution> {
+export async function resolveFacebookAnonymousWithChromium(url: string, proxy: string, signal?: AbortSignal): Promise<PublicMediaResolution> {
   const partition = `koubox-facebook-anonymous-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const isolatedSession = session.fromPartition(partition, { cache: false })
   const normalizedProxy = normalizeProxyUrl(proxy)
@@ -37,11 +37,17 @@ export async function resolveFacebookAnonymousWithChromium(url: string, proxy: s
     }
   })
   window.webContents.setAudioMuted(true)
+  const onAbort = () => {
+    if (!window.isDestroyed()) window.destroy()
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
+    if (signal?.aborted) throw new Error('任务已取消。')
     await window.loadURL(url, { userAgent: FACEBOOK_BROWSER_USER_AGENT })
     const media = await waitForFacebookMedia(window, url)
     return { ...media, source: 'facebook-browser', userAgent: FACEBOOK_BROWSER_USER_AGENT }
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     if (!window.isDestroyed()) window.destroy()
     await isolatedSession.clearStorageData().catch(() => undefined)
   }

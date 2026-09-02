@@ -183,7 +183,6 @@ export function VideoAudioPage({
       <section className="panel-box viral-preview-panel">
         <div className="panel-title">
           <h3>音频预览</h3>
-          <span className="viral-preview-hint">提取完成后可在此直接播放</span>
         </div>
         <AudioPreviewSlot
           audioPath={task?.artifacts.audio ?? ''}

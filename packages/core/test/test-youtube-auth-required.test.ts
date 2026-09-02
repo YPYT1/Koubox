@@ -4,6 +4,7 @@
  * 验证 YouTube 下载必须配置登录，并给出正确的错误提示
  */
 import { describe, expect, it } from 'vitest'
+import { defaultPlatformAuth } from '@koubox/shared'
 import { downloadVideo, type VideoDownloadRequest } from '../src/video-download'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +26,8 @@ describe('YouTube 登录态强制要求测试', () => {
       config: {
         ytdlpProxy: PROXY,
         ytdlpMaxHeight: 1080,
-        ytdlpExtraArgs: ''
+        ytdlpExtraArgs: '',
+        ytdlpPlatformAuth: defaultPlatformAuth()
       },
       updateProgress: () => {},
       runCommand: async () => {},
@@ -51,7 +53,8 @@ describe('YouTube 登录态强制要求测试', () => {
       config: {
         ytdlpProxy: PROXY,
         ytdlpMaxHeight: 1080,
-        ytdlpExtraArgs: ''
+        ytdlpExtraArgs: '',
+        ytdlpPlatformAuth: defaultPlatformAuth()
       },
       updateProgress: () => {},
       runCommand: async () => {},

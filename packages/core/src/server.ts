@@ -3,10 +3,11 @@ import type { AddressInfo } from 'node:net'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { AsrLanguage, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
-import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
+import type { AsrLanguage, AsrModelId, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, SpeechRateMode, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
+import { asAsrModelId } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalSpeechMediaPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, SPEECH_TO_TEXT_PIPELINE_PATH, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
-import { RuntimeStore, getRuntimeStatus, resolveModelPaths, resolveVendorPaths } from './runtime.js'
+import { RuntimeStore, detectGpu, detectSystemMemory, getRuntimeStatus, GPU_RUNTIME_PROBE_MAX_AGE_MS, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
 
@@ -26,8 +27,8 @@ type ServerOptions = {
   openPath(targetPath: string): Promise<void>
   openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void>
   getLoginCookieStatus(platformAuth: PlatformAuthConfig, proxy: string, platformId?: YtdlpCookiePlatformId): Promise<import('@koubox/shared').YtdlpCookieStatus>
-  resolveTikTokBrowserMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
-  resolveFacebookAnonymousMedia?(url: string, proxy: string): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveTikTokBrowserMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<import('./public-video.js').PublicMediaResolution>
+  resolveFacebookAnonymousMedia?(url: string, proxy: string, signal?: AbortSignal): Promise<import('./public-video.js').PublicMediaResolution>
   resolvePlatformAuthentication?(platformId: YtdlpCookiePlatformId, auth: PlatformAuthEntry): Promise<import('./video-download.js').AuthenticatedCookieFile>
   resolveActiveYtdlp(): ActiveYtdlpRuntime
   checkYtdlpUpdate(): Promise<YtdlpUpdateStatus>
@@ -78,6 +79,11 @@ function asNumber(value: unknown, fallback: number): number {
 
 function asAsrLanguage(value: unknown, fallback: AsrLanguage): AsrLanguage {
   if (value === 'auto' || isTranslationTargetLanguage(value)) return value
+  return fallback
+}
+
+function asSpeechRateMode(value: unknown, fallback: SpeechRateMode): SpeechRateMode {
+  if (value === 'off' || value === 'auto' || value === 'force') return value
   return fallback
 }
 
@@ -152,18 +158,20 @@ function readVideoMaterialsPipelineInput(body: Record<string, unknown>, defaultO
   outputDirectory: string
   source: string
   sourceMode: 'url' | 'local'
+  separateVocals: boolean
 } {
   const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
     ? normalizeOsPath(body.outputDirectory.trim())
     : normalizeOsPath(defaultOutputDirectory)
+  const separateVocals = asBoolean(body.separateVocals, false)
   const videoPathRaw = typeof body.videoPath === 'string' ? body.videoPath : ''
   if (videoPathRaw.trim()) {
     const videoPath = assertLocalVideoPath(videoPathRaw)
     if (!existsSync(videoPath)) throw new Error('本地视频文件不存在。')
-    return { outputDirectory, source: videoPath, sourceMode: 'local' }
+    return { outputDirectory, source: videoPath, sourceMode: 'local', separateVocals }
   }
   const { url } = readVideoPipelineInput(body, defaultOutputDirectory)
-  return { outputDirectory, source: url, sourceMode: 'url' }
+  return { outputDirectory, source: url, sourceMode: 'url', separateVocals }
 }
 
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {
@@ -171,6 +179,8 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     modelsDirectory: asPathString(body.modelsDirectory, config.modelsDirectory),
     outputDirectory: asPathString(body.outputDirectory, config.outputDirectory),
     asrModelDirectory: asPathString(body.asrModelDirectory, config.asrModelDirectory),
+    asrLightModelDirectory: asPathString(body.asrLightModelDirectory, config.asrLightModelDirectory),
+    defaultAsrModel: asAsrModelId(body.defaultAsrModel, config.defaultAsrModel),
     translationModelDirectory: asPathString(body.translationModelDirectory, config.translationModelDirectory),
     demucsModelDirectory: asPathString(body.demucsModelDirectory, config.demucsModelDirectory),
     ytdlpDirectory: asPathString(body.ytdlpDirectory, config.ytdlpDirectory),
@@ -222,7 +232,9 @@ export async function startLocalApi(options: ServerOptions) {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const method = request.method ?? 'GET'
+      const silentProbe = method === 'GET' && (url.pathname === '/runtime/memory' || url.pathname === '/runtime/gpu')
       response.once('finish', () => {
+        if (silentProbe) return
         apiLog.debug('API 请求完成', {
           requestId,
           method,
@@ -231,7 +243,9 @@ export async function startLocalApi(options: ServerOptions) {
           durationMs: Date.now() - startTime
         })
       })
-      apiLog.info(`→ ${method} ${url.pathname}${url.searchParams.has('token') ? '?token=<redacted>' : url.search}`, { requestId })
+      if (!silentProbe) {
+        apiLog.info(`→ ${method} ${url.pathname}${url.searchParams.has('token') ? '?token=<redacted>' : url.search}`, { requestId })
+      }
       if (method === 'OPTIONS') {
         response.writeHead(204, {
           'Access-Control-Allow-Origin': '*',
@@ -297,6 +311,12 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'GET' && url.pathname === '/tools') return json(response, 200, tools)
       if (method === 'GET' && url.pathname === '/tasks') return json(response, 200, tasks.list())
+      if (method === 'GET' && url.pathname === '/runtime/gpu') {
+        return json(response, 200, detectGpu({ maxAgeMs: GPU_RUNTIME_PROBE_MAX_AGE_MS }))
+      }
+      if (method === 'GET' && url.pathname === '/runtime/memory') {
+        return json(response, 200, detectSystemMemory())
+      }
 
       const configStartedAt = Date.now()
       const config = store.read()
@@ -484,9 +504,10 @@ export async function startLocalApi(options: ServerOptions) {
         }
         if (method === 'GET' && !action) return json(response, 200, task)
         if (method === 'DELETE' && !action) {
+          const deleteFiles = new URL(request.url ?? '', 'http://127.0.0.1').searchParams.get('deleteFiles') === '1'
           try {
-            tasks.remove(taskId)
-            return json(response, 200, { ok: true })
+            tasks.remove(taskId, { deleteFiles })
+            return json(response, 200, { ok: true, deleteFiles })
           } catch (error) {
             return json(response, 409, { error: error instanceof Error ? error.message : String(error) })
           }
@@ -506,20 +527,30 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'POST' && url.pathname === '/pipelines/req1') {
         const body = await readJson(request)
-        const { outputDirectory, source, sourceMode } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
+        const { outputDirectory, source, sourceMode, separateVocals } = readVideoMaterialsPipelineInput(body, store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
-        return json(response, 202, tasks.startRequirementOne(source, outputDirectory, resolveModelPaths(store.read()), sourceMode))
+        return json(response, 202, tasks.startRequirementOne(source, outputDirectory, resolveModelPaths(store.read()), sourceMode, separateVocals))
       }
       if (method === 'POST' && url.pathname === '/pipelines/req2') {
         const body = await readJson(request)
-        const audioPath = typeof body.audioPath === 'string' ? normalizeOsPath(body.audioPath.trim()) : ''
-        if (!audioPath) return json(response, 400, { error: '请选择本地音频文件。' })
+        const audioPath = typeof body.audioPath === 'string' ? assertLocalSpeechMediaPath(body.audioPath) : ''
+        if (!audioPath) return json(response, 400, { error: '请选择本地音频或视频文件。' })
+        if (!existsSync(audioPath)) return json(response, 400, { error: '本地媒体文件不存在。' })
         const sourceText = typeof body.sourceText === 'string' ? body.sourceText : ''
+        const language = asAsrLanguage(body.language, 'auto')
+        const speechRateMode = asSpeechRateMode(body.speechRateMode, 'auto')
         const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
           ? normalizeOsPath(body.outputDirectory.trim())
           : normalizeOsPath(store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
-        return json(response, 202, tasks.startRequirementTwo(audioPath, sourceText, outputDirectory, resolveModelPaths(store.read())))
+        return json(response, 202, tasks.startRequirementTwo(
+          audioPath,
+          sourceText,
+          outputDirectory,
+          resolveModelPaths(store.read()),
+          language,
+          speechRateMode
+        ))
       }
       if (method === 'POST' && url.pathname === '/pipelines/download') {
         const body = await readJson(request)
@@ -543,6 +574,17 @@ export async function startLocalApi(options: ServerOptions) {
           : normalizeOsPath(store.read().outputDirectory)
         mkdirSync(outputDirectory, { recursive: true })
         return json(response, 202, tasks.startVocalSeparation(audioPath, outputDirectory))
+      }
+      if (method === 'POST' && url.pathname === SPEECH_TO_TEXT_PIPELINE_PATH) {
+        const body = await readJson(request)
+        const mediaPath = typeof body.mediaPath === 'string' ? assertLocalSpeechMediaPath(body.mediaPath) : ''
+        if (!mediaPath) return json(response, 400, { error: '请选择本地音频或视频文件。' })
+        if (!existsSync(mediaPath)) return json(response, 400, { error: '本地媒体文件不存在。' })
+        const outputDirectory = typeof body.outputDirectory === 'string' && body.outputDirectory.trim()
+          ? normalizeOsPath(body.outputDirectory.trim())
+          : normalizeOsPath(store.read().outputDirectory)
+        mkdirSync(outputDirectory, { recursive: true })
+        return json(response, 202, tasks.startSpeechToText(mediaPath, outputDirectory, resolveModelPaths(store.read())))
       }
       return json(response, 404, { error: 'Not found' })
     } catch (error) {
