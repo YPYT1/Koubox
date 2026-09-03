@@ -54,13 +54,17 @@ const ffmpegExpectedFiles = [
   'swscale-9.dll'
 ]
 
-function isLegacyDevelopmentVendorPath(directory: string, suffix: 'yt-dlp' | 'ffmpeg/bin'): boolean {
+function isLegacyDevelopmentVendorPath(directory: string, suffix: 'yt-dlp' | 'ffmpeg/bin' | 'deno'): boolean {
   const normalized = directory.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  return normalized.endsWith(`/koubox/vendor/${suffix}`) || normalized.endsWith(`/koubox-exp-platform-fetch/vendor/${suffix}`)
+  return (
+    normalized.endsWith(`/koubox/vendor/${suffix}`) ||
+    normalized.endsWith(`/koubox-exp-platform-fetch/vendor/${suffix}`) ||
+    normalized.endsWith(`/koubox-subtitle-tool/vendor/${suffix}`)
+  )
 }
 
 function migrateLegacyDevelopmentModelPath(directory: string, modelsDirectory: string): string {
-  const match = directory.match(/^d:[\\/]project[\\/]koubox[\\/]models(?:[\\/](.*))?$/i)
+  const match = directory.match(/^d:[\\/]project[\\/]koubox(?:-subtitle-tool)?[\\/]models(?:[\\/](.*))?$/i)
   if (!match) return directory
   if (!match[1]) return modelsDirectory
   return join(modelsDirectory, ...match[1].split(/[\\/]+/))
@@ -151,13 +155,15 @@ export class RuntimeStore {
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
     if (!config.ffmpegDirectory) config.ffmpegDirectory = this.defaults.ffmpegDirectory
     if (!config.denoDirectory) config.denoDirectory = this.defaults.denoDirectory
-    // Development builds used to persist tools from the sibling Koubox checkout.
+    // Development builds used to persist tools from sibling/legacy Koubox checkouts.
     // Migrate only that legacy vendor layout; keep any other user-selected path.
     const migrateLegacyYtdlpPath = isLegacyDevelopmentVendorPath(config.ytdlpDirectory, 'yt-dlp')
     const migrateLegacyFfmpegPath = isLegacyDevelopmentVendorPath(config.ffmpegDirectory, 'ffmpeg/bin')
-    const migratedLegacyVendorPaths = migrateLegacyYtdlpPath || migrateLegacyFfmpegPath
+    const migrateLegacyDenoPath = isLegacyDevelopmentVendorPath(config.denoDirectory, 'deno')
+    const migratedLegacyVendorPaths = migrateLegacyYtdlpPath || migrateLegacyFfmpegPath || migrateLegacyDenoPath
     if (migrateLegacyYtdlpPath) config.ytdlpDirectory = this.defaults.ytdlpDirectory
     if (migrateLegacyFfmpegPath) config.ffmpegDirectory = this.defaults.ffmpegDirectory
+    if (migrateLegacyDenoPath) config.denoDirectory = this.defaults.denoDirectory
     if (!config.translationTargetLanguage) config.translationTargetLanguage = this.defaults.translationTargetLanguage
     if (!config.asrLanguage) config.asrLanguage = this.defaults.asrLanguage
     if (typeof config.openOutputOnComplete !== 'boolean') config.openOutputOnComplete = this.defaults.openOutputOnComplete

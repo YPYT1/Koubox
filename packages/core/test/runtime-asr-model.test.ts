@@ -172,6 +172,42 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
   })
 
+  it('migrates Koubox-subtitle-tool model and vendor paths to this checkout defaults', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-subtitle-tool-'))
+    temporaryRoots.push(root)
+    const runtimeFile = join(root, 'runtime.json')
+    const currentModels = join(root, 'models')
+    const configured = defaults(currentModels)
+    const currentDefaults = {
+      ...configured,
+      ytdlpDirectory: join(root, 'current-vendor', 'yt-dlp'),
+      ffmpegDirectory: join(root, 'current-vendor', 'ffmpeg', 'bin'),
+      denoDirectory: join(root, 'current-vendor', 'deno')
+    }
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...configured,
+      modelsDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models',
+      asrModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\faster-whisper-large-v3',
+      asrLightModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\faster-whisper-large-v3-turbo-int8-ct2',
+      translationModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\HYMT21.8B',
+      demucsModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\demucs',
+      ytdlpDirectory: 'D:\\Project\\Koubox-subtitle-tool\\vendor\\yt-dlp',
+      ffmpegDirectory: 'D:\\Project\\Koubox-subtitle-tool\\vendor\\ffmpeg\\bin',
+      denoDirectory: 'D:\\Project\\Koubox-subtitle-tool\\vendor\\deno'
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, currentDefaults).read()
+
+    expect(config.modelsDirectory).toBe(currentModels)
+    expect(config.asrModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3'))
+    expect(config.asrLightModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3-turbo-int8-ct2'))
+    expect(config.translationModelDirectory).toBe(join(currentModels, 'HYMT21.8B'))
+    expect(config.demucsModelDirectory).toBe(join(currentModels, 'demucs'))
+    expect(config.ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
+    expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
+    expect(config.denoDirectory).toBe(currentDefaults.denoDirectory)
+  })
+
   it('migrates old Koubox model paths to the current checkout models directory', () => {
     const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-model-paths-'))
     temporaryRoots.push(root)

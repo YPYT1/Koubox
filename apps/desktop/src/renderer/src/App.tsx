@@ -262,6 +262,7 @@ export function App() {
               onChooseDirectory={handleChooseDirectory}
               onChooseFile={handleChooseFile}
               onShowToast={showToast}
+              onRefresh={() => void refreshRuntimeAndConfig('settings-page')}
             />
           )}
 

@@ -45,6 +45,7 @@ type SettingsPageProps = {
     filters?: FileFilter[]
   ) => Promise<string | undefined>
   onShowToast: (message: string, type?: 'success' | 'warning' | 'error' | 'info') => void
+  onRefresh: () => void
 }
 
 const TARGET_LANGUAGE_OPTIONS: Array<{ value: TranslationTargetLanguage; label: string }> = [
@@ -168,11 +169,13 @@ export function SettingsPage({
   onSave,
   onChooseDirectory,
   onChooseFile,
-  onShowToast
+  onShowToast,
+  onRefresh
 }: SettingsPageProps) {
   const initialRefreshStartedRef = useRef(false)
   const [guide, setGuide] = useState<GuideKind | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [detecting, setDetecting] = useState(false)
   const [openingLogin, setOpeningLogin] = useState<YtdlpCookiePlatformId | null>(null)
   const [checkingCookies, setCheckingCookies] = useState(false)
   const [cookieCheckCompleted, setCookieCheckCompleted] = useState(false)
@@ -368,11 +371,36 @@ export function SettingsPage({
     }
   }
 
+  const handleDetect = async () => {
+    setDetecting(true)
+    try {
+      await window.koubox.post<RuntimeStatus>('/runtime/refresh')
+      onRefresh()
+      onShowToast('硬件及本地模型状态已刷新', 'success')
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : '刷新检测失败', 'error')
+    } finally {
+      setDetecting(false)
+    }
+  }
+
   return (
     <div className="page-container" style={{ maxWidth: 840 }}>
-      <div className="page-header-block">
-        <h1>全局设置</h1>
-        <p>配置输出目录、语种默认值、下载参数，以及高级运行选项</p>
+      <div className="page-header-block models-page-header">
+        <div>
+          <h1>全局设置</h1>
+          <p>配置输出目录、语种默认值、下载参数，以及高级运行选项</p>
+        </div>
+        <Button
+          type="button"
+          variant="secondary"
+          size="md"
+          loading={detecting}
+          icon={<ArrowsClockwise size={16} />}
+          onClick={() => void handleDetect()}
+        >
+          {detecting ? '检测中…' : '重新检测环境'}
+        </Button>
       </div>
 
       <form className="settings-form-stack" onSubmit={onSave}>
@@ -434,7 +462,7 @@ export function SettingsPage({
             <VendorIntegrity check={runtime?.vendor.ytdlp} />
           </FormField>
 
-          <FormField label="Deno 目录" hint="YouTube EJS 解算使用随软件携带的 Deno 2.x；目录内需包含 deno.exe。">
+          <FormField label="Deno 目录">
             <PathPicker
               value={config.denoDirectory}
               onChange={(val) => onChange({ ...config, denoDirectory: val })}
