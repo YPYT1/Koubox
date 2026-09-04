@@ -31,10 +31,15 @@ const asrModelFiles = [
 
 const legacyAsrModelDirectory = 'whisperlargev3turbo'
 
+const translationModelDirectoryName = 'nllb-200-distilled-600M-multilang-ft-ct2'
+const legacyTranslationModelDirectoryName = 'hymt21.8b'
+
 const translationModelFiles = [
-  'chat_template.jinja', 'config.json', 'configuration.json', 'generation_config.json',
-  'model.safetensors', 'special_tokens_map.json', 'tokenizer_config.json', 'tokenizer.json',
-  'README_CN.md', 'LICENSE.txt'
+  'config.json',
+  'model.bin',
+  'shared_vocabulary.json',
+  'tokenizer.json',
+  'tokenizer_config.json'
 ]
 
 const ytdlpExpectedFiles = ['yt-dlp.exe']
@@ -150,7 +155,12 @@ export class RuntimeStore {
       config.asrLightModelDirectory = join(config.modelsDirectory, ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].directoryName)
     }
     config.defaultAsrModel = asAsrModelId(config.defaultAsrModel, this.defaults.defaultAsrModel)
-    if (!config.translationModelDirectory) config.translationModelDirectory = join(config.modelsDirectory, 'HYMT21.8B')
+    const usesLegacyTranslationModel =
+      !config.translationModelDirectory ||
+      basename(config.translationModelDirectory).toLowerCase() === legacyTranslationModelDirectoryName
+    if (usesLegacyTranslationModel) {
+      config.translationModelDirectory = join(config.modelsDirectory, translationModelDirectoryName)
+    }
     if (!config.demucsModelDirectory) config.demucsModelDirectory = join(config.modelsDirectory, 'demucs')
     if (!config.ytdlpDirectory) config.ytdlpDirectory = this.defaults.ytdlpDirectory
     if (!config.ffmpegDirectory) config.ffmpegDirectory = this.defaults.ffmpegDirectory
@@ -195,7 +205,7 @@ export class RuntimeStore {
     delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookieSource
     delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookiesPath
     delete (normalized as KouboxConfig & Record<string, unknown>).platformBrowserProfiles
-    if (usesLegacyAsrModel || migratedLegacyModelPaths || migratedLegacyVendorPaths || hasLegacyBrowserAuthFields || downloadRuntimePathsChanged || this.pinBundledPaths) {
+    if (usesLegacyAsrModel || usesLegacyTranslationModel || migratedLegacyModelPaths || migratedLegacyVendorPaths || hasLegacyBrowserAuthFields || downloadRuntimePathsChanged || this.pinBundledPaths) {
       const persisted = this.write(normalized)
       log.debug('配置读取完成并回写迁移结果', {
         file: this.file,
@@ -345,7 +355,7 @@ function inspectDemucs(directory: string): ModelCheck {
   log.debug('Demucs 模型检查完成', { directory, durationMs: Date.now() - startedAt, ready: missingFiles.length === 0, missingFiles })
   return {
     id: 'demucs',
-    label: 'Demucs htdemucs',
+    label: 'Demucs',
     directory,
     format: 'transformers',
     ready: missingFiles.length === 0,
@@ -368,7 +378,7 @@ export function resolveModelPaths(config: KouboxConfig): {
     asr: asrPaths.asr,
     asrLight: asrPaths.asrLight,
     asrPlan: resolveAsrExecutionPlan(config),
-    translation: config.translationModelDirectory || join(config.modelsDirectory, 'HYMT21.8B'),
+    translation: config.translationModelDirectory || join(config.modelsDirectory, translationModelDirectoryName),
     demucs: config.demucsModelDirectory || join(config.modelsDirectory, 'demucs')
   }
 }
@@ -445,7 +455,13 @@ export function getRuntimeStatus(
   const models = [
     inspectModel(largeV3.runtimeModelId, largeV3.label, modelPaths.asr, asrModelFiles, 'ctranslate2'),
     inspectModel(turbo.runtimeModelId, turbo.label, modelPaths.asrLight, asrModelFiles, 'ctranslate2'),
-    inspectModel('translation', 'Hy-MT2-1.8B', modelPaths.translation, translationModelFiles),
+    inspectModel(
+      'translation',
+      'NLLB-600M 口播翻译',
+      modelPaths.translation,
+      translationModelFiles,
+      'ctranslate2'
+    ),
     inspectDemucs(modelPaths.demucs)
   ]
   const vendor = {

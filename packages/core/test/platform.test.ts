@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertDownloadableVideoUrl, detectPlatform } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertMaterialsVideoUrl, detectPlatform } from '@koubox/shared'
 import { normalizeTikTokVideoUrl } from '../src/public-video'
 import { parsePlatformUrl } from '@koubox/shared'
 
@@ -15,6 +15,18 @@ describe('shared platform detection', () => {
   ])('detects %s as %s', (url, expected) => {
     expect(detectPlatform(url)).toBe(expected)
     expect(assertDownloadableVideoUrl(url).platform).toBe(expected)
+  })
+
+  it('detects Bilibili video URLs as downloadable', () => {
+    const url = 'https://www.bilibili.com/video/BV1CJbc6JExi'
+    expect(detectPlatform(url)).toBe('Bilibili')
+    expect(assertDownloadableVideoUrl(url).platform).toBe('Bilibili')
+  })
+
+  it('rejects Bilibili for materials pipeline', () => {
+    expect(() => assertMaterialsVideoUrl('https://www.bilibili.com/video/BV1CJbc6JExi')).toThrow(
+      '仅支持 YouTube / Facebook / Instagram / TikTok。'
+    )
   })
 })
 

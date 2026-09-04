@@ -61,7 +61,7 @@ export function VideoDownloaderPage({
     <div className="page-container viral-page downloader-page">
       <div className="page-header-block">
         <h1>视频下载</h1>
-        <p>支持 YouTube、Facebook、Instagram、TikTok 公开视频下载到本地</p>
+        <p>支持 YouTube、Facebook、Instagram、TikTok、Bilibili 公开视频下载到本地</p>
       </div>
 
       <div className="viral-top-grid">

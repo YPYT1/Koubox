@@ -8,6 +8,8 @@ import {
 
   Check,
 
+  CircleNotch,
+
   Copy,
 
   MicrophoneStage,
@@ -15,6 +17,8 @@ import {
   Play,
 
   Pause,
+
+  Translate,
 
   Waveform,
 
@@ -29,6 +33,8 @@ import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 
 import { PipelineStatusPanel } from '../components/common/PipelineStatusPanel'
+
+import { TranslationBusyFrame } from '../components/common/TranslationBusyFrame'
 
 import {
 
@@ -111,26 +117,6 @@ function formatAudioTime(seconds: number) {
 
 
 
-function formatSegmentTime(seconds: number): string {
-
-  const mins = Math.floor(seconds / 60)
-
-  const secs = Math.floor(seconds % 60)
-
-  const ms = Math.floor((seconds % 1) * 1000)
-
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`
-
-}
-
-function syncPairedScroll(source: HTMLElement, target: HTMLElement) {
-  const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
-  const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
-  if (sourceMax === 0 && targetMax === 0) return
-
-  const ratio = sourceMax > 0 ? source.scrollTop / sourceMax : 0
-  target.scrollTop = ratio * targetMax
-}
 
 export function SpeechToTextPage({
 
@@ -154,10 +140,11 @@ export function SpeechToTextPage({
 
   const [starting, setStarting] = useState(false)
 
+  const [translating, setTranslating] = useState(false)
+
   const [textExpanded, setTextExpanded] = useState(false)
 
-  const [copied, setCopied] = useState(false)
-  const [copiedSegmentIndex, setCopiedSegmentIndex] = useState<number | null>(null)
+  const [copiedSection, setCopiedSection] = useState<'original' | 'translation' | null>(null)
 
   const [audioPlaying, setAudioPlaying] = useState(false)
 
@@ -169,11 +156,11 @@ export function SpeechToTextPage({
 
   const audioRef = useRef<HTMLAudioElement>(null)
 
-  const segmentsScrollRef = useRef<HTMLDivElement>(null)
+  const originalListRef = useRef<HTMLDivElement>(null)
 
-  const plainTextScrollRef = useRef<HTMLDivElement>(null)
+  const translatedListRef = useRef<HTMLDivElement>(null)
 
-  const syncingScrollRef = useRef(false)
+  const scrollSyncLock = useRef(false)
 
   const { task, setTask, cancel, isTaskRunning } = usePipelineTask({
 
@@ -207,6 +194,7 @@ export function SpeechToTextPage({
 
     notifiedRef.current = key
 
+    if (task.status === 'complete' && task.message === '翻译完成') return
     if (task.status === 'complete') onShowToast('语音转文字完成。', 'success')
 
   }, [task, onShowToast])
@@ -246,41 +234,56 @@ export function SpeechToTextPage({
   const audioSrc = previewAudioPath ? window.koubox.mediaUrl(previewAudioPath) : ''
 
   const segments = task?.transcript?.segments ?? []
+  const originalLines = segments.map((s) => s.text.trim())
+  const translatedLines = task?.translationLines ?? []
+  const hasTranscript = originalLines.some((line) => Boolean(line))
+  const hasTranslation = translatedLines.some((line) => Boolean(line))
+  const pairedLines = hasTranscript
+    ? Array.from({ length: Math.max(originalLines.length, 1) }, (_, index) => ({
+        index,
+        original: originalLines[index] ?? '',
+        translated: translatedLines[index] ?? ''
+      }))
+    : []
+  const translationBusy = translating || (isTaskRunning && task?.stage === 'translation')
+  const canTranslate = Boolean(
+    task?.taskId &&
+      hasTranscript &&
+      !isTaskRunning &&
+      !translating &&
+      task.status !== 'cancelled'
+  )
 
   useEffect(() => {
-    segmentsScrollRef.current?.scrollTo({ top: 0 })
-    plainTextScrollRef.current?.scrollTo({ top: 0 })
-  }, [segments.length, task?.taskId])
+    originalListRef.current?.scrollTo({ top: 0 })
+    translatedListRef.current?.scrollTo({ top: 0 })
+  }, [pairedLines.length, task?.taskId])
 
-  const handleSegmentsScroll = () => {
-    const source = segmentsScrollRef.current
-    const target = plainTextScrollRef.current
-    if (!source || !target || syncingScrollRef.current) return
-    syncingScrollRef.current = true
-    syncPairedScroll(source, target)
+  const syncScrollFromOriginal = () => {
+    const source = originalListRef.current
+    const target = translatedListRef.current
+    if (!source || !target || scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+    const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+    target.scrollTop = sourceMax > 0 ? (source.scrollTop / sourceMax) * targetMax : 0
     requestAnimationFrame(() => {
-      syncingScrollRef.current = false
+      scrollSyncLock.current = false
     })
   }
 
-  const handlePlainTextScroll = () => {
-    const source = plainTextScrollRef.current
-    const target = segmentsScrollRef.current
-    if (!source || !target || syncingScrollRef.current) return
-    syncingScrollRef.current = true
-    syncPairedScroll(source, target)
+  const syncScrollFromTranslated = () => {
+    const source = translatedListRef.current
+    const target = originalListRef.current
+    if (!source || !target || scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+    const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+    target.scrollTop = sourceMax > 0 ? (source.scrollTop / sourceMax) * targetMax : 0
     requestAnimationFrame(() => {
-      syncingScrollRef.current = false
+      scrollSyncLock.current = false
     })
   }
-
-  const transcriptText = segments
-
-    .map((segment) => segment.text.trim())
-
-    .filter(Boolean)
-
-    .join('\n')
 
 
 
@@ -366,29 +369,30 @@ export function SpeechToTextPage({
 
 
 
-  const handleCopy = async () => {
-
-    if (!transcriptText) return
-
-    await navigator.clipboard.writeText(transcriptText)
-
-    setCopied(true)
-    setCopiedSegmentIndex(null)
-
-    window.setTimeout(() => setCopied(false), 900)
-
-    onShowToast('纯文本已复制（不含时间轴）', 'success')
-
+  const handleCopy = async (text: string, section: 'original' | 'translation') => {
+    await navigator.clipboard.writeText(text)
+    setCopiedSection(section)
+    window.setTimeout(() => {
+      setCopiedSection((current) => (current === section ? null : current))
+    }, 900)
   }
 
-  const handleCopySegment = async (text: string, index: number) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    await navigator.clipboard.writeText(trimmed)
-    setCopied(false)
-    setCopiedSegmentIndex(index)
-    window.setTimeout(() => setCopiedSegmentIndex(null), 900)
-    onShowToast('已复制该句纯文本', 'success')
+  const handleTranslate = async () => {
+    if (!task?.taskId || !task.transcript) return
+    setTranslating(true)
+    try {
+      const updated = await window.koubox.post<TaskSnapshot>(
+        `/tasks/${encodeURIComponent(task.taskId)}/translate`,
+        { targetLanguage: 'zh-Hans' }
+      )
+      setTask(updated)
+      onTaskStatus?.(updated.status)
+      onShowToast('翻译完成', 'success')
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : '翻译失败', 'error')
+    } finally {
+      setTranslating(false)
+    }
   }
 
 
@@ -401,7 +405,7 @@ export function SpeechToTextPage({
 
         <h1>语音转文字</h1>
 
-        <p>上传本地音频、视频或人声轨，识别原文并输出带时间轴的分句结果</p>
+        <p>上传本地音频、视频或人声轨，识别原文；识别完成后可手动翻译为简体中文</p>
 
       </div>
 
@@ -532,7 +536,7 @@ export function SpeechToTextPage({
       <section className="panel-box viral-preview-panel">
         <div className="panel-title">
           <h3>结果预览</h3>
-          <span className="viral-preview-hint">左侧按时间轴展示分句，右侧为纯文本；点击复制不含时间</span>
+          <span className="viral-preview-hint">可试听识别用音频；文案在下方按句展示</span>
         </div>
 
         <div className="speech-audio-row">
@@ -615,99 +619,99 @@ export function SpeechToTextPage({
             )}
           </div>
         </div>
+      </section>
 
-        <div className={`viral-text-card speech-text-card ${textExpanded ? 'speech-text-expanded' : ''}`}>
-          <div className="viral-text-head">
-            <h4>
-              识别文本
-              {task?.transcript?.language ? (
-                <span className="panel-title-badge">{task.transcript.language}</span>
-              ) : null}
-            </h4>
-            <div className="viral-text-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                onClick={() => setTextExpanded((value) => !value)}
-              >
-                {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-                {textExpanded ? '收起' : '展开'}
-              </button>
-              <button
-                type="button"
-                className={`btn-secondary ${copied ? 'btn-copy-done' : ''}`}
-                style={{ height: 32 }}
-                disabled={!transcriptText}
-                onClick={() => void handleCopy()}
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? '已复制' : '复制纯文本'}
-              </button>
+      <TranslationBusyFrame active={translationBusy} expanded={textExpanded}>
+        <div className="panel-title">
+          <h3>识别文案</h3>
+          <span className="viral-preview-hint">左侧原文、右侧译文按句对齐；翻译需手动触发</span>
+          <div className="viral-text-actions" style={{ marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ height: 32 }}
+              onClick={() => setTextExpanded((value) => !value)}
+            >
+              {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+              {textExpanded ? '收起' : '展开'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ height: 32 }}
+              disabled={!canTranslate}
+              onClick={() => void handleTranslate()}
+            >
+              {translationBusy ? <CircleNotch size={14} className="spin" /> : <Translate size={14} />}
+              {translationBusy ? '翻译中…' : '翻译成中文'}
+            </button>
+          </div>
+        </div>
+        <div className="viral-text-grid">
+          <div className="viral-text-card">
+            <div className="viral-text-head">
+              <h4>原始文案</h4>
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className={`btn-secondary ${copiedSection === 'original' ? 'btn-copy-done' : ''}`}
+                  style={{ height: 32 }}
+                  disabled={!hasTranscript}
+                  onClick={() => void handleCopy(originalLines.filter(Boolean).join('\n'), 'original')}
+                >
+                  {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'original' ? '已复制' : '复制原文'}
+                </button>
+              </div>
+            </div>
+            <div className="viral-line-list" ref={originalListRef} onScroll={syncScrollFromOriginal}>
+              {pairedLines.length === 0 ? (
+                <div className="viral-slot-empty">识别完成后按「一行一句」展示原文</div>
+              ) : (
+                pairedLines.map((row) => (
+                  <div className="viral-line-row" key={`o-${row.index}`} data-sync-row={row.index}>
+                    <span className="viral-line-index">{row.index + 1}</span>
+                    <span className="viral-line-text">{row.original || '—'}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-
-          {segments.length > 0 ? (
-            <div className="speech-transcript-grid">
-              <div className="speech-transcript-col">
-                <div className="speech-transcript-col-head">分句时间轴</div>
-                <div
-                  ref={segmentsScrollRef}
-                  className="segments-table speech-segments-table"
-                  onScroll={handleSegmentsScroll}
+          <div className="viral-text-card">
+            <div className="viral-text-head">
+              <h4>翻译文案</h4>
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className={`btn-secondary ${copiedSection === 'translation' ? 'btn-copy-done' : ''}`}
+                  style={{ height: 32 }}
+                  disabled={!hasTranslation}
+                  onClick={() => void handleCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}
                 >
-                  {segments.map((seg, idx) => (
-                    <button
-                      type="button"
-                      className={`segment-row speech-segment-row ${copiedSegmentIndex === idx ? 'is-copied' : ''}`}
-                      key={`${seg.start}-${idx}`}
-                      data-sync-row={idx}
-                      onClick={() => void handleCopySegment(seg.text, idx)}
-                      title="点击复制该句纯文本（不含时间）"
-                    >
-                      <span className="segment-index">#{idx + 1}</span>
-                      <span className="segment-time">
-                        {formatSegmentTime(seg.start)} → {formatSegmentTime(seg.end)}
-                      </span>
-                      <span className="segment-text">{seg.text}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="speech-transcript-col">
-                <div className="speech-transcript-col-head">纯文本</div>
-                <div
-                  ref={plainTextScrollRef}
-                  className="viral-line-list speech-plain-text-list"
-                  onScroll={handlePlainTextScroll}
-                >
-                  {segments.map((seg, idx) => (
-                    <button
-                      type="button"
-                      className={`viral-line-row speech-plain-line ${copiedSegmentIndex === idx ? 'is-copied' : ''}`}
-                      key={`plain-${seg.start}-${idx}`}
-                      data-sync-row={idx}
-                      onClick={() => void handleCopySegment(seg.text, idx)}
-                      title="点击复制该句"
-                    >
-                      <span className="viral-line-index">{idx + 1}</span>
-                      <span className="viral-line-text">{seg.text.trim() || '—'}</span>
-                    </button>
-                  ))}
-                </div>
+                  {copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'translation' ? '已复制' : '复制译文'}
+                </button>
               </div>
             </div>
-          ) : (
-            <div className="viral-line-list speech-text-empty">
-              <div className="viral-slot-empty">
-                {isTaskRunning
-                  ? '正在识别，完成后左侧展示时间轴、右侧展示纯文本'
-                  : '识别完成后，左侧按时间轴展示分句，右侧展示纯文本'}
-              </div>
+            <div className="viral-line-list" ref={translatedListRef} onScroll={syncScrollFromTranslated}>
+              {pairedLines.length === 0 ? (
+                <div className="viral-slot-empty">识别完成后可点击「翻译成中文」</div>
+              ) : !hasTranslation && !translationBusy ? (
+                <div className="viral-slot-empty">点击上方「翻译成中文」生成简体译文</div>
+              ) : (
+                pairedLines.map((row) => (
+                  <div className="viral-line-row" key={`t-${row.index}`} data-sync-row={row.index}>
+                    <span className="viral-line-index">{row.index + 1}</span>
+                    <span className="viral-line-text">
+                      {row.translated || (translationBusy ? '…' : '—')}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
-          )}
+          </div>
         </div>
-      </section>
+      </TranslationBusyFrame>
 
     </div>
 

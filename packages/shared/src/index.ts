@@ -13,7 +13,7 @@ export const tools: ToolManifest[] = [
   {
     id: 'viral-materials',
     name: '爆款素材获取',
-    description: '输入视频链接，下载视频、抽取音频并识别原文；本地翻译暂未启用。',
+    description: '输入视频链接，下载视频、抽取音频并识别原文；识别完成后可手动翻译为简体中文。',
     accent: 'teal',
     artifactTags: ['URL', 'Video', 'Audio', 'Transcript'],
     menus: [
@@ -35,7 +35,7 @@ export const tools: ToolManifest[] = [
   {
     id: 'video-downloader',
     name: '视频下载',
-    description: '粘贴 YouTube / Facebook / Instagram / TikTok 公开链接，下载视频到本地。',
+    description: '粘贴 YouTube / Facebook / Instagram / TikTok / Bilibili 公开链接，下载视频到本地。',
     accent: 'teal',
     artifactTags: ['URL', 'Video'],
     menus: [
@@ -68,7 +68,7 @@ export const tools: ToolManifest[] = [
   {
     id: 'speech-to-text',
     name: '语音转文字',
-    description: '上传本地音频或视频，用 Faster-Whisper 识别原文并输出带时间轴的分句结果。',
+    description: '上传本地音频或视频，用 Faster-Whisper 识别原文并输出带时间轴的分句；识别完成后可手动翻译为简体中文。',
     accent: 'teal',
     artifactTags: ['Audio', 'Transcript'],
     menus: [
@@ -181,18 +181,26 @@ export function detectPlatform(url: string): KouboxPlatform {
     if (host.includes('instagram')) return 'Instagram'
     if (host.includes('twitter') || host === 'x.com' || host.endsWith('.x.com')) return 'Twitter'
     if (host.includes('facebook') || host.includes('fb.watch')) return 'Facebook'
-    if (host.includes('bilibili')) return 'Bilibili'
+    if (host.includes('bilibili') || host === 'b23.tv' || host.endsWith('.b23.tv')) return 'Bilibili'
     if (host.includes('douyin')) return 'Douyin'
   } catch { /* local audio or legacy task */ }
   return 'Video'
 }
 
-/** 爆款素材获取 / 视频下载 共用的可下载平台 */
-export const DOWNLOADABLE_VIDEO_PLATFORMS = ['YouTube', 'TikTok', 'Instagram', 'Facebook'] as const
+/** 视频下载工具支持的平台（含 Bilibili） */
+export const DOWNLOADABLE_VIDEO_PLATFORMS = ['YouTube', 'TikTok', 'Instagram', 'Facebook', 'Bilibili'] as const
 export type DownloadableVideoPlatform = (typeof DOWNLOADABLE_VIDEO_PLATFORMS)[number]
+
+/** 爆款素材获取 / 视频提取音频：不含 Bilibili */
+export const MATERIALS_VIDEO_PLATFORMS = ['YouTube', 'TikTok', 'Instagram', 'Facebook'] as const
+export type MaterialsVideoPlatform = (typeof MATERIALS_VIDEO_PLATFORMS)[number]
 
 export function isDownloadableVideoPlatform(platform: KouboxPlatform): platform is DownloadableVideoPlatform {
   return (DOWNLOADABLE_VIDEO_PLATFORMS as readonly string[]).includes(platform)
+}
+
+export function isMaterialsVideoPlatform(platform: KouboxPlatform): platform is MaterialsVideoPlatform {
+  return (MATERIALS_VIDEO_PLATFORMS as readonly string[]).includes(platform)
 }
 
 function hasRecognizableVideoPath(url: string, platform: DownloadableVideoPlatform): boolean {
@@ -218,6 +226,19 @@ function hasRecognizableVideoPath(url: string, platform: DownloadableVideoPlatfo
       if (parsed.searchParams.get('v') && /^\d+$/.test(parsed.searchParams.get('v') ?? '')) return true
       return /\/(?:videos|reel|reels)\/\d+/i.test(parsed.pathname)
     }
+    if (platform === 'Bilibili') {
+      if (host === 'b23.tv' || host.endsWith('.b23.tv')) {
+        return Boolean(parsed.pathname.split('/').filter(Boolean)[0])
+      }
+      if (!/(^|\.)bilibili\.com$/i.test(host)) return false
+      if (/\/video\/(?:BV[0-9A-Za-z]+|av\d+)/i.test(parsed.pathname)) return true
+      if (/\/bangumi\/play\/(?:ep|ss)\d+/i.test(parsed.pathname)) return true
+      if (/^\/(list|festival)\//i.test(parsed.pathname)) {
+        const bvid = parsed.searchParams.get('bvid')
+        return Boolean(bvid && /^BV[0-9A-Za-z]+$/i.test(bvid))
+      }
+      return false
+    }
   } catch {
     return false
   }
@@ -228,31 +249,59 @@ function platformFormatError(platform: DownloadableVideoPlatform): string {
   if (platform === 'YouTube') return 'YouTube 链接格式不正确，未找到有效视频 ID。'
   if (platform === 'TikTok') return 'TikTok 链接格式不正确，需要 /@用户名/video/数字 或短链。'
   if (platform === 'Instagram') return 'Instagram 链接格式不正确，支持 /p/、/reel/、/reels/。'
+  if (platform === 'Bilibili') {
+    return 'Bilibili 链接格式不正确，支持 /video/BV|av、b23 短链、番剧 ep/ss，或带 bvid 的 list/festival。'
+  }
   return 'Facebook 链接格式不正确，支持 watch、reel、videos 或分享链接。'
 }
 
-/** 校验链接后返回 trim 后的 URL；不合法直接抛错 */
-export function assertDownloadableVideoUrl(url: string): { url: string; platform: DownloadableVideoPlatform } {
+function assertVideoUrlForPlatforms(
+  url: string,
+  allowed: readonly DownloadableVideoPlatform[],
+  unsupportedMessage: string
+): { url: string; platform: DownloadableVideoPlatform } {
   const trimmed = url.trim()
   if (!trimmed) throw new Error('请输入合法的视频链接（http/https）。')
   if (!/^https?:\/\//i.test(trimmed)) {
     throw new Error('请输入合法的视频链接（http/https）。')
   }
-  let hostname = ''
   try {
-    hostname = new URL(trimmed).hostname
+    const hostname = new URL(trimmed).hostname
     if (!hostname) throw new Error('invalid')
   } catch {
     throw new Error('请输入合法的视频链接（http/https）。')
   }
   const platform = detectPlatform(trimmed)
-  if (!isDownloadableVideoPlatform(platform)) {
-    throw new Error('仅支持 YouTube / Facebook / Instagram / TikTok。')
+  if (platform === 'Bilibili' && /\/(?:cheese|course)(?:\/|$)/i.test(new URL(trimmed).pathname)) {
+    throw new Error('Bilibili 课程类链接暂不支持，请使用普通视频或番剧链接。')
   }
-  if (!hasRecognizableVideoPath(trimmed, platform)) {
-    throw new Error(platformFormatError(platform))
+  if (!(allowed as readonly string[]).includes(platform)) {
+    throw new Error(unsupportedMessage)
   }
-  return { url: trimmed, platform }
+  const downloadable = platform as DownloadableVideoPlatform
+  if (!hasRecognizableVideoPath(trimmed, downloadable)) {
+    throw new Error(platformFormatError(downloadable))
+  }
+  return { url: trimmed, platform: downloadable }
+}
+
+/** 视频下载：校验链接（含 Bilibili） */
+export function assertDownloadableVideoUrl(url: string): { url: string; platform: DownloadableVideoPlatform } {
+  return assertVideoUrlForPlatforms(
+    url,
+    DOWNLOADABLE_VIDEO_PLATFORMS,
+    '仅支持 YouTube / Facebook / Instagram / TikTok / Bilibili。'
+  )
+}
+
+/** 爆款素材获取 / 视频提取音频：校验链接（不含 Bilibili） */
+export function assertMaterialsVideoUrl(url: string): { url: string; platform: MaterialsVideoPlatform } {
+  const checked = assertVideoUrlForPlatforms(
+    url,
+    MATERIALS_VIDEO_PLATFORMS,
+    '仅支持 YouTube / Facebook / Instagram / TikTok。'
+  )
+  return { url: checked.url, platform: checked.platform as MaterialsVideoPlatform }
 }
 
 /** 爆款素材获取：本地上传视频允许的扩展名 */

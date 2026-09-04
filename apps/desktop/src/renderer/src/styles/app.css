@@ -2663,6 +2663,65 @@ button:disabled {
   height: min(68vh, 720px);
 }
 
+/* 翻译中：光点沿面板边框环绕（操场跑道式） */
+@property --translation-orbit {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.translation-busy-frame {
+  position: relative;
+  border-radius: calc(var(--radius-lg) + 2px);
+}
+
+.translation-busy-frame.is-active {
+  padding: 2px;
+}
+
+.translation-busy-track {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  pointer-events: none;
+  z-index: 0;
+  background: conic-gradient(
+    from var(--translation-orbit),
+    transparent 0deg,
+    transparent 280deg,
+    color-mix(in srgb, var(--accent-teal) 25%, transparent) 300deg,
+    var(--accent-teal) 330deg,
+    #5eead4 348deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  animation: translation-orbit 1.5s linear infinite;
+}
+
+.translation-busy-panel {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 0;
+}
+
+.translation-busy-frame.is-active .translation-busy-panel {
+  border-color: var(--accent-teal-border);
+}
+
+@keyframes translation-orbit {
+  to {
+    --translation-orbit: 360deg;
+  }
+}
+
 .viral-line-row {
   display: grid;
   grid-template-columns: 28px 1fr;
@@ -2826,6 +2885,7 @@ button:disabled {
 
 .platform-youtube { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
 .platform-tiktok { color: #111827; background: #f3f4f6; border-color: #d1d5db; }
+.platform-bilibili { color: #fb7299; background: #fff1f5; border-color: #f9a8d4; }
 .platform-instagram { color: #9d174d; background: #fdf2f8; border-color: #f9a8d4; }
 .platform-facebook { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
 .platform-local { color: #475569; background: #f8fafc; border-color: #cbd5e1; }
@@ -3510,13 +3570,33 @@ button:disabled {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .model-main-info h4 {
   font-size: 14px;
   font-weight: 700;
   color: var(--text-main);
+}
+
+.model-role-desc {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  font-family: inherit;
+  white-space: normal;
+}
+
+.model-path-line,
+.model-main-info p.model-path-line {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-main-info p {

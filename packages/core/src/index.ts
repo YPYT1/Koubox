@@ -11,6 +11,7 @@ export {
 } from './ytdlp-update.js'
 export { createTemporaryPlatformCookieFile } from './platform-auth.js'
 export { extractFacebookMedia, extractFacebookVideoId, isFacebookShareUrl, resolveFacebookPublicMedia, resolveFacebookShareUrl } from './facebook.js'
+export { resolveBilibiliPublicMedia, resolveBilibiliShortUrl } from './bilibili.js'
 export {
   parsePlatformUrl,
   parsePlatformUrlOrThrow,

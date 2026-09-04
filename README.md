@@ -13,7 +13,7 @@
 |------|------|------|------|
 | 爆款素材获取 | 链接或本地视频 | 下载 / 抽音 / 人声 / ASR 原文 | 翻译步骤当前关闭 |
 | 精准 SRT 对齐 | 音频或视频 + 可选文案 | 标准 SRT | stable-whisper；对齐质量不足时可回退 Large v3 |
-| 视频下载 | YouTube / TikTok / Instagram / Facebook 公开链接 | 视频文件 | 依赖 `vendor/yt-dlp` + `deno` |
+| 视频下载 | YouTube / TikTok / Instagram / Facebook / Bilibili 公开链接 | 视频文件 | 原生 playurl 优先，失败回退 `yt-dlp` |
 | 视频提取音频 | 链接或本地视频 | 高精度 WAV | 无音轨视频会正常完成并提示 |
 | 人声分离 | 本地音频 | Demucs 人声轨 | 需要 CUDA |
 | 语音转文字 | 本地音频或视频 | 带时间轴原文 | Faster-Whisper；默认 turbo，可回退 Large v3 |
@@ -86,7 +86,7 @@ vendor/
 | `faster-whisper-large-v3-turbo-int8-ct2/` | **默认 ASR**；冒烟与资源不足时的轻量模型 |
 | `faster-whisper-large-v3/` | 完整 ASR / 对齐回退 |
 | `demucs/` | 人声分离（可先建空目录，运行时再下权重） |
-| `HYMT21.8B/` | 翻译（当前 UI 未启用，可暂不放） |
+| `nllb-200-distilled-600M-multilang-ft-ct2/` | 翻译（日/英/韩→简中，手动触发） |
 
 开发时默认读取仓库根目录 `models/`；输出目录在桌面端「全局设置」中修改。
 

@@ -14,6 +14,7 @@ type VideoSourceFieldsProps = {
   onChooseVideoFile: (title: string, defaultPath?: string) => Promise<string | undefined>
   browseDefaultPath?: string
   urlLabel?: string
+  urlScope?: 'download' | 'materials'
 }
 
 /** 链接下载 / 本地上传 视频来源切换与输入 */
@@ -27,7 +28,8 @@ export function VideoSourceFields({
   disabled = false,
   onChooseVideoFile,
   browseDefaultPath = '',
-  urlLabel = '短视频 URL'
+  urlLabel = '短视频 URL',
+  urlScope = 'materials'
 }: VideoSourceFieldsProps) {
   const videoFileName = videoPath.replace(/^.*[/\\]/, '')
 
@@ -59,7 +61,7 @@ export function VideoSourceFields({
       </div>
 
       {sourceMode === 'url' ? (
-        <VideoUrlField value={url} onChange={onUrlChange} disabled={disabled} label={urlLabel} />
+        <VideoUrlField value={url} onChange={onUrlChange} disabled={disabled} label={urlLabel} scope={urlScope} />
       ) : (
         <FormField label="本地视频">
           <PathPicker

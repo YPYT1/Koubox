@@ -36,7 +36,7 @@ function buildConfig(outputDirectory: string): KouboxConfig {
     asrModelDirectory: largeDir,
     asrLightModelDirectory: turboDir,
     defaultAsrModel: 'faster-whisper-large-v3-turbo',
-    translationModelDirectory: join(REPO_ROOT, 'models', 'HYMT21.8B'),
+    translationModelDirectory: join(REPO_ROOT, 'models', 'nllb-200-distilled-600M-multilang-ft-ct2'),
     demucsModelDirectory: join(REPO_ROOT, 'models', 'demucs'),
     ytdlpDirectory: join(REPO_ROOT, 'vendor', 'yt-dlp'),
     ffmpegDirectory: join(REPO_ROOT, 'vendor', 'ffmpeg', 'bin'),

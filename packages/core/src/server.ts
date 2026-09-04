@@ -5,7 +5,7 @@ import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { AsrLanguage, AsrModelId, KouboxConfig, PlatformAuthConfig, PlatformAuthEntry, SpeechRateMode, TranslationTargetLanguage, YtdlpCookiePlatformId, YtdlpMaxHeight, YtdlpUpdateStatus } from '@koubox/shared'
 import { asAsrModelId } from '@koubox/shared'
-import { assertDownloadableVideoUrl, assertLocalAudioPath, assertLocalSpeechMediaPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, SPEECH_TO_TEXT_PIPELINE_PATH, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
+import { assertDownloadableVideoUrl, assertMaterialsVideoUrl, assertLocalAudioPath, assertLocalSpeechMediaPath, assertLocalVideoPath, defaultPlatformAuth, normalizeOsPath, tools, SPEECH_TO_TEXT_PIPELINE_PATH, VIDEO_AUDIO_PIPELINE_PATH, VOCAL_SEPARATION_PIPELINE_PATH } from '@koubox/shared'
 import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, detectGpu, detectSystemMemory, getRuntimeStatus, GPU_RUNTIME_PROBE_MAX_AGE_MS, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
@@ -170,8 +170,8 @@ function readVideoMaterialsPipelineInput(body: Record<string, unknown>, defaultO
     if (!existsSync(videoPath)) throw new Error('本地视频文件不存在。')
     return { outputDirectory, source: videoPath, sourceMode: 'local', separateVocals }
   }
-  const { url } = readVideoPipelineInput(body, defaultOutputDirectory)
-  return { outputDirectory, source: url, sourceMode: 'url', separateVocals }
+  const checked = assertMaterialsVideoUrl(typeof body.url === 'string' ? body.url : '')
+  return { outputDirectory, source: checked.url, sourceMode: 'url', separateVocals }
 }
 
 function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): KouboxConfig {

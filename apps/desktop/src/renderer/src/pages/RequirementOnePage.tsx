@@ -8,7 +8,9 @@ import {
   Pause,
   ArrowsOut,
   ArrowsIn,
-  Check
+  Check,
+  Translate,
+  CircleNotch
 } from '@phosphor-icons/react'
 import {
   toUserTaskMessage,
@@ -19,6 +21,7 @@ import {
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
 import { PipelineStepper } from '../components/common/PipelineStepper'
+import { TranslationBusyFrame } from '../components/common/TranslationBusyFrame'
 import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
 import {
@@ -80,10 +83,10 @@ export function RequirementOnePage({
   const [url, setUrl] = useState('')
   const [videoPath, setVideoPath] = useState('')
   const [outputDirectory, setOutputDirectory] = useState(defaultOutputDirectory)
-  // const [targetLanguage, setTargetLanguage] = useState<TranslationTargetLanguage>(translationTargetLanguage)
   const [starting, setStarting] = useState(false)
+  const [translating, setTranslating] = useState(false)
   const [textExpanded, setTextExpanded] = useState(false)
-  const [copiedSection, setCopiedSection] = useState<'original' | null>(null)
+  const [copiedSection, setCopiedSection] = useState<'original' | 'translation' | null>(null)
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [audioPlaying, setAudioPlaying] = useState(false)
   const [vocalsPlaying, setVocalsPlaying] = useState(false)
@@ -94,8 +97,8 @@ export function RequirementOnePage({
   const audioRef = useRef<HTMLAudioElement>(null)
   const vocalsRef = useRef<HTMLAudioElement>(null)
   const originalListRef = useRef<HTMLDivElement>(null)
-  // const translatedListRef = useRef<HTMLDivElement>(null)
-  // const scrollSyncLock = useRef(false)
+  const translatedListRef = useRef<HTMLDivElement>(null)
+  const scrollSyncLock = useRef(false)
   const openedTaskIds = useRef(new Set<string>())
 
   const { task, setTask, isTaskRunning } = usePipelineTask({
@@ -108,9 +111,7 @@ export function RequirementOnePage({
     if (!outputDirectory && defaultOutputDirectory) setOutputDirectory(defaultOutputDirectory)
   }, [defaultOutputDirectory, outputDirectory])
 
-  // useEffect(() => {
-  //   setTargetLanguage(translationTargetLanguage)
-  // }, [translationTargetLanguage])
+  // useEffect for target language removed — target fixed to zh-Hans
 
   useEffect(() => {
     if (!task || task.status !== 'complete' || !openOutputOnComplete) return
@@ -159,12 +160,56 @@ export function RequirementOnePage({
     }
   }
 
-  const handleCopy = async (text: string) => {
+  const handleCopy = async (text: string, section: 'original' | 'translation') => {
     await navigator.clipboard.writeText(text)
-    setCopiedSection('original')
+    setCopiedSection(section)
     window.setTimeout(() => {
-      setCopiedSection((current) => (current === 'original' ? null : current))
+      setCopiedSection((current) => (current === section ? null : current))
     }, 900)
+  }
+
+  const handleTranslate = async () => {
+    if (!task?.taskId || !task.transcript) return
+    setTranslating(true)
+    try {
+      const updated = await window.koubox.post<TaskSnapshot>(
+        `/tasks/${encodeURIComponent(task.taskId)}/translate`,
+        { targetLanguage: 'zh-Hans' }
+      )
+      setTask(updated)
+      onTaskStatus?.(updated.status)
+      onShowToast('翻译完成', 'success')
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : '翻译失败', 'error')
+    } finally {
+      setTranslating(false)
+    }
+  }
+
+  const syncScrollFromOriginal = () => {
+    const source = originalListRef.current
+    const target = translatedListRef.current
+    if (!source || !target || scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+    const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+    target.scrollTop = sourceMax > 0 ? (source.scrollTop / sourceMax) * targetMax : 0
+    requestAnimationFrame(() => {
+      scrollSyncLock.current = false
+    })
+  }
+
+  const syncScrollFromTranslated = () => {
+    const source = translatedListRef.current
+    const target = originalListRef.current
+    if (!source || !target || scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const sourceMax = Math.max(0, source.scrollHeight - source.clientHeight)
+    const targetMax = Math.max(0, target.scrollHeight - target.clientHeight)
+    target.scrollTop = sourceMax > 0 ? (source.scrollTop / sourceMax) * targetMax : 0
+    requestAnimationFrame(() => {
+      scrollSyncLock.current = false
+    })
   }
 
   const playVideo = async () => {
@@ -218,39 +263,20 @@ export function RequirementOnePage({
     el.currentTime = Math.max(0, Math.min(1, ratio)) * el.duration
   }
 
-  // const syncScrollFromOriginal = () => {
-  //   const source = originalListRef.current
-  //   const target = translatedListRef.current
-  //   if (!source || !target || scrollSyncLock.current) return
-  //   scrollSyncLock.current = true
-  //   target.scrollTop = source.scrollTop
-  //   requestAnimationFrame(() => {
-  //     scrollSyncLock.current = false
-  //   })
-  // }
-
-  // const syncScrollFromTranslated = () => {
-  //   const source = translatedListRef.current
-  //   const target = originalListRef.current
-  //   if (!source || !target || scrollSyncLock.current) return
-  //   scrollSyncLock.current = true
-  //   target.scrollTop = source.scrollTop
-  //   requestAnimationFrame(() => {
-  //     scrollSyncLock.current = false
-  //   })
-  // }
-
-  const originalLines = task?.transcript?.segments.map((s) => s.text.trim()).filter(Boolean) ?? []
-  // const translatedLines = task?.translationLines ?? (task?.translation ?? '')
-  //   .split(/\r?\n/)
-  //   .map((line) => line.trim())
-  //   .filter(Boolean)
-  // const lineCount = Math.max(originalLines.length, translatedLines.length, 1)
-  // const pairedLines = Array.from({ length: lineCount }, (_, index) => ({
-  //   index,
-  //   original: originalLines[index] ?? '—',
-  //   translated: translatedLines[index] ?? '—'
-  // }))
+  const originalLines = task?.transcript?.segments.map((s) => s.text.trim()) ?? []
+  const translatedLines = task?.translationLines ?? []
+  const hasTranscript = originalLines.some((line) => Boolean(line))
+  const hasTranslation = translatedLines.some((line) => Boolean(line))
+  const pairedLines = hasTranscript
+    ? Array.from({ length: Math.max(originalLines.length, 1) }, (_, index) => ({
+        index,
+        original: originalLines[index] ?? '',
+        translated: translatedLines[index] ?? ''
+      }))
+    : []
+  const translationBusy = translating || (isTaskRunning && task?.stage === 'translation')
+  const canTranslate =
+    Boolean(task?.taskId && hasTranscript && !isTaskRunning && !translating && task.status !== 'cancelled')
   const activeSourceMode: MaterialsSourceMode =
     task?.sourceMode ?? (task && !/^https?:\/\//i.test(task.url) ? 'local' : sourceMode)
   const videoPreviewPath =
@@ -279,7 +305,7 @@ export function RequirementOnePage({
     <div className="page-container viral-page">
       <div className="page-header-block">
         <h1>爆款素材获取</h1>
-        <p>支持粘贴平台链接下载，或直接上传本地视频进入同一条素材管线</p>
+        <p>支持粘贴平台链接下载，或直接上传本地视频；识别完成后可手动翻译为简体中文</p>
       </div>
 
       <div className="viral-top-grid">
@@ -592,59 +618,97 @@ export function RequirementOnePage({
         </div>
       </section>
 
-      <section className={`panel-box viral-text-panel ${textExpanded ? 'expanded' : ''}`}>
+      <TranslationBusyFrame active={translationBusy} expanded={textExpanded}>
         <div className="panel-title">
           <h3>识别文案</h3>
-          <span className="viral-preview-hint">识别完成后按「一行一句」展示原文</span>
+          <span className="viral-preview-hint">左侧原文、右侧译文按句对齐；翻译需手动触发</span>
+          <div className="viral-text-actions" style={{ marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ height: 32 }}
+              onClick={() => setTextExpanded((value) => !value)}
+            >
+              {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+              {textExpanded ? '收起' : '展开'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ height: 32 }}
+              disabled={!canTranslate}
+              onClick={() => void handleTranslate()}
+            >
+              {translationBusy ? <CircleNotch size={14} className="spin" /> : <Translate size={14} />}
+              {translationBusy ? '翻译中…' : '翻译成中文'}
+            </button>
+          </div>
         </div>
-        <div className="viral-text-card viral-text-card-single">
-          <div className="viral-text-head">
-            <h4>原始文案</h4>
-            <div className="viral-text-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                onClick={() => setTextExpanded((value) => !value)}
-              >
-                {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-                {textExpanded ? '收起' : '展开'}
-              </button>
-              <button
-                type="button"
-                className={`btn-secondary ${copiedSection === 'original' ? 'btn-copy-done' : ''}`}
-                style={{ height: 32 }}
-                disabled={originalLines.length === 0}
-                onClick={() => void handleCopy(originalLines.join('\n'))}
-              >
-                {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
-                {copiedSection === 'original' ? '已复制' : '复制'}
-              </button>
+        <div className="viral-text-grid">
+          <div className="viral-text-card">
+            <div className="viral-text-head">
+              <h4>原始文案</h4>
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className={`btn-secondary ${copiedSection === 'original' ? 'btn-copy-done' : ''}`}
+                  style={{ height: 32 }}
+                  disabled={!hasTranscript}
+                  onClick={() => void handleCopy(originalLines.filter(Boolean).join('\n'), 'original')}
+                >
+                  {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'original' ? '已复制' : '复制原文'}
+                </button>
+              </div>
+            </div>
+            <div className="viral-line-list" ref={originalListRef} onScroll={syncScrollFromOriginal}>
+              {pairedLines.length === 0 ? (
+                <div className="viral-slot-empty">识别完成后按「一行一句」展示原文</div>
+              ) : (
+                pairedLines.map((row) => (
+                  <div className="viral-line-row" key={`o-${row.index}`} data-sync-row={row.index}>
+                    <span className="viral-line-index">{row.index + 1}</span>
+                    <span className="viral-line-text">{row.original || '—'}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-          <div className="viral-line-list" ref={originalListRef}>
-            {originalLines.length === 0 ? (
-              <div className="viral-slot-empty">识别完成后按「一行一句」展示</div>
-            ) : (
-              originalLines.map((line, index) => (
-                <div className="viral-line-row" key={`o-${index}`}>
-                  <span className="viral-line-index">{index + 1}</span>
-                  <span className="viral-line-text">{line}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-        {/* <div className="viral-text-grid">
-          <div className="viral-text-card">...</div>
           <div className="viral-text-card">
             <div className="viral-text-head">
               <h4>翻译文案</h4>
-              ...
+              <div className="viral-text-actions">
+                <button
+                  type="button"
+                  className={`btn-secondary ${copiedSection === 'translation' ? 'btn-copy-done' : ''}`}
+                  style={{ height: 32 }}
+                  disabled={!hasTranslation}
+                  onClick={() => void handleCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}
+                >
+                  {copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedSection === 'translation' ? '已复制' : '复制译文'}
+                </button>
+              </div>
+            </div>
+            <div className="viral-line-list" ref={translatedListRef} onScroll={syncScrollFromTranslated}>
+              {pairedLines.length === 0 ? (
+                <div className="viral-slot-empty">识别完成后可点击「翻译成中文」</div>
+              ) : !hasTranslation && !translationBusy ? (
+                <div className="viral-slot-empty">点击上方「翻译成中文」生成简体译文</div>
+              ) : (
+                pairedLines.map((row) => (
+                  <div className="viral-line-row" key={`t-${row.index}`} data-sync-row={row.index}>
+                    <span className="viral-line-index">{row.index + 1}</span>
+                    <span className="viral-line-text">
+                      {row.translated || (translationBusy ? '…' : '—')}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        </div> */}
-      </section>
+        </div>
+      </TranslationBusyFrame>
     </div>
   )
 }

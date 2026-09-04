@@ -13,7 +13,7 @@ type VideoPreviewSlotProps = {
 export function VideoPreviewSlot({
   videoPath,
   emptyHint = '下载完成后在此预览',
-  emptySubHint = 'YouTube · Facebook · Instagram · TikTok',
+  emptySubHint = 'YouTube · Facebook · Instagram · TikTok · Bilibili',
   onError
 }: VideoPreviewSlotProps) {
   const videoRef = useRef<HTMLVideoElement>(null)

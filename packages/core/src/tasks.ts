@@ -614,14 +614,14 @@ export class TaskManager {
 
     const config = this.options.getConfig()
     const target = targetLanguage ?? config.translationTargetLanguage
-    const sourceLines = record.task.transcript.segments.map((segment) => segment.text.trim()).filter(Boolean)
-    const sourceText = sourceLines.join('\n')
+    const sourceLines = record.task.transcript.segments.map((segment) => segment.text.trim())
+    const sourceText = sourceLines.filter(Boolean).join('\n')
     if (!sourceText) throw new Error('原文为空，无法翻译。')
     const gpu = detectGpu()
     if (!gpu.available) throw this.failWithCode(record, 'GPU_REQUIRED', '当前没有可用的 NVIDIA GPU，无法执行翻译。')
 
     if (shouldSkipTranslation(record.task.language, target)) {
-      this.writeTranslation(record, sourceText, target)
+      this.writeTranslation(record, sourceText, target, sourceLines)
       this.update(record, { status: 'complete', stage: 'complete', percent: 100, message: '原文已是目标语言，无需翻译。' })
       return this.clone(record.task)
     }
@@ -1118,7 +1118,7 @@ export class TaskManager {
       modelDirectory: translationModelDirectory,
       text: sourceText,
       lines: sourceLines,
-      sourceLanguage: record.task.language ?? '',
+      sourceLanguage: record.task.language ?? record.task.transcript?.language ?? '',
       targetLanguage: target,
       temperature: config.translationTemperature,
       maxNewTokens: config.translationMaxNewTokens,
@@ -1126,13 +1126,12 @@ export class TaskManager {
     }, (message) => {
       if (message.type === 'progress') this.update(record, { percent: Math.max(1, Math.min(99, message.percent ?? 0)), message: message.message ?? '正在翻译' })
       if (message.type === 'translation-line' && typeof message.lineIndex === 'number' && typeof message.text === 'string') {
-        const currentLines = [...(record.task.translationLines ?? [])]
+        const currentLines = Array.from({ length: sourceLines.length }, (_, index) => record.task.translationLines?.[index] ?? '')
         currentLines[message.lineIndex] = message.text.trim()
-        const visibleLines = currentLines.filter((line) => typeof line === 'string' && line.trim().length > 0)
-        this.writeTranslation(record, visibleLines.join('\n'), target, visibleLines)
+        this.writeTranslation(record, currentLines.filter(Boolean).join('\n'), target, currentLines)
         this.update(record, {
-          translation: visibleLines.join('\n'),
-          translationLines: visibleLines,
+          translation: currentLines.filter(Boolean).join('\n'),
+          translationLines: currentLines,
           percent: Math.max(1, Math.min(99, message.percent ?? record.task.percent)),
           message: message.totalLines
             ? `正在翻译第 ${message.lineIndex + 1}/${message.totalLines} 句`
@@ -1144,8 +1143,11 @@ export class TaskManager {
       throw new Error('翻译运行器没有返回严格逐句译文数组。')
     }
     const translatedLines = response.translatedLines.map((line) => String(line).trim())
-    if (translatedLines.length !== sourceLines.length || translatedLines.some((line) => !line)) {
+    if (translatedLines.length !== sourceLines.length) {
       throw new Error(`译文行数与原文不一致：原文 ${sourceLines.length} 行，译文 ${translatedLines.length} 行。`)
+    }
+    if (sourceLines.some((line, index) => Boolean(line) && !translatedLines[index])) {
+      throw new Error('存在空译文行，无法与原文对齐。')
     }
     if (response.correctedLines && response.correctedLines.length !== sourceLines.length) {
       throw new Error(`日语校正行数与原文不一致：原文 ${sourceLines.length} 行，校正 ${response.correctedLines.length} 行。`)

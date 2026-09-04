@@ -88,6 +88,17 @@ describe('parsePlatformUrl', () => {
     )
   })
 
+  it.each([
+    ['https://www.bilibili.com/video/BV1CJbc6JExi/?spm_id_from=333.1007', 'BV1CJbc6JExi', 'https://www.bilibili.com/video/BV1CJbc6JExi'],
+    ['https://www.bilibili.com/video/BV1gqtR6yEe6', 'BV1gqtR6yEe6', 'https://www.bilibili.com/video/BV1gqtR6yEe6']
+  ])('parses Bilibili %s', (url, id, canonicalUrl) => {
+    const parsed = parsePlatformUrl(url)
+    expect(parsed?.platform).toBe('Bilibili')
+    expect(parsed?.id).toBe(id)
+    expect(parsed?.canonicalUrl).toBe(canonicalUrl)
+    expect(assertDownloadableVideoUrl(url).platform).toBe('Bilibili')
+  })
+
   it('does not convert Instagram /p/ to /reel/', () => {
     const post = parsePlatformUrlOrThrow('https://www.instagram.com/p/Db-yNiMzPeV/')
     const reel = parsePlatformUrlOrThrow('https://www.instagram.com/reel/Db-yNiMzPeV/')
@@ -115,5 +126,12 @@ describe('prepareDownloadUrl', () => {
     expect(prepared.downloadUrl).toBe('https://www.facebook.com/watch?v=1386554406910989')
     expect(prepared.parsed.kind).toBe('facebook-watch')
     expect(prepared.parsed.id).toBe('1386554406910989')
+  })
+
+  it('recognizes Bilibili short links as redirect-only', () => {
+    const parsed = parsePlatformUrl('https://b23.tv/abc123')
+    expect(parsed?.platform).toBe('Bilibili')
+    expect(parsed?.kind).toBe('bilibili-short-link')
+    expect(parsed?.needsRedirect).toBe(true)
   })
 })

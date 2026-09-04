@@ -1,6 +1,17 @@
-import { assertDownloadableVideoUrl, detectPlatform } from '@koubox/shared'
+import {
+  assertDownloadableVideoUrl,
+  assertMaterialsVideoUrl,
+  detectPlatform
+} from '@koubox/shared'
 import { FormField } from '../common/FormControls'
-import { DOWNLOAD_PLATFORM_META, isSupportedDownloadPlatform } from './platforms'
+import {
+  DOWNLOAD_PLATFORM_META,
+  MATERIALS_PLATFORM_META,
+  isSupportedDownloadPlatform,
+  isSupportedMaterialsPlatform
+} from './platforms'
+
+export type VideoUrlFieldScope = 'download' | 'materials'
 
 type VideoUrlFieldProps = {
   value: string
@@ -9,31 +20,38 @@ type VideoUrlFieldProps = {
   label?: string
   placeholder?: string
   showPlatformChips?: boolean
+  /** download=含 Bilibili；materials=爆款素材/抽音频，不含 Bilibili */
+  scope?: VideoUrlFieldScope
 }
 
-function formatHint(value: string): { error?: string } {
+function formatHint(value: string, scope: VideoUrlFieldScope): { error?: string } {
   const trimmed = value.trim()
   if (!trimmed) return {}
   try {
-    assertDownloadableVideoUrl(trimmed)
+    if (scope === 'materials') assertMaterialsVideoUrl(trimmed)
+    else assertDownloadableVideoUrl(trimmed)
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) }
   }
   return {}
 }
 
-/** 两个下载相关工具共用的链接输入 + 平台识别条 */
+/** 链接输入 + 平台识别条 */
 export function VideoUrlField({
   value,
   onChange,
   disabled,
   label = '视频链接',
   placeholder = 'https://www.youtube.com/watch?v=...',
-  showPlatformChips = true
+  showPlatformChips = true,
+  scope = 'download'
 }: VideoUrlFieldProps) {
   const platform = value.trim() ? detectPlatform(value.trim()) : undefined
-  const supported = isSupportedDownloadPlatform(platform)
-  const hint = formatHint(value)
+  const supported = scope === 'materials'
+    ? isSupportedMaterialsPlatform(platform)
+    : isSupportedDownloadPlatform(platform)
+  const chips = scope === 'materials' ? MATERIALS_PLATFORM_META : DOWNLOAD_PLATFORM_META
+  const hint = formatHint(value, scope)
 
   return (
     <>
@@ -49,7 +67,7 @@ export function VideoUrlField({
 
       {showPlatformChips && (
         <div className="downloader-platforms">
-          {DOWNLOAD_PLATFORM_META.map(({ id, label: name, Icon }) => {
+          {chips.map(({ id, label: name, Icon }) => {
             const active = platform === id
             return (
               <span

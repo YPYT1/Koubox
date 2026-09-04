@@ -14,7 +14,7 @@ function sampleConfig(modelsDirectory: string): KouboxConfig {
     asrModelDirectory: join(modelsDirectory, 'custom-large-location'),
     asrLightModelDirectory: join(modelsDirectory, 'custom-light-location'),
     defaultAsrModel: 'faster-whisper-large-v3-turbo',
-    translationModelDirectory: join(modelsDirectory, 'HYMT21.8B'),
+    translationModelDirectory: join(modelsDirectory, 'nllb-200-distilled-600M-multilang-ft-ct2'),
     demucsModelDirectory: join(modelsDirectory, 'demucs'),
     ytdlpDirectory: join(modelsDirectory, 'yt-dlp'),
     ffmpegDirectory: join(modelsDirectory, 'ffmpeg'),

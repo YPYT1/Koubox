@@ -23,15 +23,25 @@ type ModelsPageProps = {
 }
 
 function modelBadge(id: string): string {
-  if (id === 'asr' || id === 'asr-turbo') return '语音识别'
+  if (id === 'asr') return '语音识别 · 高精度'
+  if (id === 'asr-turbo') return '语音识别 · 轻量'
   if (id === 'translation') return '翻译'
   if (id === 'demucs') return '去除背景音乐'
   return id
 }
 
+function modelDescription(id: string): string {
+  if (id === 'asr') return '高精度语音识别，输出带时间轴的分句文稿；准确度更高，显存占用更大。'
+  if (id === 'asr-turbo') return '轻量语音识别，速度更快、更省显存，适合日常默认识别。'
+  if (id === 'translation') return '识别完成后手动译为简体中文，支持日语 / 英语 / 韩语原文。'
+  if (id === 'demucs') return '从音视频中分离人声、去掉背景音乐，适合带完整 BGM 的素材。'
+  return ''
+}
+
 function modelFormatBadge(model: RuntimeStatus['models'][number]): string {
   if (model.id === 'asr-turbo') return ASR_MODEL_CATALOG['faster-whisper-large-v3-turbo'].formatLabel
-  return model.format === 'ctranslate2' ? 'CTranslate2 · FP16' : 'Transformers'
+  if (model.id === 'demucs') return 'PyTorch'
+  return model.format === 'ctranslate2' ? 'CTranslate2' : 'Transformers'
 }
 
 function modelPathKey(id: string): 'asrModelDirectory' | 'asrLightModelDirectory' | 'translationModelDirectory' | 'demucsModelDirectory' {
@@ -42,10 +52,8 @@ function modelPathKey(id: string): 'asrModelDirectory' | 'asrLightModelDirectory
 }
 
 /** 功能已暂时关闭的模型，保留配置与路径供后续恢复 */
-const SHELVED_MODEL_IDS = new Set(['translation'])
-
-function isShelvedModel(id: string): boolean {
-  return SHELVED_MODEL_IDS.has(id)
+function isShelvedModel(_id: string): boolean {
+  return false
 }
 
 export function ModelsPage({
@@ -241,7 +249,10 @@ export function ModelsPage({
                       </span>
                     )}
                   </div>
-                  <p title={model.directory}>{model.directory}</p>
+                  {modelDescription(model.id) ? (
+                    <p className="model-role-desc">{modelDescription(model.id)}</p>
+                  ) : null}
+                  <p className="model-path-line" title={model.directory}>{model.directory}</p>
                   {shelved ? (
                     <small className="model-shelved-hint">
                       翻译功能已暂时关闭；模型路径与权重检测仍保留，恢复功能后可继续使用。

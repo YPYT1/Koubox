@@ -62,7 +62,7 @@ const PIPED_INSTANCES = [
 ]
 
 export type PublicMediaResolution = {
-  source: 'tiktok-page' | 'browser' | 'piped' | 'facebook-page' | 'facebook-browser' | 'instagram-page'
+  source: 'tiktok-page' | 'browser' | 'piped' | 'facebook-page' | 'facebook-browser' | 'instagram-page' | 'bilibili-page'
   videoUrl: string
   /** Same-quality or lower-ranked signed URLs to try before changing strategy. */
   alternateVideoUrls?: string[]
@@ -610,6 +610,10 @@ export async function resolvePublicMedia(
   if (platform === 'Facebook') {
     const { resolveFacebookPublicMedia } = await import('./facebook')
     return resolveFacebookPublicMedia(url, proxy, signal)
+  }
+  if (platform === 'Bilibili') {
+    const { resolveBilibiliPublicMedia } = await import('./bilibili')
+    return resolveBilibiliPublicMedia(url, proxy, maxHeight, signal)
   }
   throw new Error(`${platform} 没有配置公开页面回退解析器。`)
 }

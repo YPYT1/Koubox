@@ -19,7 +19,7 @@ function defaults(modelsDirectory: string): KouboxConfig {
     asrModelDirectory: join(modelsDirectory, 'faster-whisper-large-v3'),
     asrLightModelDirectory: join(modelsDirectory, 'faster-whisper-large-v3-turbo-int8-ct2'),
     defaultAsrModel: 'faster-whisper-large-v3-turbo',
-    translationModelDirectory: join(modelsDirectory, 'HYMT21.8B'),
+    translationModelDirectory: join(modelsDirectory, 'nllb-200-distilled-600M-multilang-ft-ct2'),
     demucsModelDirectory: join(modelsDirectory, 'demucs'),
     ytdlpDirectory: join(modelsDirectory, 'yt-dlp'),
     ffmpegDirectory: join(modelsDirectory, 'ffmpeg'),
@@ -189,7 +189,7 @@ describe('Faster-Whisper ASR configuration', () => {
       modelsDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models',
       asrModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\faster-whisper-large-v3',
       asrLightModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\faster-whisper-large-v3-turbo-int8-ct2',
-      translationModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\HYMT21.8B',
+      translationModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\nllb-200-distilled-600M-multilang-ft-ct2',
       demucsModelDirectory: 'D:\\Project\\Koubox-subtitle-tool\\models\\demucs',
       ytdlpDirectory: 'D:\\Project\\Koubox-subtitle-tool\\vendor\\yt-dlp',
       ffmpegDirectory: 'D:\\Project\\Koubox-subtitle-tool\\vendor\\ffmpeg\\bin',
@@ -201,11 +201,27 @@ describe('Faster-Whisper ASR configuration', () => {
     expect(config.modelsDirectory).toBe(currentModels)
     expect(config.asrModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3'))
     expect(config.asrLightModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3-turbo-int8-ct2'))
-    expect(config.translationModelDirectory).toBe(join(currentModels, 'HYMT21.8B'))
+    expect(config.translationModelDirectory).toBe(join(currentModels, 'nllb-200-distilled-600M-multilang-ft-ct2'))
     expect(config.demucsModelDirectory).toBe(join(currentModels, 'demucs'))
     expect(config.ytdlpDirectory).toBe(currentDefaults.ytdlpDirectory)
     expect(config.ffmpegDirectory).toBe(currentDefaults.ffmpegDirectory)
     expect(config.denoDirectory).toBe(currentDefaults.denoDirectory)
+  })
+
+  it('migrates legacy Hy-MT2 translation directory to NLLB CT2', () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-runtime-nllb-migrate-'))
+    temporaryRoots.push(root)
+    const runtimeFile = join(root, 'runtime.json')
+    const currentModels = join(root, 'models')
+    const configured = defaults(currentModels)
+    writeFileSync(runtimeFile, JSON.stringify({
+      ...configured,
+      translationModelDirectory: join(currentModels, 'HYMT21.8B')
+    }), 'utf8')
+
+    const config = new RuntimeStore(runtimeFile, configured).read()
+
+    expect(config.translationModelDirectory).toBe(join(currentModels, 'nllb-200-distilled-600M-multilang-ft-ct2'))
   })
 
   it('migrates old Koubox model paths to the current checkout models directory', () => {
@@ -218,7 +234,7 @@ describe('Faster-Whisper ASR configuration', () => {
       ...configured,
       modelsDirectory: 'D:\\Project\\Koubox\\models',
       asrModelDirectory: 'D:\\Project\\Koubox\\models\\faster-whisper-large-v3',
-      translationModelDirectory: 'D:\\Project\\Koubox\\models\\HYMT21.8B',
+      translationModelDirectory: 'D:\\Project\\Koubox\\models\\nllb-200-distilled-600M-multilang-ft-ct2',
       demucsModelDirectory: 'D:\\Project\\Koubox\\models\\demucs'
     }), 'utf8')
 
@@ -226,7 +242,7 @@ describe('Faster-Whisper ASR configuration', () => {
 
     expect(config.modelsDirectory).toBe(currentModels)
     expect(config.asrModelDirectory).toBe(join(currentModels, 'faster-whisper-large-v3'))
-    expect(config.translationModelDirectory).toBe(join(currentModels, 'HYMT21.8B'))
+    expect(config.translationModelDirectory).toBe(join(currentModels, 'nllb-200-distilled-600M-multilang-ft-ct2'))
     expect(config.demucsModelDirectory).toBe(join(currentModels, 'demucs'))
     const persisted = JSON.parse(readFileSync(runtimeFile, 'utf8')) as KouboxConfig
     expect(persisted.modelsDirectory).toBe(currentModels)

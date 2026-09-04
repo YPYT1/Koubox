@@ -62,6 +62,7 @@ function detectPlatformBadge(url: string, kind: TaskKind): PlatformBadge {
   const platform = detectPlatform(url)
   if (platform === 'YouTube') return { label: platform, className: 'platform-youtube' }
   if (platform === 'TikTok') return { label: platform, className: 'platform-tiktok' }
+  if (platform === 'Bilibili') return { label: platform, className: 'platform-bilibili' }
   if (platform === 'Instagram') return { label: platform, className: 'platform-instagram' }
   if (platform === 'Facebook') return { label: platform, className: 'platform-facebook' }
   return { label: platform === 'Audio' ? '本地音频' : platform, className: 'platform-local' }

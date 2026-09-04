@@ -1,5 +1,6 @@
 import {
   assertDownloadableVideoUrl,
+  assertMaterialsVideoUrl,
   assertLocalAudioPath,
   assertLocalSpeechMediaPath,
   assertLocalVideoPath,
@@ -39,7 +40,7 @@ async function postVideoMaterialsPipeline(path: string, input: MaterialsPipeline
     const checked = assertLocalVideoPath(videoPath)
     return window.koubox.post<TaskSnapshot>(path, { ...payload, videoPath: checked })
   }
-  const checked = assertDownloadableVideoUrl(input.url ?? '')
+  const checked = assertMaterialsVideoUrl(input.url ?? '')
   return window.koubox.post<TaskSnapshot>(path, { ...payload, url: checked.url })
 }
 

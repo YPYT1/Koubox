@@ -14,7 +14,7 @@ export type AsrModelCatalogEntry = {
 export const ASR_MODEL_CATALOG: Record<AsrModelId, AsrModelCatalogEntry> = {
   'faster-whisper-large-v3': {
     id: 'faster-whisper-large-v3',
-    label: 'Faster-Whisper Large v3（FP16）',
+    label: 'Faster-Whisper Large v3',
     directoryName: 'faster-whisper-large-v3',
     runtimeModelId: 'asr',
     computeType: 'float16',
@@ -22,7 +22,7 @@ export const ASR_MODEL_CATALOG: Record<AsrModelId, AsrModelCatalogEntry> = {
   },
   'faster-whisper-large-v3-turbo': {
     id: 'faster-whisper-large-v3-turbo',
-    label: 'faster-whisper-large-v3-turbo',
+    label: 'Faster-Whisper Turbo',
     directoryName: 'faster-whisper-large-v3-turbo-int8-ct2',
     runtimeModelId: 'asr-turbo',
     computeType: 'int8',

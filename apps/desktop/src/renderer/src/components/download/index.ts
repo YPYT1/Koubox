@@ -1,4 +1,4 @@
-export { DOWNLOAD_PLATFORM_META, isSupportedDownloadPlatform } from './platforms'
+export { DOWNLOAD_PLATFORM_META, MATERIALS_PLATFORM_META, isSupportedDownloadPlatform, isSupportedMaterialsPlatform } from './platforms'
 export { VideoUrlField } from './VideoUrlField'
 export { VideoPreviewSlot } from './VideoPreviewSlot'
 export { AudioPreviewSlot } from './AudioPreviewSlot'

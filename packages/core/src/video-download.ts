@@ -12,6 +12,7 @@ import {
   type KouboxConfig
 } from '@koubox/shared'
 import { resolveFacebookPublicMedia } from './facebook.js'
+import { resolveBilibiliPublicMedia } from './bilibili.js'
 import { prepareDownloadUrl } from './download-url.js'
 import { resolvePublicMedia, type PublicMediaResolution } from './public-video.js'
 
@@ -26,6 +27,7 @@ export type VideoDownloadStrategy =
   | 'tiktok-reference'
   | 'tiktok-browser'
   | 'facebook-browser'
+  | 'yt-dlp'
   | 'yt-dlp-authenticated'
 
 /** A per-task cookie file created by the desktop host and removed after yt-dlp exits. */
@@ -115,7 +117,7 @@ function publicNetworkFailureMessage(
   failures: VideoDownloadResult['failures'],
   platformAuthConfigured: boolean
 ): string | undefined {
-  const publicFailures = failures.filter((failure) => failure.strategy !== 'yt-dlp-authenticated')
+  const publicFailures = failures.filter((failure) => failure.strategy !== 'yt-dlp-authenticated' && failure.strategy !== 'yt-dlp')
   if (!publicFailures.some((failure) => looksLikePublicNetworkFailure(failure.message))) return undefined
   if (platformAuthConfigured) {
     return `${platform} 下载失败：网络连接超时或较慢，平台页面未完整返回媒体数据。请检查网络或代理后重试。`
@@ -244,17 +246,22 @@ async function downloadResolvedMedia(request: VideoDownloadRequest, resolved: Pu
   if (existsSync(tempPath)) unlinkSync(tempPath)
   const args = ['-hide_banner', '-loglevel', 'warning', '-y', '-progress', 'pipe:1']
   const addInput = (url: string) => {
+    const reconnectMax = resolved.source === 'bilibili-page' ? '5' : '3'
     args.push(
       '-rw_timeout', '50000000',
       '-reconnect', '1',
       '-reconnect_at_eof', '1',
       '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '3'
+      '-reconnect_delay_max', reconnectMax
     )
     if (proxy) args.push('-http_proxy', proxy)
     const userAgent = resolved.source.startsWith('facebook-') ? 'facebookexternalhit/1.1' : resolved.userAgent
     args.push('-user_agent', userAgent, '-referer', resolved.referer)
-    if (resolved.cookieHeader && !resolved.source.startsWith('facebook-')) {
+    if (resolved.source === 'bilibili-page') {
+      const headerLines = ['Origin: https://www.bilibili.com']
+      if (resolved.cookieHeader) headerLines.push(`Cookie: ${resolved.cookieHeader}`)
+      args.push('-headers', `${headerLines.join('\r\n')}\r\n`)
+    } else if (resolved.cookieHeader && !resolved.source.startsWith('facebook-')) {
       args.push('-headers', `Cookie: ${resolved.cookieHeader}\r\n`)
     }
     args.push('-i', url)
@@ -309,6 +316,23 @@ async function resolvePrimaryPublicMedia(
   if (platform === 'Facebook') {
     return (request.resolveFacebookPublicMedia ?? resolveFacebookPublicMedia)(request.url, request.config.ytdlpProxy, request.signal)
   }
+  if (platform === 'Bilibili') {
+    if (request.resolvePublicMedia) {
+      return request.resolvePublicMedia(
+        request.url,
+        platform,
+        request.config.ytdlpProxy,
+        request.config.ytdlpMaxHeight,
+        request.signal
+      )
+    }
+    return resolveBilibiliPublicMedia(
+      request.url,
+      request.config.ytdlpProxy,
+      request.config.ytdlpMaxHeight,
+      request.signal
+    )
+  }
   return (request.resolvePublicMedia ?? resolvePublicMedia)(
     request.url,
     platform,
@@ -354,6 +378,19 @@ function ytdlpAuthenticationArgs(request: VideoDownloadRequest, authentication?:
   return args
 }
 
+function ytdlpBilibiliArgs(url: string): string[] {
+  try {
+    if (!new URL(url).hostname.toLowerCase().includes('bilibili')) return []
+  } catch {
+    return []
+  }
+  return [
+    '--referer', 'https://www.bilibili.com/',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    '--extractor-args', 'bilibili:prefer_multi_flv=0'
+  ]
+}
+
 function authenticationSourceLabel(source: AuthenticatedCookieFile['source']): string {
   return source === 'paste' ? '粘贴 Cookie 已配置' : '应用内登录已保存'
 }
@@ -388,6 +425,7 @@ async function runYtdlpAuthenticationPreflight(
       '--ignore-config', '--newline', '--no-playlist', '--no-warnings',
       '--skip-download', '--simulate',
       ...ytdlpAuthenticationArgs(request, authentication),
+      ...ytdlpBilibiliArgs(request.url),
       '-f', format,
       request.url
     ]
@@ -424,6 +462,7 @@ async function runYtdlpWithFormat(
     '-o', join(request.directory, `${tempStem}.%(ext)s`)
   ]
   args.push(...ytdlpAuthenticationArgs(request, authentication))
+  args.push(...ytdlpBilibiliArgs(request.url))
   args.push('-f', format)
   if (request.config.ytdlpExtraArgs.trim()) args.push(...publicYtdlpExtraArgs(request.config.ytdlpExtraArgs.trim()))
   await request.runCommand(request.vendor.ytdlpExecutable, [...args, request.url], ytdlpProgressHandler(request), 'yt-dlp')
@@ -480,15 +519,24 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   ): Promise<VideoDownloadResult | undefined> => {
     try {
       ensureActive(request)
-      request.updateProgress(4, strategy === 'public-page' ? '正在解析公开页面最高质量媒体流…' : '正在使用匿名浏览器捕获公开媒体流…')
+      const resolvingLabel = checked.platform === 'Bilibili'
+        ? '正在解析 Bilibili 播放地址…'
+        : strategy === 'public-page'
+          ? '正在解析公开页面最高质量媒体流…'
+          : '正在使用匿名浏览器捕获公开媒体流…'
+      request.updateProgress(4, resolvingLabel)
       const attemptResolution = async (resolution: PublicMediaResolution): Promise<VideoDownloadResult> => {
         const candidates = [resolution.videoUrl, ...(resolution.alternateVideoUrls ?? [])]
         let lastError: unknown
-        for (const videoUrl of candidates) {
+        for (let index = 0; index < candidates.length; index += 1) {
+          const videoUrl = candidates[index]
           ensureActive(request)
           const finalPath = join(request.directory, `${request.fileStem}.mp4`)
           if (existsSync(finalPath)) unlinkSync(finalPath)
           try {
+            if (index > 0 && checked.platform === 'Bilibili') {
+              request.updateProgress(8, `主线路失败，正在切换备用 CDN（${index + 1}/${candidates.length}）…`)
+            }
             const path = await downloadResolvedMedia(request, {
               ...resolution,
               videoUrl,
@@ -504,9 +552,11 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
       }
       let firstResolution: PublicMediaResolution | undefined
       let resolutionError: unknown
-      const resolverLabel = strategy === 'public-page'
-        ? '正在解析公开页面最高质量媒体流'
-        : '正在使用匿名浏览器捕获公开媒体流'
+      const resolverLabel = checked.platform === 'Bilibili'
+        ? '正在解析 Bilibili 播放地址'
+        : strategy === 'public-page'
+          ? '正在解析公开页面最高质量媒体流'
+          : '正在使用匿名浏览器捕获公开媒体流'
       const startedAt = Date.now()
       let heartbeat = 0
       const heartbeatTimer = setInterval(() => {
@@ -525,7 +575,9 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
           resolutionError = error
           ensureActive(request)
           if (attempt < resolveAttempts) {
-            request.updateProgress(5, `匿名浏览器未捕获到媒体流，正在重试（${attempt + 1}/${resolveAttempts}）…`)
+            request.updateProgress(5, checked.platform === 'Bilibili'
+              ? `Bilibili 解析未成功，正在重试（${attempt + 1}/${resolveAttempts}）…`
+              : `匿名浏览器未捕获到媒体流，正在重试（${attempt + 1}/${resolveAttempts}）…`)
           }
         }
       }
@@ -547,6 +599,7 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   }
 
   // YouTube 直接走登录态；TikTok 优先使用复制进来的参考下载器，再回退匿名浏览器。
+  // Bilibili：原生 playurl（html5/DASH）优先，失败后无 Cookie 走 yt-dlp。
   if (checked.platform === 'TikTok') {
     if (effectiveRequest.downloadTikTokPublic) {
       effectiveRequest.updateProgress(4, '正在使用 TikTok 无 Cookie 下载器…')
@@ -578,6 +631,18 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
     if (browserFallback) {
       const result = await tryResolved(browserFallback.strategy, browserFallback.resolve, browserFallback.resolveAttempts)
       if (result) return result
+    }
+  } else if (checked.platform === 'Bilibili') {
+    const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(effectiveRequest, checked.platform), 3)
+    if (direct) return direct
+    try {
+      ensureActive(effectiveRequest)
+      effectiveRequest.updateProgress(4, '原生解析失败，正在使用 yt-dlp 下载…')
+      const path = await runYtdlp(effectiveRequest, undefined)
+      ensureActive(effectiveRequest)
+      return await verifyResult(effectiveRequest, path, checked.platform, 'yt-dlp', failures)
+    } catch (error) {
+      failures.push({ strategy: 'yt-dlp', message: errorMessage(error) })
     }
   } else if (checked.platform !== 'YouTube') {
     const direct = await tryResolved('public-page', () => resolvePrimaryPublicMedia(effectiveRequest, checked.platform))
@@ -639,6 +704,9 @@ export async function downloadVideo(request: VideoDownloadRequest): Promise<Vide
   }
 
   if (!authenticationResolved) {
+    if (checked.platform === 'Bilibili') {
+      throw new Error(`Bilibili 下载失败：${failures.map((item) => `${item.strategy}：${item.message}`).join('；')}。`)
+    }
     const platformAuthConfigured = isPlatformAuthConfigured(checked.platform, effectiveRequest.config.ytdlpPlatformAuth)
     const networkMessage = publicNetworkFailureMessage(checked.platform, failures, platformAuthConfigured)
     if (networkMessage) throw new Error(networkMessage)

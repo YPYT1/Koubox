@@ -498,42 +498,9 @@ export function SettingsPage({
             <span className="panel-title-badge">语种与行为</span>
           </div>
 
-          {/* 翻译目标语言 — 功能暂时下架，保留配置字段 translationTargetLanguage */}
-          <div className="form-group settings-field-shelved">
-            <label>
-              <span className="form-label-row">
-                <span>翻译目标语言</span>
-                <span
-                  className="panel-title-badge"
-                  style={{ color: '#b45309', background: '#fffbeb' }}
-                >
-                  暂时下架
-                </span>
-              </span>
-            </label>
-            <small className="field-hint model-shelved-hint">
-              翻译功能已暂时关闭；默认语种配置保留，恢复功能后可继续生效。
-            </small>
-          </div>
-
-          {/*
-          <FormField label="翻译目标语言" hint="需求 1 翻译时的默认目标语种，任务页可临时覆盖。">
-            <select
-              className="input-text"
-              value={config.translationTargetLanguage}
-              onChange={(e) =>
-                onChange({
-                  ...config,
-                  translationTargetLanguage: e.target.value as TranslationTargetLanguage
-                })
-              }
-            >
-              {TARGET_LANGUAGE_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
+          <FormField label="翻译目标语言">
+            <input className="input-text" value="简体中文（固定）" disabled readOnly />
           </FormField>
-          */}
 
           <FormField label="ASR 语种" hint="Whisper 识别语种。繁体与简体在识别阶段均映射为中文。">
             <select
@@ -547,7 +514,7 @@ export function SettingsPage({
             </select>
           </FormField>
 
-          <FormField label="默认识别模型" hint="爆款素材获取、精准 SRT、语音转文字共用。显存不足时会自动从 Large v3 回退到 turbo。">
+          <FormField label="默认识别模型">
             <select
               className="input-text"
               value={config.defaultAsrModel}
