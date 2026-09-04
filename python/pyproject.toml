@@ -28,3 +28,9 @@ packages = ["src/koubox_runtime", "src/stable_whisper"]
 
 [tool.uv.sources]
 torch = { path = "wheels/torch-2.11.0+cu128-cp312-cp312-win_amd64.whl" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

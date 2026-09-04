@@ -45,3 +45,7 @@ docs/ASR模型对比报告.md
 链接.txt
 链接 copy.txt
 .tmp
+python/train-nllb/output/
+python/train-nllb/.venv/
+python/train-nllb/data/sft_stage*.jsonl
+python/train-nllb/data/sft_hf_finance_mix.jsonl

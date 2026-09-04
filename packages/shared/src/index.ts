@@ -13,9 +13,9 @@ export const tools: ToolManifest[] = [
   {
     id: 'viral-materials',
     name: '爆款素材获取',
-    description: '输入视频链接，下载视频、抽取音频、识别原文并进行本地翻译。',
+    description: '输入视频链接，下载视频、抽取音频并识别原文；本地翻译暂未启用。',
     accent: 'teal',
-    artifactTags: ['URL', 'Video', 'Audio', 'Transcript', 'Translation'],
+    artifactTags: ['URL', 'Video', 'Audio', 'Transcript'],
     menus: [
       { id: 'run', label: '开始处理' },
       { id: 'history', label: '任务中心' }

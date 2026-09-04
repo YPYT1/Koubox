@@ -412,7 +412,7 @@ export function SettingsPage({
 
           <FormField
             label="默认成果输出目录"
-            hint="下载的素材、提取的音频以及生成的 SRT 默认归档到此目录。ASR 与翻译模型路径在「模型与环境」中单独设置。"
+            hint="下载的素材、提取的音频以及生成的 SRT 默认归档到此目录。ASR 模型路径在「模型与环境」中单独设置。"
           >
             <PathPicker
               value={config.outputDirectory}
@@ -535,7 +535,7 @@ export function SettingsPage({
           </FormField>
           */}
 
-          <FormField label="ASR 语种" hint="Whisper 识别语种。繁体/简体在识别阶段均映射为中文，翻译阶段再区分。">
+          <FormField label="ASR 语种" hint="Whisper 识别语种。繁体与简体在识别阶段均映射为中文。">
             <select
               className="input-text"
               value={config.asrLanguage}
@@ -770,7 +770,7 @@ export function SettingsPage({
           >
             <span>
               <strong>高级</strong>
-              <small>调试、并发、翻译采样、Whisper chunk、Python 路径</small>
+              <small>调试、并发、Whisper chunk、Python 路径</small>
             </span>
             <CaretDown size={16} weight="bold" className={advancedOpen ? 'rotated' : ''} />
           </button>
@@ -830,6 +830,7 @@ export function SettingsPage({
                 />
               </FormField>
 
+              {/* 翻译采样参数 — 功能暂时下架，保留配置字段
               <div className="settings-inline-grid">
                 <FormField label="翻译 temperature">
                   <input
@@ -873,6 +874,7 @@ export function SettingsPage({
                   />
                 </FormField>
               </div>
+              */}
 
               <FormField label="Whisper chunk_length_s" hint="长音频可适当增大；显存不足时可减小。">
                 <input
