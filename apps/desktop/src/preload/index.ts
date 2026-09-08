@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { LicenseCredentials, LicenseDevScenario, LicenseSnapshot } from '@koubox/license-client'
 
 const apiUrl = process.argv.find((value) => value.startsWith('--koubox-api='))?.slice('--koubox-api='.length)
 const token = process.argv.find((value) => value.startsWith('--koubox-token='))?.slice('--koubox-token='.length)
@@ -114,6 +115,21 @@ contextBridge.exposeInMainWorld('koubox', {
   logDebug: (message: string, detail?: unknown) => ipcRenderer.invoke('log:debug', message, detail),
   logWarn: (message: string, detail?: unknown) => ipcRenderer.invoke('log:warn', message, detail),
   logInfo: (message: string, detail?: unknown) => ipcRenderer.invoke('log:info', message, detail),
+  licenseStatus: () => ipcRenderer.invoke('license:get-status') as Promise<LicenseSnapshot>,
+  licenseVerify: () => ipcRenderer.invoke('license:verify') as Promise<LicenseSnapshot>,
+  licenseReplace: (credentials: LicenseCredentials) => ipcRenderer.invoke('license:replace', credentials) as Promise<LicenseSnapshot>,
+  licenseSimulate: (scenario: LicenseDevScenario) => ipcRenderer.invoke('license:simulate', scenario) as Promise<LicenseSnapshot>,
+  licenseReset: () => ipcRenderer.invoke('license:reset') as Promise<LicenseSnapshot>,
+  onLicenseStatus: (callback: (snapshot: LicenseSnapshot) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: LicenseSnapshot) => callback(snapshot)
+    ipcRenderer.on('license:status', listener)
+    return () => ipcRenderer.removeListener('license:status', listener)
+  },
+  onLicenseEditorRequested: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('license:open-editor', listener)
+    return () => ipcRenderer.removeListener('license:open-editor', listener)
+  },
   events: <T>(path: string, onEvent: (event: T) => void) => {
     const controller = new AbortController()
     const subscriptionId = ++requestSequence

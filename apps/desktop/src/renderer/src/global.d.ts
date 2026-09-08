@@ -1,5 +1,7 @@
 export {}
 
+import type { LicenseCredentials, LicenseDevScenario, LicenseSnapshot } from '@koubox/license-client'
+
 declare global {
   interface Window {
     koubox: {
@@ -13,6 +15,13 @@ declare global {
       logError(message: string, detail?: unknown): Promise<void>
       logWarn(message: string, detail?: unknown): Promise<void>
       logInfo(message: string, detail?: unknown): Promise<void>
+      licenseStatus(): Promise<LicenseSnapshot>
+      licenseVerify(): Promise<LicenseSnapshot>
+      licenseReplace(credentials: LicenseCredentials): Promise<LicenseSnapshot>
+      licenseSimulate(scenario: LicenseDevScenario): Promise<LicenseSnapshot>
+      licenseReset(): Promise<LicenseSnapshot>
+      onLicenseStatus(callback: (snapshot: LicenseSnapshot) => void): () => void
+      onLicenseEditorRequested(callback: () => void): () => void
       events<T>(path: string, onEvent: (event: T) => void): () => void
     }
   }

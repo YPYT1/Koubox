@@ -971,6 +971,169 @@ body.is-resizing {
   gap: 18px;
 }
 
+.license-alert {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: -10px 0 18px;
+  padding: 15px 16px;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, #fff7f7 0%, #fffafa 100%);
+  color: #991b1b;
+  box-shadow: 0 1px 2px rgba(153, 27, 27, 0.06);
+}
+
+.license-alert-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.license-alert-content strong {
+  color: #991b1b;
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.license-alert-content span {
+  color: #b45309;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.license-alert-action {
+  flex: 0 0 auto;
+  min-width: 104px;
+  box-shadow: 0 1px 2px rgba(153, 27, 27, 0.1);
+}
+
+.license-alert-grace {
+  border-color: #fde68a;
+  background: linear-gradient(90deg, #fffbeb 0%, #fffdf5 100%);
+}
+
+.license-alert-grace .license-alert-content strong {
+  color: #92400e;
+}
+
+.license-alert-grace .license-alert-content span {
+  color: #a16207;
+}
+
+.license-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.48);
+  animation: guide-fade-in 0.16s ease both;
+}
+
+.license-dialog {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--border-main);
+  border-radius: var(--radius-lg);
+  background: var(--bg-window);
+  box-shadow: var(--shadow-dropdown);
+  animation: guide-zoom-in 0.18s var(--ease-spring) both;
+}
+
+.license-dialog-head,
+.license-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.license-dialog-head h2 {
+  margin-top: 4px;
+  font-size: 19px;
+}
+
+.license-dialog-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-teal);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.license-dialog-close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.license-dialog-close:hover { background: var(--bg-hover); }
+
+.license-dialog-note {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.license-current-pair {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.license-current-pair code,
+.license-secret-input {
+  font-family: var(--font-mono);
+}
+
+.license-dialog-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-sm);
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.license-dialog-error svg { flex: 0 0 auto; margin-top: 1px; }
+
+@media (max-width: 720px) {
+  .license-alert {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+    padding: 14px;
+  }
+
+  .license-alert-action {
+    width: 100%;
+  }
+}
+
 .settings-toggle {
   display: flex;
   align-items: center;
@@ -1399,6 +1562,49 @@ body.is-resizing {
   flex-direction: column;
   gap: 18px;
   animation: guide-zoom-in 0.2s var(--ease-spring);
+}
+
+/* 隐藏的授权入口按钮 */
+.secret-license-btn {
+  position: relative;
+  width: 80px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.secret-license-btn:hover {
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.secret-license-btn:active {
+  transform: scale(0.96);
+}
+
+.secret-license-btn .ripple {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.6) 0%, rgba(59, 130, 246, 0) 70%);
+  transform: translate(-50%, -50%) scale(0);
+  animation: ripple-expand 0.6s ease-out;
+  pointer-events: none;
+}
+
+@keyframes ripple-expand {
+  0% {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(20);
+    opacity: 0;
+  }
 }
 
 .form-group label span.opt {

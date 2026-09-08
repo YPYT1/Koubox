@@ -5,15 +5,17 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "set \"ELECTRON_EXEC_PATH=%CD%\\..\\..\\node_modules\\.pnpm\\electron@33.4.11\\node_modules\\electron\\dist\\electron.exe\" && electron-vite dev",
+    "dev": "set \"ELECTRON_RUN_AS_NODE=\" && set \"ELECTRON_EXEC_PATH=%CD%\\node_modules\\electron\\dist\\electron.exe\" && electron-vite dev",
     "build": "electron-vite build",
     "prepare:playwright-browsers": "node ../../scripts/prepare-playwright-browsers.mjs",
-    "package": "pnpm prepare:playwright-browsers && pnpm build && electron-builder --win",
+    "prepare:license-package": "node scripts/prepare-license-package.mjs",
+    "package": "pnpm prepare:license-package && pnpm prepare:playwright-browsers && pnpm build && electron-builder --win",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@koubox/core": "workspace:*",
+    "@koubox/license-client": "workspace:*",
     "@koubox/shared": "workspace:*",
     "@phosphor-icons/react": "^2.1.10",
     "playwright": "^1.62.1",
@@ -50,10 +52,14 @@
       {
         "from": "../../.pack/playwright-browsers",
         "to": "playwright-browsers"
+      },
+      {
+        "from": "../../.pack/license",
+        "to": "license"
       }
     ],
     "afterPack": "./scripts/after-pack.cjs",
-    "electronDist": "../../node_modules/.pnpm/electron@33.4.11/node_modules/electron/dist",
+    "electronDist": "node_modules/electron/dist",
     "compression": "store",
     "win": {
       "target": ["dir"],

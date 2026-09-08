@@ -536,7 +536,7 @@ export class TaskManager {
     return () => record.listeners.delete(listener)
   }
 
-  cancel(taskIdValue: string): TaskSnapshot | undefined {
+  cancel(taskIdValue: string, reason = '任务已取消'): TaskSnapshot | undefined {
     const record = this.records.get(taskIdValue)
     if (!record || ['complete', 'error', 'cancelled'].includes(record.task.status)) return record ? this.clone(record.task) : undefined
     const wasRunning = record.task.status === 'running'
@@ -546,8 +546,20 @@ export class TaskManager {
     if (queuedIndex >= 0) this.queue.splice(queuedIndex, 1)
     for (const child of [...record.processes]) killProcessTree(child)
     if (wasRunning) this.releaseJobSlot(record)
-    this.update(record, { status: 'cancelled', stage: 'cancelled', message: '任务已取消' })
+    this.update(record, { status: 'cancelled', stage: 'cancelled', message: reason })
     return this.clone(record.task)
+  }
+
+  cancelAllActive(reason: string): number {
+    const active = [...this.records.values()]
+      .filter((record) => record.task.status === 'queued' || record.task.status === 'running')
+    for (const record of active.filter((item) => item.task.status === 'queued')) {
+      this.cancel(record.task.taskId, reason)
+    }
+    for (const record of active.filter((item) => item.task.status === 'running')) {
+      this.cancel(record.task.taskId, reason)
+    }
+    return active.length
   }
 
   remove(taskIdValue: string, options?: { deleteFiles?: boolean }): void {

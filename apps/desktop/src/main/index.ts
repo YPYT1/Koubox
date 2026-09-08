@@ -1,7 +1,16 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, type OpenDialogOptions } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, safeStorage, shell, type OpenDialogOptions } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createYtdlpUpdateManager, startLocalApi } from '@koubox/core'
+import {
+  assertCredentials,
+  HttpLicenseTransport,
+  LicenseController,
+  SecureFileLicenseStore,
+  type LicenseCredentials,
+  type LicenseDevScenario,
+  type LicenseSnapshot
+} from '@koubox/license-client'
 import { defaultPlatformAuth, PLATFORM_HOMEPAGES, type YtdlpCookiePlatformId } from '@koubox/shared'
 import { closeLogger, initLogger, createLogger } from '@koubox/shared/logger'
 import { buildLoginCookieStatus, applyLoginSessionProxy, resolvePlatformAuthentication } from './cookies'
@@ -13,7 +22,71 @@ import { downloadTikTokWithReference } from './tiktok-reference'
 let mainWindow: BrowserWindow | undefined
 let loginWindow: BrowserWindow | undefined
 let localApi: Awaited<ReturnType<typeof startLocalApi>> | undefined
+let licenseController: LicenseController | undefined
 let quitCleanupStarted = false
+
+const REMOTE_LICENSE_API_URL = 'https://koubox-license.ypyt147.workers.dev'
+
+const DEVELOPMENT_LICENSE = {
+  apiUrl: REMOTE_LICENSE_API_URL,
+  token: 'KB-TKN-RV7D-KBNT-5RBQ',
+  apiKey: 'KB-KEY-8WBT-97BB-KN4U-NXD3-RPVS',
+  packageCredentialVersion: 2
+}
+
+type LicensePackageConfig = LicenseCredentials & {
+  apiUrl: string
+  packageCredentialVersion: number
+}
+
+function assertRemoteLicenseApiUrl(apiUrl: string): string {
+  const trimmed = apiUrl.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(`授权服务地址无效：${apiUrl}`)
+  }
+  if (parsed.protocol !== 'https:') throw new Error(`授权服务必须使用 HTTPS 远端地址，当前为：${trimmed}`)
+  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '::1') {
+    throw new Error(`授权服务禁止使用本地地址，当前为：${trimmed}`)
+  }
+  return trimmed.replace(/\/$/, '')
+}
+
+function readLicensePackageConfig(): LicensePackageConfig {
+  if (!app.isPackaged) {
+    return {
+      apiUrl: assertRemoteLicenseApiUrl(process.env.KOUBOX_LICENSE_API_URL?.trim() || DEVELOPMENT_LICENSE.apiUrl),
+      token: process.env.KOUBOX_LICENSE_TOKEN?.trim() || DEVELOPMENT_LICENSE.token,
+      apiKey: process.env.KOUBOX_LICENSE_API_KEY?.trim() || DEVELOPMENT_LICENSE.apiKey,
+      packageCredentialVersion: Number(process.env.KOUBOX_LICENSE_CREDENTIAL_VERSION || DEVELOPMENT_LICENSE.packageCredentialVersion)
+    }
+  }
+  const filePath = join(process.resourcesPath, 'license', 'license-package.json')
+  if (!existsSync(filePath)) throw new Error(`安装包缺少授权配置：${filePath}`)
+  const value = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>
+  const credentials = assertCredentials(value)
+  const apiUrl = typeof value.apiUrl === 'string' ? assertRemoteLicenseApiUrl(value.apiUrl) : ''
+  const packageCredentialVersion = Number(value.packageCredentialVersion)
+  if (!apiUrl || !Number.isInteger(packageCredentialVersion) || packageCredentialVersion < 1) {
+    throw new Error('安装包授权配置无效。')
+  }
+  return { ...credentials, apiUrl, packageCredentialVersion }
+}
+
+function licenseStatus(): LicenseSnapshot {
+  if (!licenseController) throw new Error('授权模块尚未初始化。')
+  return licenseController.getSnapshot()
+}
+
+function sendLicenseStatus(snapshot = licenseStatus()): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('license:status', snapshot)
+}
+
+function requestLicenseEditor(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('license:open-editor')
+}
 
 /** 便携包：用户数据与 Cookie 放在 exe 旁 userdata，不共用开发机 AppData。 */
 function usePortableUserData(): void {
@@ -85,13 +158,14 @@ function toggleDevTools(): boolean {
   return true
 }
 
-function registerDebugShortcuts(): void {
+function registerShortcuts(): void {
   globalShortcut.unregisterAll()
   const open = () => {
     toggleDevTools()
   }
   globalShortcut.register('F12', open)
   globalShortcut.register('CommandOrControl+Shift+I', open)
+  globalShortcut.register('CommandOrControl+Shift+Alt+L', requestLicenseEditor)
 }
 
 async function openLoginWindow(platformId: YtdlpCookiePlatformId): Promise<void> {
@@ -175,6 +249,33 @@ async function createWindow(): Promise<void> {
   })
   patchBundledPythonHome()
 
+  const licensePackage = readLicensePackageConfig()
+  licenseController = new LicenseController({
+    store: new SecureFileLicenseStore(join(userData, 'license', 'state.json'), {
+      isAvailable: () => safeStorage.isEncryptionAvailable(),
+      encrypt: (value) => safeStorage.encryptString(value),
+      decrypt: (value) => safeStorage.decryptString(Buffer.from(value))
+    }),
+    transport: new HttpLicenseTransport(licensePackage.apiUrl),
+    packageCredentials: licensePackage,
+    packageCredentialVersion: licensePackage.packageCredentialVersion,
+    devMode: !app.isPackaged || process.env.KOUBOX_LICENSE_DEV_MODE === '1',
+    onLocked: () => {
+      localApi?.cancelActiveTasks('授权宽限已结束，任务已取消。')
+      sendLicenseStatus()
+    }
+  })
+  const initialLicense = await licenseController.initialize()
+  licenseController.subscribe((snapshot) => {
+    mainLog.info('授权状态已更新', {
+      phase: snapshot.phase,
+      allowed: snapshot.allowed,
+      invalidCode: snapshot.invalidCode,
+      graceEndsAt: snapshot.graceEndsAt
+    })
+    sendLicenseStatus(snapshot)
+  })
+
   const bundledYtdlp = join(findVendorDirectory(), 'yt-dlp', 'yt-dlp.exe')
   const denoExecutable = join(findVendorDirectory(), 'deno', 'deno.exe')
   const ytdlpUpdates = createYtdlpUpdateManager({
@@ -231,6 +332,7 @@ async function createWindow(): Promise<void> {
     checkYtdlpUpdate: ytdlpUpdates.check,
     installYtdlpUpdate: ytdlpUpdates.install,
     restoreBundledYtdlp: ytdlpUpdates.restore,
+    assertLicenseAllowed: () => licenseController?.assertAllowed(),
     getAppDataRoots: async () => resolveAppDataRoots(projectDirectory),
     clearAppCache: async () => clearAppCache({
       projectDirectory,
@@ -284,6 +386,8 @@ async function createWindow(): Promise<void> {
     getLoginCookieStatus: (platformAuth, proxy, platformId) => buildLoginCookieStatus(platformAuth, proxy, platformId)
   })
 
+  if (!initialLicense.allowed) localApi.cancelActiveTasks('授权宽限已结束，任务已取消。')
+
   mainLog.info('本地 API 已启动', { baseUrl: localApi.baseUrl })
   const initialConfig = localApi.getConfig()
   mainLog.debug('初始配置已加载', {
@@ -335,6 +439,12 @@ async function createWindow(): Promise<void> {
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
+    const licenseShortcut = (input.control || input.meta) && input.shift && input.alt && input.key.toLowerCase() === 'l'
+    if (licenseShortcut) {
+      event.preventDefault()
+      requestLicenseEditor()
+      return
+    }
     const editShortcut = input.control || input.meta
     if (editShortcut) {
       const key = input.key.toLowerCase()
@@ -370,15 +480,39 @@ async function createWindow(): Promise<void> {
     toggleDevTools()
   })
 
-  registerDebugShortcuts()
+  registerShortcuts()
 
   if (process.env.ELECTRON_RENDERER_URL) await mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   else await mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+
+  sendLicenseStatus(initialLicense)
 
   mainLog.info('主窗口已创建')
 }
 
 ipcMain.handle('devtools:toggle', () => toggleDevTools())
+ipcMain.handle('license:get-status', () => licenseStatus())
+ipcMain.handle('license:verify', async () => {
+  if (!licenseController) throw new Error('授权模块尚未初始化。')
+  return licenseController.verifyNow()
+})
+ipcMain.handle('license:replace', async (_event, value: unknown) => {
+  if (!licenseController) throw new Error('授权模块尚未初始化。')
+  return licenseController.replaceCredentials(assertCredentials(value))
+})
+ipcMain.handle('license:simulate', async (_event, scenario: LicenseDevScenario) => {
+  if (!licenseController) throw new Error('授权模块尚未初始化。')
+  const allowed = new Set<LicenseDevScenario>([
+    'valid', 'network-error', 'grace-expired', 'PAIR_MISMATCH', 'TOKEN_NOT_FOUND', 'API_KEY_NOT_FOUND',
+    'TOKEN_DISABLED', 'API_KEY_DISABLED', 'TOKEN_REVOKED', 'API_KEY_REVOKED', 'TOKEN_EXPIRED', 'API_KEY_EXPIRED'
+  ])
+  if (!allowed.has(scenario)) throw new Error('未知的授权开发场景。')
+  return licenseController.simulate(scenario)
+})
+ipcMain.handle('license:reset', async () => {
+  if (!licenseController) throw new Error('授权模块尚未初始化。')
+  return licenseController.resetToPackage()
+})
 
 // 前端日志记录
 ipcMain.handle('log:error', (_event, message: string, detail?: unknown) => {
@@ -404,6 +538,7 @@ ipcMain.handle('log:info', (_event, message: string, detail?: unknown) => {
 app.whenReady().then(createWindow)
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', () => {
+  licenseController?.dispose()
   void localApi?.close().catch(() => undefined)
 })
 app.on('will-quit', (event) => {

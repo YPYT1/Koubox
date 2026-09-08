@@ -107,7 +107,7 @@ describe.runIf(ENABLED)('precise SRT real alignment with turbo primary', () => {
       AUDIO,
       sourceText,
       join(root, 'outputs'),
-      { asr: largeDir, asrLight: turboDir, asrPlan: plan, translation: config.translationModelDirectory },
+      { asrPlan: plan, translation: config.translationModelDirectory },
       'ja',
       'off'
     )
@@ -174,7 +174,7 @@ describe.runIf(ENABLED)('precise SRT real alignment with turbo primary', () => {
       AUDIO,
       sourceText,
       join(root, 'outputs'),
-      { asr: largeDir, asrLight: turboDir, asrPlan: plan, translation: config.translationModelDirectory },
+      { asrPlan: plan, translation: config.translationModelDirectory },
       'ja',
       'off'
     )

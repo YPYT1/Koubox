@@ -73,4 +73,19 @@ describe('task cancel queue', () => {
     await expect.poll(() => manager.get(second.taskId)?.status, { timeout: 1_000 }).toBe('running')
     releaseFirst?.()
   })
+
+  it('cancels every queued and running task with one shared reason', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-task-cancel-all-'))
+    temporaryRoots.push(root)
+    const outputRoot = join(root, 'outputs')
+    const never = new Promise<string>(() => undefined)
+    const manager = createManager(root, () => never)
+    const first = manager.startRequirementOne('https://www.tiktok.com/@example/video/7673765267775687956', outputRoot, testModelPaths())
+    const second = manager.startRequirementOne('https://www.tiktok.com/@example/video/7652209936830582030', outputRoot, testModelPaths())
+
+    await expect.poll(() => manager.get(first.taskId)?.status, { timeout: 3_000 }).toBe('running')
+    expect(manager.cancelAllActive('授权宽限已结束，任务已取消。')).toBe(2)
+    expect(manager.get(first.taskId)).toMatchObject({ status: 'cancelled', message: '授权宽限已结束，任务已取消。' })
+    expect(manager.get(second.taskId)).toMatchObject({ status: 'cancelled', message: '授权宽限已结束，任务已取消。' })
+  })
 })

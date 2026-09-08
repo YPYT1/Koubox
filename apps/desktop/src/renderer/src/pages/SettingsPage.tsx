@@ -25,6 +25,7 @@ import type {
   YtdlpCookieStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
+import { LICENSE_INVALID_REASON, type LicenseSnapshot } from '@koubox/license-client/types'
 import { ASR_MODEL_OPTIONS, defaultPlatformAuth } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
@@ -46,6 +47,8 @@ type SettingsPageProps = {
   ) => Promise<string | undefined>
   onShowToast: (message: string, type?: 'success' | 'warning' | 'error' | 'info') => void
   onRefresh: () => void
+  license: LicenseSnapshot | null
+  onOpenLicenseEditor: () => void
 }
 
 const TARGET_LANGUAGE_OPTIONS: Array<{ value: TranslationTargetLanguage; label: string }> = [
@@ -91,6 +94,13 @@ type ClearAppCacheResult = {
   failed: Array<{ path: string; error: string }>
   roots: AppDataRoots
   config?: KouboxConfig
+}
+
+function formatLocalTime(value: string | null): string {
+  if (!value) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+  }).format(new Date(value))
 }
 
 const guides: Record<GuideKind, {
@@ -170,7 +180,9 @@ export function SettingsPage({
   onChooseDirectory,
   onChooseFile,
   onShowToast,
-  onRefresh
+  onRefresh,
+  license,
+  onOpenLicenseEditor
 }: SettingsPageProps) {
   const initialRefreshStartedRef = useRef(false)
   const [guide, setGuide] = useState<GuideKind | null>(null)
@@ -201,6 +213,10 @@ export function SettingsPage({
   const [readingClipboard, setReadingClipboard] = useState<YtdlpCookiePlatformId | null>(null)
   const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
+  const [licenseClock, setLicenseClock] = useState(Date.now())
+  const [secretClickCount, setSecretClickCount] = useState(0)
+  const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number }>>([])
+  const secretClickTimerRef = useRef<number | null>(null)
   const activeGuide = guide ? guides[guide] : null
   const platformAuth = config.ytdlpPlatformAuth ?? defaultPlatformAuth()
 
@@ -215,6 +231,34 @@ export function SettingsPage({
         }
       }
     })
+  }
+
+  const handleSecretClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    const rippleId = Date.now()
+    
+    setRipples(prev => [...prev, { id: rippleId, x, y }])
+    setTimeout(() => {
+      setRipples(prev => prev.filter(r => r.id !== rippleId))
+    }, 600)
+
+    const newCount = secretClickCount + 1
+    setSecretClickCount(newCount)
+
+    if (secretClickTimerRef.current) {
+      window.clearTimeout(secretClickTimerRef.current)
+    }
+
+    if (newCount >= 10) {
+      setSecretClickCount(0)
+      onOpenLicenseEditor()
+    } else {
+      secretClickTimerRef.current = window.setTimeout(() => {
+        setSecretClickCount(0)
+      }, 2000)
+    }
   }
 
   const refreshCookieStatus = async () => {
@@ -257,6 +301,19 @@ export function SettingsPage({
       .then((roots) => setAppDataRoots(roots))
       .catch(() => setAppDataRoots(null))
   }, [])
+
+  useEffect(() => {
+    if (license?.phase !== 'grace') return
+    const timer = window.setInterval(() => setLicenseClock(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [license?.phase])
+
+  const graceRemaining = license?.graceEndsAt
+    ? Math.max(0, Date.parse(license.graceEndsAt) - licenseClock)
+    : 0
+  const graceTime = `${String(Math.floor(graceRemaining / 3_600_000)).padStart(2, '0')}:${String(Math.floor(graceRemaining / 60_000) % 60).padStart(2, '0')}:${String(Math.floor(graceRemaining / 1_000) % 60).padStart(2, '0')}`
+  const licenseReason = license?.invalidCode ? LICENSE_INVALID_REASON[license.invalidCode] : '授权服务暂时无法确认当前凭据'
+  const graceHours = license ? Math.round(license.graceDurationMs / 3_600_000) : 2
 
   const handleClearCache = async () => {
     setClearingCache(true)
@@ -402,6 +459,20 @@ export function SettingsPage({
           {detecting ? '检测中…' : '重新检测环境'}
         </Button>
       </div>
+
+      {license && (license.phase === 'grace' || license.phase === 'locked') && (
+        <div className={`license-alert license-alert-${license.phase}`} role="alert">
+          <div className="license-alert-content">
+            <strong>{license.phase === 'locked' ? '授权已暂停，需要更新凭据' : `授权需要续期（仍可使用 ${graceHours} 小时）`}</strong>
+            <span>
+              {license.phase === 'locked'
+                ? `宽限已在 ${formatLocalTime(license.graceEndsAt)} 结束。进行中的任务已取消；已有输出不会删除。输入一组正确的新凭据后会立即恢复。`
+                : `${licenseReason}。剩余 ${graceTime}；请在 ${formatLocalTime(license.graceEndsAt)} 前输入新凭据。到期后才会取消任务并暂停新操作。`}
+            </span>
+          </div>
+          <Button className="license-alert-action" type="button" variant={license.phase === 'locked' ? 'danger' : 'primary'} onClick={onOpenLicenseEditor}>输入新凭据</Button>
+        </div>
+      )}
 
       <form className="settings-form-stack" onSubmit={onSave}>
         <div className="panel-box">
@@ -872,6 +943,27 @@ export function SettingsPage({
                   placeholder="例如 C:/Python312/python.exe"
                 />
               </FormField>
+
+              {/* 隐藏的授权入口按钮 */}
+              <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'center' }}>
+                <button
+                  type="button"
+                  className="secret-license-btn"
+                  onClick={handleSecretClick}
+                  aria-label="授权管理"
+                >
+                  {ripples.map(ripple => (
+                    <span
+                      key={ripple.id}
+                      className="ripple"
+                      style={{
+                        left: ripple.x,
+                        top: ripple.y
+                      }}
+                    />
+                  ))}
+                </button>
+              </div>
             </div>
           )}
         </div>

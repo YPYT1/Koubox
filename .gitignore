@@ -49,3 +49,9 @@ python/train-nllb/output/
 python/train-nllb/.venv/
 python/train-nllb/data/sft_stage*.jsonl
 python/train-nllb/data/sft_hf_finance_mix.jsonl
+
+# Agent Recall data
+.assistant/
+.agent-recall/
+.playwright-mcp/page-2026-09-04T07-46-43-382Z.yml
+.cursor/mcp.json

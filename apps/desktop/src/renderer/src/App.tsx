@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { tools as toolCatalog, TOOL_TASK_KIND, type KouboxConfig, type RuntimeStatus, type TaskStatus, type ToolId, type ToolManifest } from '@koubox/shared'
+import type { LicenseCredentials, LicenseSnapshot } from '@koubox/license-client'
 import { Sidebar } from './components/Sidebar'
+import { LicenseDialog } from './components/license/LicenseDialog'
 import { Toast, type ToastMessage } from './components/common/Toast'
 import { HomePage } from './pages/HomePage'
 import { ModelsPage } from './pages/ModelsPage'
@@ -34,6 +36,8 @@ export function App() {
   const [toolStatuses, setToolStatuses] = useState<Partial<Record<ToolId, TaskStatus>>>({})
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [license, setLicense] = useState<LicenseSnapshot | null>(null)
+  const [licenseEditorOpen, setLicenseEditorOpen] = useState(false)
   const refreshSequence = useRef(0)
   const startupRefreshStarted = useRef(false)
 
@@ -104,6 +108,47 @@ export function App() {
     startupRefreshStarted.current = true
     void refreshRuntimeAndConfig('startup')
   }, [])
+
+  useEffect(() => {
+    let active = true
+    void window.koubox.licenseStatus()
+      .then((snapshot) => { if (active) setLicense(snapshot) })
+      .catch((error) => showToast(error instanceof Error ? error.message : '无法读取授权状态', 'error'))
+    const stopStatus = window.koubox.onLicenseStatus((snapshot) => setLicense(snapshot))
+    const stopEditor = window.koubox.onLicenseEditorRequested(() => setLicenseEditorOpen(true))
+    return () => {
+      active = false
+      stopStatus()
+      stopEditor()
+    }
+  }, [])
+
+  const replaceLicense = async (credentials: LicenseCredentials) => {
+    try {
+      const snapshot = await window.koubox.licenseReplace(credentials)
+      setLicense(snapshot)
+      setLicenseEditorOpen(false)
+      showToast('新凭据验证通过，授权已恢复。', 'success')
+    } catch (error) {
+      throw error
+    }
+  }
+
+  const verifyCurrentLicense = async () => {
+    const snapshot = await window.koubox.licenseVerify()
+    setLicense(snapshot)
+    if (snapshot.phase !== 'valid') {
+      const reason = snapshot.invalidCode === 'TOKEN_DISABLED'
+        ? 'Token 已被停用'
+        : snapshot.invalidCode === 'API_KEY_DISABLED'
+          ? 'API Key 已被停用'
+          : snapshot.invalidCode
+            ? '当前凭据无效'
+            : '授权状态仍未恢复'
+      throw new Error(`认证未通过：${reason}。请更换有效的 Token 与 API Key。`)
+    }
+    showToast('授权验证成功。', 'success')
+  }
 
   const handleOpenTool = (tool: ToolManifest) => {
     setOpened((current) => (current.includes(tool.id) ? current : [...current, tool.id]))
@@ -263,6 +308,8 @@ export function App() {
               onChooseFile={handleChooseFile}
               onShowToast={showToast}
               onRefresh={() => void refreshRuntimeAndConfig('settings-page')}
+              license={license}
+              onOpenLicenseEditor={() => setLicenseEditorOpen(true)}
             />
           )}
 
@@ -349,6 +396,13 @@ export function App() {
 
       {/* 全局反馈 Toast */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+      <LicenseDialog
+        open={licenseEditorOpen}
+        snapshot={license}
+        onClose={() => setLicenseEditorOpen(false)}
+        onSubmit={replaceLicense}
+        onVerify={verifyCurrentLicense}
+      />
     </div>
   )
 }

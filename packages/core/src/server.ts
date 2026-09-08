@@ -42,6 +42,7 @@ type ServerOptions = {
     roots: { mode: 'development' | 'packaged'; userData: string; logs: string }
     config?: KouboxConfig
   }>
+  assertLicenseAllowed?(): void
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -258,6 +259,11 @@ export async function startLocalApi(options: ServerOptions) {
       if (request.headers.authorization !== `Bearer ${token}` && url.searchParams.get('token') !== token) {
         return json(response, 401, { error: 'Unauthorized local request' })
       }
+      const protectedMutation = method === 'POST' && (
+        url.pathname.startsWith('/pipelines/')
+        || /^\/tasks\/[^/]+\/(?:translate|export)$/.test(url.pathname)
+      )
+      if (protectedMutation) options.assertLicenseAllowed?.()
       if (method === 'GET' && url.pathname === '/health') return json(response, 200, { ok: true })
       if (method === 'GET' && url.pathname === '/media') {
         const filePath = normalizeOsPath(url.searchParams.get('path') ?? '')
@@ -609,6 +615,7 @@ export async function startLocalApi(options: ServerOptions) {
     baseUrl: `http://127.0.0.1:${address.port}`,
     token,
     getConfig: () => store.read(),
+    cancelActiveTasks: (reason: string) => tasks.cancelAllActive(reason),
     close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
 }

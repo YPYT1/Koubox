@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react'
 
 const aliases = {
   '@koubox/core': resolve(__dirname, '../../packages/core/src'),
+  '@koubox/license-client/types': resolve(__dirname, '../../packages/license-client/src/types.ts'),
+  '@koubox/license-client': resolve(__dirname, '../../packages/license-client/src'),
   '@koubox/shared': resolve(__dirname, '../../packages/shared/src'),
   '@koubox/shared/logger': resolve(__dirname, '../../packages/shared/src/logger.ts')
 }
@@ -11,7 +13,7 @@ const aliases = {
 export default defineConfig({
   main: {
     build: {
-      externalizeDeps: { exclude: ['@koubox/core', '@koubox/shared'] },
+      externalizeDeps: { exclude: ['@koubox/core', '@koubox/license-client', '@koubox/shared'] },
       rollupOptions: {}
     },
     resolve: { alias: aliases }

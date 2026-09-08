@@ -95,6 +95,31 @@ describe('req2 hardening', () => {
     }
   })
 
+  it('blocks protected pipeline mutations when the shared license gate is locked', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-license-gate-'))
+    temporaryRoots.push(root)
+    const api = await startLocalApi({
+      configFile: join(root, 'runtime.json'), defaults: defaults(root), projectDirectory: root, pythonProjectDirectory: root,
+      selectDirectory: async () => undefined, selectAudioFile: async () => undefined, selectFile: async () => undefined,
+      openPath: async () => undefined, openLoginWindow: async () => undefined,
+      getLoginCookieStatus: async () => ({ status: 'unknown' } as never),
+      resolveActiveYtdlp: () => ({ executable: join(root, 'yt-dlp.exe') } as never),
+      checkYtdlpUpdate: async () => ({ status: 'unknown' } as never), installYtdlpUpdate: async () => ({ status: 'unknown' } as never),
+      restoreBundledYtdlp: async () => ({ status: 'unknown' } as never),
+      assertLicenseAllowed: () => { throw new Error('授权宽限已结束，任务、下载、处理和导出已锁定。') }
+    })
+    try {
+      const response = await fetch(`${api.baseUrl}/pipelines/req2`, {
+        method: 'POST', headers: { authorization: `Bearer ${api.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ audioPath: join(root, 'missing.wav') })
+      })
+      expect(response.status).toBe(400)
+      await expect(response.json()).resolves.toMatchObject({ detail: '授权宽限已结束，任务、下载、处理和导出已锁定。' })
+    } finally {
+      await api.close()
+    }
+  })
+
   it('preserves protocol worker error codes as taskError', () => {
     expect(createWorkerTaskError('fixture failure', 'PRECISE_SRT_FAILED'))
       .toMatchObject({ code: 'PRECISE_SRT_FAILED', taskError: { code: 'PRECISE_SRT_FAILED', message: 'fixture failure' } })
