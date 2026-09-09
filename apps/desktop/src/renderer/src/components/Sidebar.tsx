@@ -11,11 +11,12 @@ import {
   Waveform,
   Microphone,
   MicrophoneStage
+  ,Notebook
 } from '@phosphor-icons/react'
 import type { RuntimeStatus, TaskStatus, ToolId, ToolManifest } from '@koubox/shared'
 import kouboxIcon from '../assets/koubox-icon.png'
 
-type FixedPage = 'home' | 'models' | 'settings'
+type FixedPage = 'home' | 'models' | 'copy-library' | 'settings'
 type Focus = { kind: 'fixed'; page: FixedPage } | { kind: 'tool'; toolId: ToolId; menu: string }
 
 type SidebarProps = {
@@ -157,6 +158,14 @@ export function Sidebar({
           >
             <Cpu size={17} weight="bold" />
             <span>模型与环境</span>
+          </button>
+          <button
+            type="button"
+            className={`nav-item ${focus.kind === 'fixed' && focus.page === 'copy-library' ? 'active' : ''}`}
+            onClick={() => onSelectFixed('copy-library')}
+          >
+            <Notebook size={17} weight="bold" />
+            <span>文案库</span>
           </button>
           <button
             type="button"

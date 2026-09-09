@@ -21,6 +21,8 @@ export {
 export { prepareDownloadUrl, type PreparedDownloadUrl } from './download-url.js'
 export { normalizeTikTokVideoUrl } from './public-video.js'
 export type { PublicMediaResolution } from './public-video.js'
+export { CopyLibraryStore } from './copy-library.js'
+export { LanShareService, loadOrCreateLanIdentity, assertCopySharePayload } from './lan-share/index.js'
 export {
   downloadVideo,
   verifyDownloadedMedia,

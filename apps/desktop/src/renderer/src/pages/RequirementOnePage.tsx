@@ -24,6 +24,9 @@ import { PipelineStepper } from '../components/common/PipelineStepper'
 import { TranslationBusyFrame } from '../components/common/TranslationBusyFrame'
 import { formatTaskPercent } from '../utils/progress'
 import { Badge } from '../components/common/Badge'
+import type { CopyEntry, LanDevice, LanTransfer } from '@koubox/shared'
+import { LanDevicePickerDialog } from '../components/lan/LanDevicePickerDialog'
+import { LanTransferDialog } from '../components/lan/LanTransferDialog'
 import {
   startMaterialsPipeline,
   cancelDownloadTask,
@@ -87,6 +90,13 @@ export function RequirementOnePage({
   const [translating, setTranslating] = useState(false)
   const [textExpanded, setTextExpanded] = useState(false)
   const [copiedSection, setCopiedSection] = useState<'original' | 'translation' | null>(null)
+  const [shareKind, setShareKind] = useState<'original' | 'translation' | null>(null)
+  const [shareEntryId, setShareEntryId] = useState('')
+  const [shareDevices, setShareDevices] = useState<LanDevice[]>([])
+  const [shareSelected, setShareSelected] = useState<string[]>([])
+  const [sharePickerOpen, setSharePickerOpen] = useState(false)
+  const [shareTransfers, setShareTransfers] = useState<LanTransfer[]>([])
+  const [shareTransferOpen, setShareTransferOpen] = useState(false)
   const [videoPlaying, setVideoPlaying] = useState(false)
   const [audioPlaying, setAudioPlaying] = useState(false)
   const [vocalsPlaying, setVocalsPlaying] = useState(false)
@@ -167,6 +177,23 @@ export function RequirementOnePage({
       setCopiedSection((current) => (current === section ? null : current))
     }, 900)
   }
+
+  const saveCopy = async (content: string, kind: 'original' | 'translation') => {
+    if (!content.trim()) return
+    try {
+      const entry = await window.koubox.post<CopyEntry>('/copy-library', { title: `${kind === 'original' ? '原始' : '翻译'}文案 · ${task?.taskId ?? ''}`, content, kind, sourceTool: '爆款素材获取', sourceTaskId: task?.taskId })
+      return entry
+    } catch (error) { onShowToast(error instanceof Error ? error.message : '文案保存失败', 'error') }
+  }
+  const openShare = async (content: string, kind: 'original' | 'translation') => {
+    try {
+      const entry = await saveCopy(content, kind)
+      if (!entry) return
+      setShareEntryId(entry.id); setShareKind(kind); setShareDevices(await window.koubox.get<LanDevice[]>('/lan/devices')); setShareSelected([]); setSharePickerOpen(true)
+    } catch (error) { onShowToast(error instanceof Error ? error.message : '分享准备失败', 'error') }
+  }
+  const refreshShareDevices = async () => { await window.koubox.post('/lan/discovery/announce', {}); setShareDevices(await window.koubox.get<LanDevice[]>('/lan/devices')) }
+  const confirmShare = async () => { try { const result = await window.koubox.post<LanTransfer[]>('/lan/transfers', { entryIds: [shareEntryId], deviceIds: shareSelected }); setSharePickerOpen(false); setShareTransfers(result); setShareTransferOpen(true); onShowToast('文案分享已发送', 'success') } catch (error) { onShowToast(error instanceof Error ? error.message : '分享失败', 'error') } }
 
   const handleTranslate = async () => {
     if (!task?.taskId || !task.transcript) return
@@ -659,6 +686,8 @@ export function RequirementOnePage({
                   {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
                   {copiedSection === 'original' ? '已复制' : '复制原文'}
                 </button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}>加入文案库</button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</button>
               </div>
             </div>
             <div className="viral-line-list" ref={originalListRef} onScroll={syncScrollFromOriginal}>
@@ -688,6 +717,8 @@ export function RequirementOnePage({
                   {copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}
                   {copiedSection === 'translation' ? '已复制' : '复制译文'}
                 </button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}>加入文案库</button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void openShare(translatedLines.filter(Boolean).join('\n'), 'translation')}>分享译文</button>
               </div>
             </div>
             <div className="viral-line-list" ref={translatedListRef} onScroll={syncScrollFromTranslated}>
@@ -709,6 +740,8 @@ export function RequirementOnePage({
           </div>
         </div>
       </TranslationBusyFrame>
+      <LanDevicePickerDialog open={sharePickerOpen} devices={shareDevices} selected={shareSelected} onToggle={(id) => setShareSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onClose={() => setSharePickerOpen(false)} onConfirm={() => void confirmShare()} onRefresh={() => void refreshShareDevices()} />
+      {shareTransferOpen && <LanTransferDialog transfers={shareTransfers} onClose={() => setShareTransferOpen(false)} />}
     </div>
   )
 }

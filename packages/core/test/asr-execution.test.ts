@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { defaultPlatformAuth, type KouboxConfig } from '@koubox/shared'
 import {
   AsrResourceExhaustedError,
@@ -32,7 +32,7 @@ function sampleConfig(modelsDirectory: string): KouboxConfig {
     translationTopP: 0.8,
     whisperChunkLengthS: 30,
     pythonExecutable: '',
-    debugMode: false
+    debugMode: false, lanEnabled: false, lanAlias: 'test', lanPort: 0, lanAutoSave: false, lanSaveDirectory: 'D:/share', lanHistoryEnabled: true
   }
 }
 
@@ -48,11 +48,6 @@ describe('ASR execution plan', () => {
         id: 'faster-whisper-large-v3-turbo',
         directory: expect.stringContaining('custom-light-location'),
         computeType: 'int8'
-      },
-      fallback: {
-        id: 'faster-whisper-large-v3',
-        directory: expect.stringContaining('custom-large-location'),
-        computeType: 'float16'
       }
     })
 
@@ -60,10 +55,6 @@ describe('ASR execution plan', () => {
     largeConfig.defaultAsrModel = 'faster-whisper-large-v3'
     const large = resolveAsrExecutionPlan(largeConfig)
     expect(large.primary.computeType).toBe('float16')
-    expect(large.fallback).toMatchObject({
-      id: 'faster-whisper-large-v3-turbo',
-      computeType: 'int8'
-    })
   })
 
   it('captures an immutable model choice when the task is queued', () => {
@@ -77,93 +68,17 @@ describe('ASR execution plan', () => {
 
     expect(plan.selectedModel).toBe('faster-whisper-large-v3')
     expect(plan.primary.directory).toContain('custom-large-location')
-    expect(plan.fallback?.directory).toContain('custom-light-location')
   })
 
-  it('falls back from large-v3 to turbo after a resource failure', async () => {
+  it('does not fall back from a selected model after a resource failure', async () => {
     const config = sampleConfig('D:/models')
     config.defaultAsrModel = 'faster-whisper-large-v3'
     const plan = resolveAsrExecutionPlan(config)
-    const onFallback = vi.fn()
-
-    const result = await runAsrExecutionPlan(plan, {
-      runAttempt: async (model) => {
-        if (model.id === 'faster-whisper-large-v3') throw resourceError()
-        return 'turbo-result'
-      },
-      isResourceError,
-      onFallback
-    })
-
-    expect(result).toMatchObject({
-      value: 'turbo-result',
-      effectiveModel: 'faster-whisper-large-v3-turbo',
-      fallbackUsed: true
-    })
-    expect(onFallback).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'faster-whisper-large-v3' }),
-      expect.objectContaining({ id: 'faster-whisper-large-v3-turbo' }),
-      'resource-exhausted'
-    )
-  })
-
-  it('falls back from turbo to large-v3 after an alignment quality failure', async () => {
-    const plan = resolveAsrExecutionPlan(sampleConfig('D:/models'))
-    const onFallback = vi.fn()
-    const qualityError = () => new Error('模式 A 对齐结果未完整保留用户文案。')
-
-    const result = await runAsrExecutionPlan(plan, {
-      runAttempt: async (model) => {
-        if (model.id === 'faster-whisper-large-v3-turbo') throw qualityError()
-        return 'large-result'
-      },
-      isResourceError,
-      isAlignmentQualityError: (error) => error instanceof Error && /未完整保留用户文案/.test(error.message),
-      onFallback
-    })
-
-    expect(result).toMatchObject({
-      value: 'large-result',
-      effectiveModel: 'faster-whisper-large-v3',
-      fallbackUsed: true
-    })
-    expect(onFallback).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'faster-whisper-large-v3-turbo' }),
-      expect.objectContaining({ id: 'faster-whisper-large-v3' }),
-      'alignment-quality'
-    )
-  })
-
-  it('does not fall back from turbo to large-v3 on resource exhaustion', async () => {
-    await expect(runAsrExecutionPlan(resolveAsrExecutionPlan(sampleConfig('D:/models')), {
+    await expect(runAsrExecutionPlan(plan, {
       runAttempt: async () => { throw resourceError() },
       isResourceError,
-      isAlignmentQualityError: () => false
     })).rejects.toMatchObject({
-      name: AsrResourceExhaustedError.name,
-      modelId: 'faster-whisper-large-v3-turbo'
-    })
-  })
-
-  it('reports turbo as the exhausted model when both attempts run out of memory', async () => {
-    const config = sampleConfig('D:/models')
-    config.defaultAsrModel = 'faster-whisper-large-v3'
-
-    await expect(runAsrExecutionPlan(resolveAsrExecutionPlan(config), {
-      runAttempt: async () => { throw resourceError() },
-      isResourceError
-    })).rejects.toMatchObject({
-      name: AsrResourceExhaustedError.name,
-      modelId: 'faster-whisper-large-v3-turbo'
-    })
-  })
-
-  it('reports turbo as the exhausted model when turbo is selected directly', async () => {
-    await expect(runAsrExecutionPlan(resolveAsrExecutionPlan(sampleConfig('D:/models')), {
-      runAttempt: async () => { throw resourceError() },
-      isResourceError
-    })).rejects.toMatchObject({
-      modelId: 'faster-whisper-large-v3-turbo'
+      modelId: 'faster-whisper-large-v3'
     })
   })
 })

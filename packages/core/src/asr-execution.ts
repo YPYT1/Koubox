@@ -19,13 +19,11 @@ export type ResolvedAsrModel = {
 export type AsrExecutionPlan = {
   selectedModel: AsrModelId
   primary: ResolvedAsrModel
-  fallback?: ResolvedAsrModel
 }
 
 export type AsrExecutionResult<T> = {
   value: T
   effectiveModel: AsrModelId
-  fallbackUsed: boolean
 }
 
 export class AsrResourceExhaustedError extends Error {
@@ -66,21 +64,13 @@ function resolvedModel(config: KouboxConfig, modelId: AsrModelId): ResolvedAsrMo
 export function resolveAsrExecutionPlan(config: KouboxConfig): AsrExecutionPlan {
   const selectedModel = asAsrModelId(config.defaultAsrModel)
   const primary = resolvedModel(config, selectedModel)
-  const fallbackId = selectedModel === 'faster-whisper-large-v3'
-    ? 'faster-whisper-large-v3-turbo'
-    : 'faster-whisper-large-v3'
-  return {
-    selectedModel,
-    primary,
-    fallback: resolvedModel(config, fallbackId)
-  }
+  return { selectedModel, primary }
 }
 
 export function resolveAsrModelPaths(config: KouboxConfig): {
   asr: string
   asrLight: string
   asrPrimary: string
-  asrFallback?: string
   defaultAsrModel: AsrModelId
 } {
   const plan = resolveAsrExecutionPlan(config)
@@ -88,73 +78,24 @@ export function resolveAsrModelPaths(config: KouboxConfig): {
     asr: resolveAsrModelDirectory(config, 'faster-whisper-large-v3'),
     asrLight: resolveAsrModelDirectory(config, 'faster-whisper-large-v3-turbo'),
     asrPrimary: plan.primary.directory,
-    asrFallback: plan.fallback?.directory,
     defaultAsrModel: plan.selectedModel
   }
-}
-
-export type AsrFallbackReason = 'resource-exhausted' | 'alignment-quality'
-
-export function shouldFallbackAsrAttempt(
-  error: unknown,
-  primary: ResolvedAsrModel,
-  fallback: ResolvedAsrModel,
-  options: {
-    isResourceError(error: unknown): boolean
-    isAlignmentQualityError(error: unknown): boolean
-  }
-): AsrFallbackReason | undefined {
-  const fallingToLighter = primary.id === 'faster-whisper-large-v3'
-    && fallback.id === 'faster-whisper-large-v3-turbo'
-  const fallingToHeavier = primary.id === 'faster-whisper-large-v3-turbo'
-    && fallback.id === 'faster-whisper-large-v3'
-  if (options.isResourceError(error) && fallingToLighter) return 'resource-exhausted'
-  if (options.isAlignmentQualityError(error) && fallingToHeavier) return 'alignment-quality'
-  return undefined
 }
 
 export async function runAsrExecutionPlan<T>(
   plan: AsrExecutionPlan,
   options: {
-    runAttempt(model: ResolvedAsrModel, isFallback: boolean): Promise<T>
+    runAttempt(model: ResolvedAsrModel): Promise<T>
     isResourceError(error: unknown): boolean
-    isAlignmentQualityError?(error: unknown): boolean
-    onFallback?(from: ResolvedAsrModel, to: ResolvedAsrModel, reason: AsrFallbackReason): Promise<void> | void
   }
 ): Promise<AsrExecutionResult<T>> {
-  const isAlignmentQualityError = options.isAlignmentQualityError ?? (() => false)
   try {
     return {
-      value: await options.runAttempt(plan.primary, false),
-      effectiveModel: plan.primary.id,
-      fallbackUsed: false
+      value: await options.runAttempt(plan.primary),
+      effectiveModel: plan.primary.id
     }
   } catch (error) {
-    if (!plan.fallback) {
-      if (options.isResourceError(error)) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
-      throw error
-    }
-    const reason = shouldFallbackAsrAttempt(error, plan.primary, plan.fallback, {
-      isResourceError: options.isResourceError,
-      isAlignmentQualityError
-    })
-    if (!reason) {
-      if (options.isResourceError(error)) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
-      throw error
-    }
-
-    await options.onFallback?.(plan.primary, plan.fallback, reason)
-    try {
-      return {
-        value: await options.runAttempt(plan.fallback, true),
-        effectiveModel: plan.fallback.id,
-        fallbackUsed: true
-      }
-    } catch (fallbackError) {
-      if (options.isResourceError(fallbackError)) {
-        throw new AsrResourceExhaustedError(plan.fallback.id, { cause: fallbackError })
-      }
-      throw fallbackError
-    }
+    if (options.isResourceError(error)) throw new AsrResourceExhaustedError(plan.primary.id, { cause: error })
+    throw error
   }
 }

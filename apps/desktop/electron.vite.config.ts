@@ -13,7 +13,7 @@ const aliases = {
 export default defineConfig({
   main: {
     build: {
-      externalizeDeps: { exclude: ['@koubox/core', '@koubox/license-client', '@koubox/shared'] },
+      externalizeDeps: { exclude: ['@koubox/core', '@koubox/license-client', '@koubox/shared'], include: ['sql.js', 'selfsigned'] },
       rollupOptions: {}
     },
     resolve: { alias: aliases }

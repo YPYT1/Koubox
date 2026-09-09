@@ -20,7 +20,8 @@ function defaults(root: string): KouboxConfig {
     translationTargetLanguage: 'zh-Hans', asrLanguage: 'auto', openOutputOnComplete: false,
     ytdlpProxy: '', ytdlpPlatformAuth: defaultPlatformAuth(), ytdlpMaxHeight: 0, ytdlpExtraArgs: '',
     maxConcurrentTasks: 1, translationTemperature: 0.7, translationMaxNewTokens: 4096,
-    translationTopP: 0.8, whisperChunkLengthS: 30, pythonExecutable: '', debugMode: false
+    translationTopP: 0.8, whisperChunkLengthS: 30, pythonExecutable: '', debugMode: false,
+    lanEnabled: false, lanAlias: 'test', lanPort: 0, lanAutoSave: false, lanSaveDirectory: join(root, 'share'), lanHistoryEnabled: true
   }
 }
 

@@ -13,8 +13,7 @@ export function testModelPaths(overrides: Partial<{
     asrLight,
     asrPlan: overrides.asrPlan ?? {
       selectedModel: 'faster-whisper-large-v3',
-      primary: { id: 'faster-whisper-large-v3', directory: asr, computeType: 'float16' },
-      fallback: { id: 'faster-whisper-large-v3-turbo', directory: asrLight, computeType: 'int8' }
+      primary: { id: 'faster-whisper-large-v3', directory: asr, computeType: 'float16' }
     },
     translation: overrides.translation ?? ''
   }

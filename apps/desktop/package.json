@@ -20,7 +20,9 @@
     "@phosphor-icons/react": "^2.1.10",
     "playwright": "^1.62.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "selfsigned": "4.0.1",
+    "sql.js": "1.14.2"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
@@ -38,17 +40,35 @@
   "build": {
     "appId": "com.koubox.desktop",
     "productName": "口播匣",
-    "directories": { "output": "release" },
-    "files": ["out/**/*", "package.json"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
     "extraResources": [
-      { "from": "../../vendor", "to": "vendor" },
+      {
+        "from": "../../vendor",
+        "to": "vendor"
+      },
       {
         "from": "../../python/.venv",
         "to": "python",
-        "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"]
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
       },
-      { "from": "../../python/src", "to": "python/src" },
-      { "from": "../../png/口播匣icon.png", "to": "icon.png" },
+      {
+        "from": "../../python/src",
+        "to": "python/src"
+      },
+      {
+        "from": "../../png/口播匣icon.png",
+        "to": "icon.png"
+      },
       {
         "from": "../../.pack/playwright-browsers",
         "to": "playwright-browsers"
@@ -62,7 +82,9 @@
     "electronDist": "node_modules/electron/dist",
     "compression": "store",
     "win": {
-      "target": ["dir"],
+      "target": [
+        "dir"
+      ],
       "icon": "build/icon.png",
       "requestedExecutionLevel": "requireAdministrator"
     }

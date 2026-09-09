@@ -1,5 +1,5 @@
 /**
- * Real GPU verification for Mode A + turbo→large alignment fallback.
+ * Real GPU verification for Mode A with the selected model only.
  * Run: $env:KOUBOX_REAL_ASR='1'; pnpm --filter @koubox/core exec vitest run test/precise-srt-align-fallback.integration.test.ts
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -54,7 +54,7 @@ function buildConfig(outputDirectory: string): KouboxConfig {
     translationTopP: 0.8,
     whisperChunkLengthS: 30,
     pythonExecutable,
-    debugMode: false
+    debugMode: false, lanEnabled: false, lanAlias: 'test', lanPort: 0, lanAutoSave: false, lanSaveDirectory: join(outputDirectory, 'share'), lanHistoryEnabled: true
   }
 }
 
@@ -89,7 +89,6 @@ describe.runIf(ENABLED)('precise SRT real alignment with turbo primary', () => {
     const config = buildConfig(join(root, 'outputs'))
     const plan = resolveAsrExecutionPlan(config)
     expect(plan.primary.id).toBe('faster-whisper-large-v3-turbo')
-    expect(plan.fallback?.id).toBe('faster-whisper-large-v3')
 
     const manager = new TaskManager({
       getConfig: () => config,
@@ -126,13 +125,13 @@ describe.runIf(ENABLED)('precise SRT real alignment with turbo primary', () => {
     }, null, 2))
   }, 21 * 60_000)
 
-  it('auto-falls back to Large v3 when turbo Mode A reports incomplete alignment', async () => {
+  it('fails instead of switching models when turbo Mode A reports incomplete alignment', async () => {
     expect(detectGpu().available, '需要可用 NVIDIA GPU').toBe(true)
     for (const path of [AUDIO, SOURCE_TEXT_FILE, ffmpegExecutable, pythonExecutable, largeDir, realPythonSrc]) {
       expect(existsSync(path), `缺少：${path}`).toBe(true)
     }
 
-    const root = mkdtempSync(join(tmpdir(), 'koubox-forced-align-fallback-'))
+    const root = mkdtempSync(join(tmpdir(), 'koubox-forced-align-no-switch-'))
     workDirs.push(root)
     const sourceText = readFileSync(SOURCE_TEXT_FILE, 'utf8').replace(/^\uFEFF/, '').trim()
 
@@ -180,18 +179,15 @@ describe.runIf(ENABLED)('precise SRT real alignment with turbo primary', () => {
     )
     const { task, elapsedMs } = await waitTask(manager, queued.taskId, 25 * 60_000)
 
-    expect(task?.status, task?.error?.message ?? task?.message).toBe('complete')
+    expect(task?.status, task?.error?.message ?? task?.message).toBe('error')
     expect(task?.asrExecution).toMatchObject({
       selectedModel: 'faster-whisper-large-v3-turbo',
-      effectiveModel: 'faster-whisper-large-v3',
-      fallbackUsed: true,
-      fallbackReason: 'alignment-quality'
+      effectiveModel: 'faster-whisper-large-v3-turbo'
     })
-    expect(task?.asrExecution?.notice).toContain('Large v3')
-    expect(task?.artifacts.srt && existsSync(task.artifacts.srt)).toBe(true)
+    expect(task?.artifacts.srt).toBeUndefined()
     // eslint-disable-next-line no-console
     console.log(JSON.stringify({
-      case: 'forced-turbo-fail-then-large',
+      case: 'forced-turbo-fail-no-fallback',
       taskId: task?.taskId,
       asrExecution: task?.asrExecution,
       srtBytes: task?.artifacts.srt ? readFileSync(task.artifacts.srt).length : 0,

@@ -386,9 +386,6 @@ export type PreciseSrtDiagnostics = {
 export type AsrExecutionSummary = {
   selectedModel: import('./asr-models.js').AsrModelId
   effectiveModel: import('./asr-models.js').AsrModelId
-  fallbackUsed: boolean
-  fallbackReason?: 'resource-exhausted' | 'alignment-quality'
-  notice?: string
 }
 
 export type TaskSnapshot = {
@@ -433,6 +430,58 @@ export function req1UsesSeparateVocals(task: Pick<TaskSnapshot, 'kind' | 'separa
 export type TaskEvent = {
   type: 'snapshot'
   task: TaskSnapshot
+}
+
+export type CopyEntryKind = 'original' | 'translation' | 'transcript'
+
+export type CopyEntry = {
+  id: string
+  title: string
+  content: string
+  kind: CopyEntryKind
+  tags: string[]
+  sourceTool?: string
+  sourceTaskId?: string
+  sourceName?: string
+  senderAlias?: string
+  fingerprint: string
+  createdAt: string
+  updatedAt: string
+  receivedAt?: string
+}
+
+export type CopySharePayload = {
+  protocol: 'koubox-copy-library'
+  version: 1
+  sender: { alias: string; deviceId: string }
+  entries: Array<Pick<CopyEntry, 'id' | 'title' | 'content' | 'kind' | 'tags' | 'sourceTool' | 'sourceTaskId' | 'sourceName'>>
+}
+
+export type LanDevice = {
+  id: string
+  alias: string
+  host: string
+  port: number
+  fingerprint: string
+  online: boolean
+  lastSeenAt: string
+}
+
+export type LanTransferStatus = 'waiting' | 'accepted' | 'rejected' | 'sending' | 'complete' | 'cancelled' | 'error'
+
+export type LanTransfer = {
+  id: string
+  direction: 'send' | 'receive'
+  peerId: string
+  peerAlias: string
+  status: LanTransferStatus
+  entries: string[]
+  bytesTotal: number
+  bytesTransferred: number
+  percent: number
+  error?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export type TranslationTargetLanguage = 'zh-Hans' | 'zh-Hant' | 'en' | 'ja' | 'ko'
@@ -655,10 +704,7 @@ export {
   ASR_MODEL_OPTIONS,
   DEFAULT_ASR_MODEL,
   asAsrModelId,
-  asrAlignmentFallbackNoticeMessage,
-  asrFallbackNoticeMessage,
   asrResourceErrorUserMessage,
-  isAsrAlignmentQualityError,
   isAsrResourceError,
   resolveAsrComputeType
 } from './asr-models.js'
@@ -689,6 +735,12 @@ export type KouboxConfig = {
   whisperChunkLengthS: number
   pythonExecutable: string
   debugMode: boolean
+  lanEnabled: boolean
+  lanAlias: string
+  lanPort: number
+  lanAutoSave: boolean
+  lanSaveDirectory: string
+  lanHistoryEnabled: boolean
 }
 
 export type ApiError = { error: string; detail?: string }
@@ -715,7 +767,8 @@ export function normalizeKouboxConfigPaths(config: KouboxConfig): KouboxConfig {
     ytdlpDirectory: normalizeOsPath(config.ytdlpDirectory),
     ffmpegDirectory: normalizeOsPath(config.ffmpegDirectory),
     denoDirectory: normalizeOsPath(config.denoDirectory),
-    pythonExecutable: normalizeOsPath(config.pythonExecutable)
+    pythonExecutable: normalizeOsPath(config.pythonExecutable),
+    lanSaveDirectory: normalizeOsPath(config.lanSaveDirectory)
   }
 }
 

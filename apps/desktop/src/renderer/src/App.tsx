@@ -14,9 +14,11 @@ import { VideoAudioPage } from './pages/VideoAudioPage'
 import { VocalSeparationPage } from './pages/VocalSeparationPage'
 import { SpeechToTextPage } from './pages/SpeechToTextPage'
 import { TaskHistoryPage } from './pages/TaskHistoryPage'
+import { CopyLibraryPage } from './pages/CopyLibraryPage'
+import { IncomingCopyDialog, type IncomingCopy } from './components/lan/IncomingCopyDialog'
 import { RuntimeMonitorBootstrap } from './monitor/RuntimeMonitorBootstrap'
 
-type FixedPage = 'home' | 'models' | 'settings'
+type FixedPage = 'home' | 'models' | 'copy-library' | 'settings'
 type Focus = { kind: 'fixed'; page: FixedPage } | { kind: 'tool'; toolId: ToolId; menu: string }
 
 function keepAlivePane(visible: boolean, child: ReactNode) {
@@ -38,6 +40,7 @@ export function App() {
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const [license, setLicense] = useState<LicenseSnapshot | null>(null)
   const [licenseEditorOpen, setLicenseEditorOpen] = useState(false)
+  const [incoming, setIncoming] = useState<IncomingCopy | null>(null)
   const refreshSequence = useRef(0)
   const startupRefreshStarted = useRef(false)
 
@@ -108,6 +111,24 @@ export function App() {
     startupRefreshStarted.current = true
     void refreshRuntimeAndConfig('startup')
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const items = await window.koubox.get<IncomingCopy[]>('/lan/incoming')
+        if (active && items.length > 0) setIncoming((current) => current ?? items[0])
+      } catch { /* LAN may be disabled */ }
+    }
+    void poll(); const timer = window.setInterval(() => void poll(), 2000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [])
+
+  const decideIncoming = async (accept: boolean) => {
+    if (!incoming) return
+    try { await window.koubox.post(`/lan/incoming/${encodeURIComponent(incoming.id)}/decision`, { accept }); setIncoming(null); showToast(accept ? '文案已保存到文案库' : '已拒绝本次分享', accept ? 'success' : 'info') }
+    catch (error) { showToast(error instanceof Error ? error.message : '处理分享失败', 'error') }
+  }
 
   useEffect(() => {
     let active = true
@@ -298,6 +319,8 @@ export function App() {
             />
           )}
 
+          {focus.kind === 'fixed' && focus.page === 'copy-library' && <CopyLibraryPage onShowToast={showToast} />}
+
           {focus.kind === 'fixed' && focus.page === 'settings' && config && (
             <SettingsPage
               config={config}
@@ -403,6 +426,7 @@ export function App() {
         onSubmit={replaceLicense}
         onVerify={verifyCurrentLicense}
       />
+      <IncomingCopyDialog incoming={incoming} onDecision={(accept) => void decideIncoming(accept)} />
     </div>
   )
 }

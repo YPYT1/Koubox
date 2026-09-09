@@ -19,11 +19,8 @@ import type {
   TranslationTargetLanguage
 } from '@koubox/shared'
 import {
-  asrAlignmentFallbackNoticeMessage,
-  asrFallbackNoticeMessage,
   asrResourceErrorUserMessage,
   detectPlatform,
-  isAsrAlignmentQualityError,
   isAsrResourceError,
   platformAuthIdFromUrlPlatform,
   req1UsesSeparateVocals,
@@ -197,14 +194,6 @@ function isWorkerResourceError(error: unknown): boolean {
   return isAsrResourceError(workerErrorMessage(error))
 }
 
-function isWorkerAlignmentQualityError(error: unknown): boolean {
-  const taskError = error && typeof error === 'object'
-    ? (error as { taskError?: TaskError }).taskError
-    : undefined
-  if (taskError?.code === 'PRECISE_SRT_ALIGNMENT_INCOMPLETE') return true
-  return isAsrAlignmentQualityError(workerErrorMessage(error))
-}
-
 function parseWorkerFailure(stderr: string, stdoutBuffer = ''): { message: string; code?: string } {
   for (const source of [stdoutBuffer, stderr]) {
     const lines = source.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
@@ -224,8 +213,7 @@ function parseWorkerFailure(stderr: string, stdoutBuffer = ''): { message: strin
 function initialAsrExecution(plan: AsrExecutionPlan): NonNullable<TaskSnapshot['asrExecution']> {
   return {
     selectedModel: plan.selectedModel,
-    effectiveModel: plan.primary.id,
-    fallbackUsed: false
+    effectiveModel: plan.primary.id
   }
 }
 
@@ -969,11 +957,11 @@ export class TaskManager {
     const { task } = record
     const requestedLanguage = task.requestedLanguage ?? 'auto'
     const speechRateMode = task.speechRateMode ?? 'auto'
-    const runOnce = async (model: ResolvedAsrModel, isFallback: boolean) => {
+    const runOnce = async (model: ResolvedAsrModel) => {
       this.update(record, {
-        stage: isFallback ? 'retry-asr' : 'asr',
+        stage: 'asr',
         percent: 35,
-        message: isFallback ? asrFallbackNoticeMessage() : '正在加载精准 SRT 模型'
+        message: '正在加载精准 SRT 模型'
       })
       const response = await this.runWorker(record, 'precise_srt', {
         modelDirectory: model.directory,
@@ -990,7 +978,6 @@ export class TaskManager {
         let stage = workerStages.includes(message.stage as TaskStage)
           ? message.stage as TaskStage
           : record.task.stage
-        if (isFallback && stage === 'asr') stage = 'retry-asr'
         this.update(record, {
           stage,
           percent: Math.max(36, Math.min(91, message.percent ?? 36)),
@@ -1003,7 +990,7 @@ export class TaskManager {
       return response
     }
 
-    const response = await this.executeAsrPlan(record, modelPaths.asrPlan, 36, runOnce)
+    const response = await this.executeAsrPlan(record, modelPaths.asrPlan, runOnce)
 
     if (response.type !== 'transcript' || !response.segments) {
       throw new Error('精准 SRT 运行器没有返回最终字幕。')
@@ -1040,11 +1027,11 @@ export class TaskManager {
 
   private async performAsr(record: TaskRecord, audio: string, modelPaths: ModelPaths, startPercent: number): Promise<void> {
     const config = this.options.getConfig()
-    const runOnce = async (model: ResolvedAsrModel, isFallback: boolean) => {
+    const runOnce = async (model: ResolvedAsrModel) => {
       this.update(record, {
-        stage: isFallback ? 'retry-asr' : 'asr',
+        stage: 'asr',
         percent: startPercent,
-        message: isFallback ? asrFallbackNoticeMessage() : '正在加载语音识别模型'
+        message: '正在加载语音识别模型'
       })
       const response = await this.runWorker(record, 'asr', {
         modelDirectory: model.directory,
@@ -1055,7 +1042,7 @@ export class TaskManager {
       }, (message) => {
         if (message.type === 'progress') {
           this.update(record, {
-            stage: isFallback ? 'retry-asr' : 'asr',
+            stage: 'asr',
             percent: Math.max(startPercent + 1, Math.min(82, message.percent ?? 0)),
             message: message.message ?? '正在识别音频'
           })
@@ -1067,7 +1054,7 @@ export class TaskManager {
       return response
     }
 
-    const response = await this.executeAsrPlan(record, modelPaths.asrPlan, startPercent, runOnce)
+    const response = await this.executeAsrPlan(record, modelPaths.asrPlan, runOnce)
 
     if (response.type !== 'transcript' || !response.segments) {
       throw new Error('ASR 运行器没有返回带时间戳的原文。')
@@ -1079,31 +1066,12 @@ export class TaskManager {
   private async executeAsrPlan<T>(
     record: TaskRecord,
     plan: AsrExecutionPlan,
-    fallbackPercent: number,
-    runAttempt: (model: ResolvedAsrModel, isFallback: boolean) => Promise<T>
+    runAttempt: (model: ResolvedAsrModel) => Promise<T>
   ): Promise<T> {
     try {
       const result = await runAsrExecutionPlan(plan, {
         runAttempt,
-        isResourceError: isWorkerResourceError,
-        isAlignmentQualityError: isWorkerAlignmentQualityError,
-        onFallback: (_from, to, reason) => {
-          const notice = reason === 'alignment-quality'
-            ? asrAlignmentFallbackNoticeMessage()
-            : asrFallbackNoticeMessage()
-          this.update(record, {
-            stage: 'retry-asr',
-            percent: fallbackPercent,
-            message: notice,
-            asrExecution: {
-              selectedModel: plan.selectedModel,
-              effectiveModel: to.id,
-              fallbackUsed: true,
-              fallbackReason: reason,
-              notice
-            }
-          })
-        }
+        isResourceError: isWorkerResourceError
       })
       return result.value
     } catch (error) {

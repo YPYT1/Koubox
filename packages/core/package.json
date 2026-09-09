@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@koubox/shared": "workspace:*",
+    "selfsigned": "^4.0.1",
+    "sql.js": "^1.14.2",
     "undici": "^6.28.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/sql.js": "^1.4.11",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
   }

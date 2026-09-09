@@ -1,0 +1,10 @@
+import type { LanDevice } from '@koubox/shared'
+import { AnimatedButton } from '../common/AnimatedButton'
+
+export function LanDevicePickerDialog({ open, devices, selected, onToggle, onClose, onConfirm, onRefresh }: { open: boolean; devices: LanDevice[]; selected: string[]; onToggle: (id: string) => void; onClose: () => void; onConfirm: () => void; onRefresh?: () => void }) {
+  if (!open) return null
+  const onlineDevices = devices.filter((device) => device.online)
+  const allSelected = onlineDevices.length > 0 && onlineDevices.every((device) => selected.includes(device.id))
+  const toggleAll = () => onlineDevices.forEach((device) => { if (allSelected ? selected.includes(device.id) : !selected.includes(device.id)) onToggle(device.id) })
+  return <div className="modal-backdrop"><div className="modal-card lan-picker-card"><div className="modal-card-head"><h3>分享给设备</h3><button className="icon-button" onClick={onClose}>×</button></div><div className="lan-picker-toolbar"><p className="muted-text">已选择 {selected.length} 台设备</p><div><button className="btn-ghost" onClick={toggleAll} disabled={onlineDevices.length === 0}>{allSelected ? '取消全选' : '全选在线设备'}</button>{onRefresh && <button className="btn-ghost" onClick={onRefresh}>刷新</button>}</div></div><div className="lan-device-list">{devices.length === 0 ? <div className="empty-state">暂未发现其他在线口播匣</div> : devices.map((device) => <label className={`lan-device-row ${selected.includes(device.id) ? 'selected' : ''}`} key={device.id}><input type="checkbox" checked={selected.includes(device.id)} disabled={!device.online} onChange={() => onToggle(device.id)} /><span><strong>{device.alias}</strong><small>{device.host}:{device.port}</small></span><em>{device.online ? '在线 · ' : '离线 · '}{device.fingerprint.slice(0, 17)}…</em></label>)}</div><div className="modal-actions"><AnimatedButton variant="secondary" onClick={onClose}>取消</AnimatedButton><AnimatedButton variant="primary" disabled={selected.length === 0} onClick={onConfirm}>开始分享</AnimatedButton></div></div></div>
+}

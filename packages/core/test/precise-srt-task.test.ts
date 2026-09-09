@@ -43,8 +43,7 @@ describe('precise SRT task contract', () => {
     expect(task.speechRateMode).toBe('force')
     expect(task.asrExecution).toEqual({
       selectedModel: 'faster-whisper-large-v3',
-      effectiveModel: 'faster-whisper-large-v3',
-      fallbackUsed: false
+      effectiveModel: 'faster-whisper-large-v3'
     })
     expect(existsSync(task.taskDirectory)).toBe(true)
 

@@ -326,9 +326,6 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
                   <p className="history-error">{toUserTaskMessage(item.message)}</p>
                 ) : null}
 
-                {item.asrExecution?.fallbackUsed && item.asrExecution.notice ? (
-                  <p className="history-fallback-notice">{item.asrExecution.notice}</p>
-                ) : null}
 
                 <footer className="history-card-foot">
                   {!isError && item.message ? (

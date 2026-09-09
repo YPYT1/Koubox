@@ -87,6 +87,7 @@ type AppDataRoots = {
   userData: string
   logs: string
 }
+type LanStatus = { enabled: boolean; port?: number; alias?: string; fingerprint?: string; dataRoot: string }
 
 type ClearAppCacheResult = {
   cancelled: boolean
@@ -212,6 +213,7 @@ export function SettingsPage({
   const [checkingPlatformId, setCheckingPlatformId] = useState<YtdlpCookiePlatformId | null>(null)
   const [readingClipboard, setReadingClipboard] = useState<YtdlpCookiePlatformId | null>(null)
   const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
+  const [lanStatus, setLanStatus] = useState<LanStatus | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
   const [licenseClock, setLicenseClock] = useState(Date.now())
   const [secretClickCount, setSecretClickCount] = useState(0)
@@ -300,6 +302,9 @@ export function SettingsPage({
     void window.koubox.get<AppDataRoots>('/system/data-roots')
       .then((roots) => setAppDataRoots(roots))
       .catch(() => setAppDataRoots(null))
+    void window.koubox.get<LanStatus>('/lan/status')
+      .then((status) => setLanStatus(status))
+      .catch(() => setLanStatus(null))
   }, [])
 
   useEffect(() => {
@@ -815,6 +820,17 @@ export function SettingsPage({
 
           {advancedOpen && (
             <div className="advanced-body">
+              <div className="panel-box settings-subpanel">
+                <div className="section-heading"><div><strong>局域网文案分享</strong><small>仅与其他口播匣互通，接收内容会进入文案库。</small></div></div>
+                <FormField label="启用局域网分享"><div className="switch-field" onClick={() => onChange({ ...config, lanEnabled: !config.lanEnabled })}><span className="switch-field-label">{config.lanEnabled ? '已启用' : '已关闭'}</span><button type="button" role="switch" aria-checked={config.lanEnabled} className={`ui-switch ${config.lanEnabled ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
+                <div className="settings-inline-grid"><FormField label="广播别名"><input className="input-text" value={config.lanAlias} onChange={(e) => onChange({ ...config, lanAlias: e.target.value })} /></FormField><FormField label="服务端口"><input className="input-text" type="number" min={1} max={65535} value={config.lanPort} onChange={(e) => onChange({ ...config, lanPort: Math.max(1, Number(e.target.value) || 53318) })} /></FormField></div>
+                <FormField label="自动保存接收内容"><div className="switch-field" onClick={() => onChange({ ...config, lanAutoSave: !config.lanAutoSave })}><span className="switch-field-label">{config.lanAutoSave ? '收到后直接保存' : '收到后询问'}</span><button type="button" role="switch" aria-checked={config.lanAutoSave} className={`ui-switch ${config.lanAutoSave ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
+                <FormField label="保存目录"><div className="settings-path-row"><input className="input-text" value={config.lanSaveDirectory} onChange={(e) => onChange({ ...config, lanSaveDirectory: e.target.value })} /><Button type="button" variant="secondary" size="sm" onClick={() => void handleSelectPath('lanSaveDirectory', '选择分享保存目录')}>选择</Button></div></FormField>
+                <FormField label="保存分享历史"><div className="switch-field" onClick={() => onChange({ ...config, lanHistoryEnabled: !config.lanHistoryEnabled })}><span className="switch-field-label">{config.lanHistoryEnabled ? '已记录' : '不记录'}</span><button type="button" role="switch" aria-checked={config.lanHistoryEnabled} className={`ui-switch ${config.lanHistoryEnabled ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
+                <div className="muted-text">服务状态：{lanStatus?.enabled ? `运行中 · 端口 ${lanStatus.port}` : '未启用'}{lanStatus?.alias ? ` · ${lanStatus.alias}` : ''}</div>
+                <div className="muted-text">设备指纹：{lanStatus?.fingerprint ?? '读取中…'}</div>
+                <div className="muted-text">数据根目录：{appDataRoots?.userData ?? '读取中…'}</div>
+              </div>
               <div className="debug-mode-row">
                 <div
                   className="switch-field"

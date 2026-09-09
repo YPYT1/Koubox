@@ -10,6 +10,8 @@ import { createLogger } from '@koubox/shared/logger'
 import { RuntimeStore, detectGpu, detectSystemMemory, getRuntimeStatus, GPU_RUNTIME_PROBE_MAX_AGE_MS, resolveModelPaths, resolveVendorPaths } from './runtime.js'
 import type { ActiveYtdlpRuntime } from './ytdlp-update.js'
 import { isTranslationTargetLanguage, TaskManager } from './tasks.js'
+import { CopyLibraryStore } from './copy-library.js'
+import { LanShareService } from './lan-share/index.js'
 
 type FileFilter = { name: string; extensions: string[] }
 
@@ -200,7 +202,13 @@ function mergeConfig(body: Record<string, unknown>, config: KouboxConfig): Koubo
     translationTopP: asNumber(body.translationTopP, config.translationTopP),
     whisperChunkLengthS: Math.max(1, Math.floor(asNumber(body.whisperChunkLengthS, config.whisperChunkLengthS))),
     pythonExecutable: asPathString(body.pythonExecutable, config.pythonExecutable),
-    debugMode: asBoolean(body.debugMode, config.debugMode)
+    debugMode: asBoolean(body.debugMode, config.debugMode),
+    lanEnabled: asBoolean(body.lanEnabled, config.lanEnabled),
+    lanAlias: asString(body.lanAlias, config.lanAlias),
+    lanPort: Math.max(1, Math.floor(asNumber(body.lanPort, config.lanPort))),
+    lanAutoSave: asBoolean(body.lanAutoSave, config.lanAutoSave),
+    lanSaveDirectory: asPathString(body.lanSaveDirectory, config.lanSaveDirectory),
+    lanHistoryEnabled: asBoolean(body.lanHistoryEnabled, config.lanHistoryEnabled)
   }
 }
 
@@ -208,6 +216,20 @@ export async function startLocalApi(options: ServerOptions) {
   const apiLog = createLogger('api')
   let requestSequence = 0
   const store = new RuntimeStore(options.configFile, options.defaults, Boolean(options.pinBundledPaths))
+  const copyLibrary = await CopyLibraryStore.open(join(dirname(options.configFile), 'copy-library', 'library.db'), join(dirname(options.configFile), 'copy-library', 'backups'))
+  const initialConfig = store.read()
+  let lan: LanShareService | undefined
+  const restartLan = async (config: KouboxConfig) => {
+    lan?.stop()
+    lan = undefined
+    if (!config.lanEnabled || !Number.isFinite(config.lanPort) || config.lanPort < 1) return
+    lan = await LanShareService.create(dirname(options.configFile), config.lanPort, config.lanAlias, copyLibrary, () => {
+      const current = store.read()
+      return { lanAutoSave: current.lanAutoSave, lanHistoryEnabled: current.lanHistoryEnabled, lanSaveDirectory: current.lanSaveDirectory }
+    })
+    lan.start()
+  }
+  await restartLan(initialConfig)
   const resolveVendor = () => {
     const base = resolveVendorPaths(store.read())
     return { ...base, ytdlpExecutable: options.resolveActiveYtdlp().executable }
@@ -317,6 +339,45 @@ export async function startLocalApi(options: ServerOptions) {
       }
       if (method === 'GET' && url.pathname === '/tools') return json(response, 200, tools)
       if (method === 'GET' && url.pathname === '/tasks') return json(response, 200, tasks.list())
+      if (method === 'GET' && url.pathname === '/copy-library') return json(response, 200, copyLibrary.list(url.searchParams.get('q') ?? ''))
+      if (method === 'POST' && url.pathname === '/copy-library') {
+        const body = await readJson(request); return json(response, 201, copyLibrary.upsert(body as never))
+      }
+      const copyMatch = url.pathname.match(/^\/copy-library\/([^/]+)$/)
+      if (copyMatch && method === 'PUT') {
+        const body = await readJson(request); return json(response, 200, copyLibrary.update(decodeURIComponent(copyMatch[1]), body as never))
+      }
+      if (copyMatch && method === 'DELETE') { copyLibrary.remove(decodeURIComponent(copyMatch[1])); return json(response, 200, { ok: true }) }
+      if (method === 'POST' && url.pathname === '/copy-library/bulk-delete') {
+        const body = await readJson(request); const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : []; copyLibrary.bulkRemove(ids); return json(response, 200, { ok: true, count: ids.length })
+      }
+      if (method === 'GET' && url.pathname === '/copy-library/tags') return json(response, 200, copyLibrary.listTags())
+      if (method === 'POST' && url.pathname === '/copy-library/tags') { const body = await readJson(request); return json(response, 201, { name: copyLibrary.addTag(typeof body.name === 'string' ? body.name : '') }) }
+      const tagMatch = url.pathname.match(/^\/copy-library\/tags\/([^/]+)$/)
+      if (tagMatch && method === 'PUT') { const body = await readJson(request); copyLibrary.renameTag(decodeURIComponent(tagMatch[1]), typeof body.name === 'string' ? body.name : ''); return json(response, 200, { ok: true }) }
+      if (tagMatch && method === 'DELETE') { copyLibrary.removeTag(decodeURIComponent(tagMatch[1])); return json(response, 200, { ok: true }) }
+      if (method === 'GET' && url.pathname === '/lan/status') return json(response, 200, lan ? { enabled: true, port: lan.getPort(), alias: lan.identity.alias, deviceId: lan.identity.deviceId, fingerprint: lan.identity.fingerprint, dataRoot: dirname(options.configFile) } : { enabled: false, dataRoot: dirname(options.configFile) })
+      if (lan && method === 'GET' && url.pathname === '/lan/devices') return json(response, 200, lan.listDevices())
+      if (lan && method === 'POST' && url.pathname === '/lan/discovery/announce') { lan.discovery.announce(); return json(response, 200, { ok: true }) }
+      if (lan && method === 'GET' && url.pathname === '/lan/transfers') return json(response, 200, lan.listTransfers())
+      if (lan && method === 'GET' && /^\/lan\/transfers\/[^/]+\/events$/.test(url.pathname)) {
+        const transfer = lan.transfers.get(decodeURIComponent(url.pathname.split('/')[3]))
+        response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' })
+        response.write(`data: ${JSON.stringify(transfer ?? {})}\n\n`); response.end(); return
+      }
+      if (lan && method === 'GET' && url.pathname === '/lan/incoming') return json(response, 200, lan.listIncoming())
+      if (lan && method === 'GET' && url.pathname === '/lan/history') return json(response, 200, copyLibrary.listHistory())
+      if (lan && method === 'GET' && /^\/lan\/transfers\/[^/]+$/.test(url.pathname)) return json(response, 200, lan.transfers.get(decodeURIComponent(url.pathname.split('/').pop()!)) ?? {})
+      if (lan && method === 'POST' && url.pathname === '/lan/transfers') {
+        const body = await readJson(request)
+        if (Array.isArray(body.entryIds) && Array.isArray(body.deviceIds)) return json(response, 202, await lan.shareEntries(body.entryIds.filter((id): id is string => typeof id === 'string'), body.deviceIds.filter((id): id is string => typeof id === 'string')))
+        const devices = Array.isArray(body.devices) ? body.devices as never[] : []
+        return json(response, 202, await lan.send(body.payload as never, devices as never))
+      }
+      if (lan && method === 'POST' && /^\/lan\/transfers\/[^/]+\/cancel$/.test(url.pathname)) return json(response, 200, await lan.cancel(decodeURIComponent(url.pathname.split('/')[3])) ?? {})
+      if (lan && method === 'POST' && /^\/lan\/incoming\/[^/]+(?:\/decision)?$/.test(url.pathname)) {
+        const parts = url.pathname.split('/').filter(Boolean); const id = decodeURIComponent(parts[2]); const body = await readJson(request); return json(response, 200, lan.decideIncoming(id, body.accept === true) ?? {})
+      }
       if (method === 'GET' && url.pathname === '/runtime/gpu') {
         return json(response, 200, detectGpu({ maxAgeMs: GPU_RUNTIME_PROBE_MAX_AGE_MS }))
       }
@@ -361,6 +422,7 @@ export async function startLocalApi(options: ServerOptions) {
         const next = mergeConfig(body, config)
         mkdirSync(next.outputDirectory, { recursive: true })
         const result = store.write(next)
+        if (next.lanEnabled !== config.lanEnabled || next.lanAlias !== config.lanAlias || next.lanPort !== config.lanPort) await restartLan(next)
         apiLog.info('✓ 配置已保存')
         return json(response, 200, result)
       }
@@ -616,6 +678,8 @@ export async function startLocalApi(options: ServerOptions) {
     token,
     getConfig: () => store.read(),
     cancelActiveTasks: (reason: string) => tasks.cancelAllActive(reason),
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    copyLibrary,
+    lan,
+    close: () => new Promise<void>((resolve, reject) => { lan?.stop(); server.close((error) => error ? reject(error) : resolve()) })
   }
 }

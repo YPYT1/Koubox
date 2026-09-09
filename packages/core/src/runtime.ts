@@ -200,6 +200,12 @@ export class RuntimeStore {
     }
     if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
+    if (typeof config.lanEnabled !== 'boolean') config.lanEnabled = this.defaults.lanEnabled
+    if (typeof config.lanAlias !== 'string' || !config.lanAlias.trim()) config.lanAlias = this.defaults.lanAlias
+    if (!Number.isFinite(config.lanPort) || config.lanPort < 1 || config.lanPort > 65535) config.lanPort = this.defaults.lanPort
+    if (typeof config.lanAutoSave !== 'boolean') config.lanAutoSave = this.defaults.lanAutoSave
+    if (typeof config.lanSaveDirectory !== 'string' || !config.lanSaveDirectory.trim()) config.lanSaveDirectory = this.defaults.lanSaveDirectory
+    if (typeof config.lanHistoryEnabled !== 'boolean') config.lanHistoryEnabled = this.defaults.lanHistoryEnabled
     const normalized = normalizeKouboxConfigPaths(this.applyPinned(config))
     const downloadRuntimePathsChanged = normalized.ytdlpDirectory !== config.ytdlpDirectory || normalized.denoDirectory !== config.denoDirectory
     delete (normalized as KouboxConfig & Record<string, unknown>).ytdlpCookieSource

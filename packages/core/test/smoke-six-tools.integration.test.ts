@@ -112,7 +112,7 @@ function buildConfig(outputDirectory: string): KouboxConfig {
     translationTopP: 0.8,
     whisperChunkLengthS: 30,
     pythonExecutable,
-    debugMode: false
+    debugMode: false, lanEnabled: false, lanAlias: 'test', lanPort: 0, lanAutoSave: false, lanSaveDirectory: join(outputDirectory, 'share'), lanHistoryEnabled: true
   }
 }
 

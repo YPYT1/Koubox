@@ -225,8 +225,8 @@ async function createWindow(): Promise<void> {
   // Wipe disk caches before any BrowserWindow opens — avoids Chromium
   // entry_impl.cc "No file for …" freezes after a mid-run cache clear.
   await applyPendingDiskClear(projectDirectory)
-  // Dev logs → repo/logs；打包便携包 logs → exe 旁 userdata/logs
-  initLogger(app.isPackaged ? userData : projectDirectory, {
+  // 所有运行数据统一归档到 Electron userData；开发/构建只改变 userData 根路径。
+  initLogger(userData, {
     defaultLevel: app.isPackaged ? 'info' : 'debug',
     defaultVerbose: !app.isPackaged
   })
@@ -310,7 +310,13 @@ async function createWindow(): Promise<void> {
       translationTopP: 0.8,
       whisperChunkLengthS: 30,
       pythonExecutable: '',
-      debugMode: false
+      debugMode: false,
+      lanEnabled: true,
+      lanAlias: '口播匣',
+      lanPort: 53318,
+      lanAutoSave: false,
+      lanSaveDirectory: join(app.getPath('documents'), '口播匣分享'),
+      lanHistoryEnabled: true
     },
     projectDirectory,
     pythonProjectDirectory: findPythonProjectDirectory(),

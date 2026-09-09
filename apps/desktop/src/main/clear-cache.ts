@@ -38,7 +38,7 @@ export type ClearAppCacheResult = {
 export function resolveAppDataRoots(projectDirectory: string): AppDataRoots {
   const userData = app.getPath('userData')
   const mode = app.isPackaged ? 'packaged' : 'development'
-  const logs = app.isPackaged ? join(userData, 'logs') : join(projectDirectory, 'logs')
+  const logs = join(userData, 'logs')
   return { mode, userData, logs }
 }
 
@@ -144,7 +144,7 @@ export async function clearAppCache(options: {
   closeLoginWindow?: () => void
 }): Promise<ClearAppCacheResult> {
   const roots = resolveAppDataRoots(options.projectDirectory)
-  const modeLabel = roots.mode === 'packaged' ? '打包模式（userdata）' : '开发模式（项目目录）'
+  const modeLabel = roots.mode === 'packaged' ? '打包模式（userdata）' : '开发模式（userData）'
   const dialogOptions = {
     type: 'warning' as const,
     buttons: ['取消', '确认清理'],

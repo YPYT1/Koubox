@@ -26,9 +26,11 @@ import {
 
 } from '@phosphor-icons/react'
 
-import { LOCAL_AUDIO_EXTENSIONS, LOCAL_VIDEO_EXTENSIONS, type TaskSnapshot } from '@koubox/shared'
+import { LOCAL_AUDIO_EXTENSIONS, LOCAL_VIDEO_EXTENSIONS, type CopyEntry, type LanDevice, type LanTransfer, type TaskSnapshot } from '@koubox/shared'
 
 import { Button } from '../components/common/Button'
+import { LanDevicePickerDialog } from '../components/lan/LanDevicePickerDialog'
+import { LanTransferDialog } from '../components/lan/LanTransferDialog'
 
 import { FormField, PathPicker } from '../components/common/FormControls'
 
@@ -145,6 +147,12 @@ export function SpeechToTextPage({
   const [textExpanded, setTextExpanded] = useState(false)
 
   const [copiedSection, setCopiedSection] = useState<'original' | 'translation' | null>(null)
+  const [shareEntryId, setShareEntryId] = useState('')
+  const [shareDevices, setShareDevices] = useState<LanDevice[]>([])
+  const [shareSelected, setShareSelected] = useState<string[]>([])
+  const [sharePickerOpen, setSharePickerOpen] = useState(false)
+  const [shareTransfers, setShareTransfers] = useState<LanTransfer[]>([])
+  const [shareTransferOpen, setShareTransferOpen] = useState(false)
 
   const [audioPlaying, setAudioPlaying] = useState(false)
 
@@ -377,6 +385,23 @@ export function SpeechToTextPage({
     }, 900)
   }
 
+  const saveCopy = async (content: string, kind: 'original' | 'translation') => {
+    if (!content.trim()) return
+    try {
+      const entry = await window.koubox.post<CopyEntry>('/copy-library', { title: `${kind === 'original' ? '原始' : '翻译'}文案 · ${task?.taskId ?? ''}`, content, kind, sourceTool: '语音转文字', sourceTaskId: task?.taskId })
+      return entry
+    } catch (error) { onShowToast(error instanceof Error ? error.message : '文案保存失败', 'error') }
+  }
+  const openShare = async (content: string, kind: 'original' | 'translation') => {
+    try {
+      const entry = await saveCopy(content, kind)
+      if (!entry) return
+      setShareEntryId(entry.id); setShareDevices(await window.koubox.get<LanDevice[]>('/lan/devices')); setShareSelected([]); setSharePickerOpen(true)
+    } catch (error) { onShowToast(error instanceof Error ? error.message : '分享准备失败', 'error') }
+  }
+  const refreshShareDevices = async () => { await window.koubox.post('/lan/discovery/announce', {}); setShareDevices(await window.koubox.get<LanDevice[]>('/lan/devices')) }
+  const confirmShare = async () => { try { const result = await window.koubox.post<LanTransfer[]>('/lan/transfers', { entryIds: [shareEntryId], deviceIds: shareSelected }); setSharePickerOpen(false); setShareTransfers(result); setShareTransferOpen(true); onShowToast('文案分享已发送', 'success') } catch (error) { onShowToast(error instanceof Error ? error.message : '分享失败', 'error') } }
+
   const handleTranslate = async () => {
     if (!task?.taskId || !task.transcript) return
     setTranslating(true)
@@ -590,6 +615,8 @@ export function SpeechToTextPage({
                 >
                   {audioPlaying ? <Pause size={20} weight="fill" /> : <Play size={20} weight="fill" />}
                 </button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}>加入文案库</button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</button>
                 <div className="viral-audio-meta">
                   <input
                     type="range"
@@ -662,6 +689,7 @@ export function SpeechToTextPage({
                   {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
                   {copiedSection === 'original' ? '已复制' : '复制原文'}
                 </button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</button>
               </div>
             </div>
             <div className="viral-line-list" ref={originalListRef} onScroll={syncScrollFromOriginal}>
@@ -691,6 +719,8 @@ export function SpeechToTextPage({
                   {copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}
                   {copiedSection === 'translation' ? '已复制' : '复制译文'}
                 </button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}>加入文案库</button>
+                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void openShare(translatedLines.filter(Boolean).join('\n'), 'translation')}>分享译文</button>
               </div>
             </div>
             <div className="viral-line-list" ref={translatedListRef} onScroll={syncScrollFromTranslated}>
@@ -712,6 +742,8 @@ export function SpeechToTextPage({
           </div>
         </div>
       </TranslationBusyFrame>
+      <LanDevicePickerDialog open={sharePickerOpen} devices={shareDevices} selected={shareSelected} onToggle={(id) => setShareSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} onClose={() => setSharePickerOpen(false)} onConfirm={() => void confirmShare()} onRefresh={() => void refreshShareDevices()} />
+      {shareTransferOpen && <LanTransferDialog transfers={shareTransfers} onClose={() => setShareTransferOpen(false)} />}
 
     </div>
 
