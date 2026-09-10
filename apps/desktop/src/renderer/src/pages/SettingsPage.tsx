@@ -138,11 +138,10 @@ const guides: Record<GuideKind, {
 
 function VendorIntegrity({ check }: { check: VendorToolCheck | undefined }) {
   if (!check) return null
-  const complete = check.missingFiles.length === 0
+  const passed = check.missingFiles.length === 0 && check.ready
   return (
-    <div className={`vendor-integrity ${complete && check.ready ? 'ok' : 'warn'}`}>
+    <div className={`vendor-integrity ${passed ? 'ok' : 'warn'}`}>
       <div className="vendor-integrity-head">
-        {complete && check.ready ? <CheckCircle size={15} weight="fill" /> : <Warning size={15} weight="fill" />}
         <span>
           {check.ready ? '可执行检测通过' : '可执行检测未通过'}
           {' · '}
@@ -157,7 +156,7 @@ function VendorIntegrity({ check }: { check: VendorToolCheck | undefined }) {
           ))}
         </div>
       )}
-      {check.missingFiles.length === 0 && check.ready && (
+      {passed && (
         <div className="vendor-integrity-ok">
           清单完整，运行时可用
           {check.ejsVersion ? ` · EJS ${check.ejsVersion}` : ''}
@@ -451,9 +450,7 @@ export function SettingsPage({
     <div className="page-container settings-page">
       <div className="page-header-block models-page-header">
         <div>
-          <p className="page-eyebrow">PREFERENCES / 偏好设置</p>
           <h1>全局设置</h1>
-          <p>配置输出目录、语种默认值、下载参数，以及高级运行选项</p>
         </div>
         <Button
           type="button"
@@ -499,7 +496,7 @@ export function SettingsPage({
           >
             <Button
               type="button"
-              variant="secondary"
+              variant="danger"
               size="md"
               className="btn-clear-cache"
               loading={clearingCache}
@@ -520,7 +517,6 @@ export function SettingsPage({
                 说明
               </button>
             )}
-            hint="目录内需包含 yt-dlp.exe。"
           >
             <PathPicker
               value={config.ytdlpDirectory}
@@ -549,7 +545,6 @@ export function SettingsPage({
                 说明
               </button>
             )}
-            hint="通常选择 ffmpeg 解压后的 bin 目录。"
           >
             <PathPicker
               value={config.ffmpegDirectory}
@@ -613,25 +608,25 @@ export function SettingsPage({
           </summary>
 
           <FormField label="代理地址" hint="例如 http://127.0.0.1:7897；公开解析、应用内登录验证和 yt-dlp 下载共用此代理。">
-            <Input
-              value={config.ytdlpProxy}
-              onChange={(e) => onChange({ ...config, ytdlpProxy: e.target.value })}
-              placeholder="http://127.0.0.1:7897"
-            />
+            <div className="flex gap-2">
+              <Input
+                value={config.ytdlpProxy}
+                onChange={(e) => onChange({ ...config, ytdlpProxy: e.target.value })}
+                placeholder="http://127.0.0.1:7897"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                loading={checkingCookies}
+                icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
+                onClick={() => void refreshCookieStatus()}
+              >
+                {cookieCheckCompleted ? '检测完成' : checkingCookies ? '检测中…' : '检测四平台登录配置'}
+              </Button>
+            </div>
           </FormField>
-
-          <div className="platform-auth-toolbar">
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              loading={checkingCookies}
-              icon={cookieCheckCompleted ? <CheckCircle size={16} weight="fill" /> : <ArrowsClockwise size={16} weight="bold" />}
-              onClick={() => void refreshCookieStatus()}
-            >
-              {cookieCheckCompleted ? '检测完成' : checkingCookies ? '检测中…' : '检测四平台登录配置'}
-            </Button>
-          </div>
 
           {cookieStatus && (
                 <div className="cookie-status-panel">

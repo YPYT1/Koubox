@@ -35,7 +35,7 @@ def run(
     model_label = "Faster-Whisper Large-v3（FP16）" if compute_type == "float16" else "faster-whisper-large-v3-turbo（INT8）"
     send("progress", stage="loading-model", percent=5, message=f"正在加载 {model_label}")
     model = WhisperModel(model_directory, device="cuda", compute_type=compute_type)
-    send("progress", stage="transcribing", percent=18, message="正在识别音频")
+    send("progress", stage="transcribing", percent=12, message="正在识别音频")
 
     whisper_language = WHISPER_LANGUAGE_MAP.get(language)
     if whisper_language:
@@ -53,10 +53,18 @@ def run(
         vad_filter=False,
         chunk_length=max(1, int(chunk_length_s)),
     )
+    duration = float(getattr(info, "duration", 0) or 0)
     segments: list[dict[str, float | str]] = []
+    last_percent = 12
     for chunk in chunks:
         text = chunk.text.strip()
         if text:
             segments.append({"text": text, "start": float(chunk.start), "end": float(chunk.end)})
+        if duration > 0:
+            ratio = min(1.0, max(0.0, float(chunk.end) / duration))
+            percent = 12 + int(ratio * 80)
+            if percent > last_percent:
+                last_percent = percent
+                send("progress", stage="transcribing", percent=percent, message="正在识别音频")
     send("progress", stage="transcribing", percent=95, message="正在整理识别结果")
     send("transcript", language=whisper_language or info.language or "und", segments=segments)

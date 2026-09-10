@@ -788,12 +788,8 @@ body.is-resizing {
 .panel-title-badge {
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--accent-teal);
-  background: #ffffff;
-  border: 1px solid var(--border-main);
-  padding: 2px 10px;
-  border-radius: 999px;
   font-weight: 700;
+  /* glass look owned by liquid-glass.css */
 }
 
 /* 表单控件 */
@@ -850,21 +846,23 @@ body.is-resizing {
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-card-subtle);
+  border: 1px solid transparent;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  min-height: 64px;
 }
 
 .vendor-integrity.ok {
-  border-color: var(--accent-teal-border);
-  background: var(--accent-teal-soft);
+  border-color: #a3c4ad;
+  background: #d8e8dd;
+  color: #3d5c47;
 }
 
 .vendor-integrity.warn {
-  border-color: rgba(245, 158, 11, 0.35);
-  background: var(--status-warning-soft);
+  border-color: #d4a5a5;
+  background: #edd5d5;
+  color: #7a3f3f;
 }
 
 .vendor-integrity-head {
@@ -872,13 +870,14 @@ body.is-resizing {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  font-weight: 650;
-  color: var(--text-main);
+  font-weight: 700;
+  color: inherit;
 }
 
 .vendor-integrity-ok {
   font-size: 11.5px;
-  color: var(--accent-teal);
+  color: inherit;
+  opacity: 0.92;
 }
 
 .vendor-integrity-missing {
@@ -887,7 +886,7 @@ body.is-resizing {
   gap: 6px;
   align-items: center;
   font-size: 11.5px;
-  color: var(--status-danger);
+  color: inherit;
 }
 
 .vendor-integrity-missing code {
@@ -895,8 +894,9 @@ body.is-resizing {
   font-size: 11px;
   padding: 2px 6px;
   border-radius: var(--radius-xs);
-  background: #ffffff;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(122, 63, 63, 0.18);
+  color: inherit;
 }
 
 .cookie-status-panel {
@@ -1776,16 +1776,10 @@ select.input-text:disabled {
   border-color: var(--border-strong);
 }
 
-.btn-secondary.btn-clear-cache {
-  background: #fff1e6;
-  border-color: #f0c9a0;
-  color: #9a3412;
-}
-
-.btn-secondary.btn-clear-cache:hover:not(:disabled) {
-  background: #ffe4cc;
-  border-color: #e8b07a;
-  color: #7c2d12;
+.btn-clear-cache {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
 }
 
 .btn-copy-done {
@@ -2864,6 +2858,7 @@ button:disabled {
   justify-content: space-between;
   gap: 12px;
   min-height: 32px;
+  flex-wrap: wrap;
 }
 
 .viral-text-head h4 {
@@ -2877,6 +2872,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .viral-line-list {
@@ -3533,16 +3529,27 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .75);
+  background: linear-gradient(155deg, rgba(255, 255, 255, .8), rgba(248, 250, 252, .45));
+  box-shadow: 0 4px 12px -8px rgba(71, 85, 105, .24), inset 0 1px 0 rgba(255, 255, 255, .92);
+  backdrop-filter: blur(12px) saturate(1.3);
+  font-weight: 650;
+  font-size: 11px;
   white-space: nowrap;
 }
 
 .env-vendor-status.ready {
-  color: #10b981;
+  color: #047857;
+  border-color: color-mix(in srgb, #10b981 28%, #ffffff);
+  background: linear-gradient(155deg, color-mix(in srgb, #10b981 14%, rgba(255, 255, 255, .85)), color-mix(in srgb, #10b981 8%, rgba(255, 255, 255, .48)));
 }
 
 .env-vendor-status.warn {
-  color: #ef4444;
+  color: #b91c1c;
+  border-color: color-mix(in srgb, #ef4444 28%, #ffffff);
+  background: linear-gradient(155deg, color-mix(in srgb, #ef4444 14%, rgba(255, 255, 255, .85)), color-mix(in srgb, #ef4444 8%, rgba(255, 255, 255, .48)));
 }
 
 .env-vendor-footnote {
@@ -4484,12 +4491,6 @@ body.is-resizing .sidebar-resizer::after {
   color: var(--accent-primary);
 }
 
-.home-tool-card__tag{
-  border-color: var(--accent-primary-border) !important;
-  background: var(--accent-primary-soft) !important;
-  color: var(--accent-primary-hover) !important;
-}
-
 .panel-box,
 .env-card,
 .memory-live-panel,
@@ -4627,7 +4628,6 @@ body.is-resizing .sidebar-resizer::after {
 .history-file-chip:hover,
 .history-file-chip.is-active,
 .pipeline-msg-box,
-.panel-title-badge,
 .segment-time {
   border-color: var(--accent-primary-border);
   background: var(--accent-primary-soft);

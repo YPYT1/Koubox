@@ -31,7 +31,7 @@ function formatDate(value: string) {
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 const draftSignature = (entry: CopyEntry) => JSON.stringify([entry.title, entry.content, entry.kind, entry.tags])
-const renderTag = (tag: string) => <span key={tag} className="copy-capsule" style={{ backgroundColor: tagColor(tag) }}>{tag}</span>
+const renderTag = (tag: string) => <span key={tag} className="copy-capsule" style={{ ['--tag-tint' as string]: tagColor(tag) }}>{tag}</span>
 
 export function CopyLibraryPage({ onShowToast, registerLeaveGuard }: Props) {
   const [entries, setEntries] = useState<CopyEntry[]>([])
@@ -362,7 +362,7 @@ export function CopyLibraryPage({ onShowToast, registerLeaveGuard }: Props) {
   return (
     <section ref={containerRef} className={cn('copy-library-page copy-workspace', compact && 'is-compact', detailVisible && 'show-detail')}>
       <header className="copy-workspace-header">
-        <div><p className="copy-library-eyebrow">LIBRARY / 内容管理</p><h1>文案库 <span>{entries.length}</span></h1></div>
+        <div><h1>文案库 <span>{entries.length}</span></h1></div>
         <Button type="button" onClick={newEntry} disabled={busy}><Plus size={16} />新建文案</Button>
       </header>
       <div className="copy-workspace-toolbar">
@@ -374,7 +374,7 @@ export function CopyLibraryPage({ onShowToast, registerLeaveGuard }: Props) {
         <span className="copy-filter-label">标签</span>
         <button type="button" className={cn('copy-filter-all', !selectedTags.length && 'is-active')} aria-pressed={!selectedTags.length} onClick={() => requestTransition(() => setSelectedTags([]))}>全部</button>
         {tags.map((tag) => <ContextMenu key={tag}><ContextMenuTrigger asChild>
-          <button type="button" className={cn('copy-capsule copy-tag-filter', selectedTags.includes(tag) && 'is-active')} style={{ backgroundColor: tagColor(tag) }} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)} title={`${tag} · 右键管理`}>
+          <button type="button" className={cn('copy-capsule copy-tag-filter', selectedTags.includes(tag) && 'is-active')} style={{ ['--tag-tint' as string]: tagColor(tag) }} aria-pressed={selectedTags.includes(tag)} onClick={() => toggleTag(tag)} title={`${tag} · 右键管理`}>
             {selectedTags.includes(tag) && <Check size={12} />}<span>{tag}</span><em>{entries.filter((entry) => entry.tags.includes(tag)).length}</em>
           </button>
         </ContextMenuTrigger><ContextMenuContent><ContextMenuItem onClick={() => requestTransition(() => setTagDialog({ mode: 'rename', original: tag, value: tag }))}><Pencil size={14} />重命名标签</ContextMenuItem><ContextMenuSeparator /><ContextMenuItem variant="destructive" onClick={() => requestTransition(() => setTagDialog({ mode: 'delete', original: tag, value: tag }))}><Trash2 size={14} />删除标签</ContextMenuItem></ContextMenuContent></ContextMenu>)}

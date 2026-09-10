@@ -64,11 +64,11 @@ export function PipelineStepper({
                     : step.desc}
                 </div>
                 {state === 'current' && (
-                  <div className={`step-progress-track ${status === 'running' ? 'working' : ''}`}>
-                    {status === 'running' && <div className="step-progress-indeterminate" />}
-                    {percent > 0 && (
-                      <div className="step-progress-fill" style={{ width: `${Math.max(8, Math.min(100, Number.isFinite(percent) ? percent : 0))}%` }} />
-                    )}
+                  <div className="step-progress-track">
+                    <div
+                      className="step-progress-fill"
+                      style={{ width: `${Math.max(0, Math.min(100, Number.isFinite(percent) ? percent : 0))}%` }}
+                    />
                   </div>
                 )}
               </div>

@@ -103,13 +103,17 @@ export class CopyLibraryStore {
       this.db.run('UPDATE copy_entries SET tags = ?, source_tool = COALESCE(?, source_tool), source_task_id = COALESCE(?, source_task_id), source_name = COALESCE(?, source_name), sender_alias = COALESCE(?, sender_alias), received_at = COALESCE(?, received_at), updated_at = ? WHERE id = ?', [JSON.stringify(mergedTags), input.sourceTool ?? null, input.sourceTaskId ?? null, input.sourceName ?? null, input.senderAlias ?? null, received ? stamp : null, stamp, existing.id])
       for (const tag of mergedTags) this.db.run('INSERT OR IGNORE INTO copy_tags (name) VALUES (?)', [tag])
       this.persist(); this.backup()
-      return this.get(existing.id)!
+      const updated = this.get(existing.id)
+      if (!updated) throw new Error('文案更新后读取失败。')
+      return updated
     }
     const id = text((input as { id?: unknown }).id).trim() || randomUUID()
     this.db.run('INSERT INTO copy_entries (id,title,content,kind,tags,source_tool,source_task_id,source_name,sender_alias,fingerprint,created_at,updated_at,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [id, title, content, kind, JSON.stringify(nextTags), input.sourceTool ?? null, input.sourceTaskId ?? null, input.sourceName ?? null, input.senderAlias ?? null, fp, stamp, stamp, received ? stamp : null])
     for (const tag of nextTags) this.db.run('INSERT OR IGNORE INTO copy_tags (name) VALUES (?)', [tag])
     this.persist(); this.backup()
-    return this.get(id)!
+    const created = this.get(id)
+    if (!created) throw new Error('文案写入后读取失败。')
+    return created
   }
 
   update(id: string, patch: Partial<CopyInput>): CopyEntry {

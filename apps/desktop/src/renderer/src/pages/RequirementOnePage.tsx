@@ -10,7 +10,8 @@ import {
   ArrowsIn,
   Check,
   Translate,
-  CircleNotch
+  CircleNotch,
+  Books
 } from '@phosphor-icons/react'
 import {
   toUserTaskMessage,
@@ -90,6 +91,8 @@ export function RequirementOnePage({
   const [translating, setTranslating] = useState(false)
   const [textExpanded, setTextExpanded] = useState(false)
   const [copiedSection, setCopiedSection] = useState<'original' | 'translation' | null>(null)
+  const [savedLibrarySection, setSavedLibrarySection] = useState<'original' | 'translation' | null>(null)
+  const [savingLibrarySection, setSavingLibrarySection] = useState<'original' | 'translation' | null>(null)
   const [shareKind, setShareKind] = useState<'original' | 'translation' | null>(null)
   const [shareEntryId, setShareEntryId] = useState('')
   const [shareDevices, setShareDevices] = useState<LanDevice[]>([])
@@ -179,11 +182,33 @@ export function RequirementOnePage({
   }
 
   const saveCopy = async (content: string, kind: 'original' | 'translation') => {
-    if (!content.trim()) return
+    const text = content.trim()
+    if (!text) {
+      onShowToast('没有可保存的文案内容', 'warning')
+      return
+    }
+    if (savingLibrarySection) return
+    setSavingLibrarySection(kind)
     try {
-      const entry = await window.koubox.post<CopyEntry>('/copy-library', { title: `${kind === 'original' ? '原始' : '翻译'}文案 · ${task?.taskId ?? ''}`, content, kind, sourceTool: '爆款素材获取', sourceTaskId: task?.taskId })
+      const entry = await window.koubox.post<CopyEntry>('/copy-library', {
+        title: `${kind === 'original' ? '原始' : '翻译'}文案 · ${task?.taskId ?? ''}`,
+        content: text,
+        kind,
+        sourceTool: '爆款素材获取',
+        sourceTaskId: task?.taskId
+      })
+      if (!entry?.id) throw new Error('文案库未返回有效记录')
+      setSavedLibrarySection(kind)
+      window.setTimeout(() => {
+        setSavedLibrarySection((current) => (current === kind ? null : current))
+      }, 1200)
+      onShowToast('已加入文案库', 'success')
       return entry
-    } catch (error) { onShowToast(error instanceof Error ? error.message : '文案保存失败', 'error') }
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '文案保存失败', 'error')
+    } finally {
+      setSavingLibrarySection((current) => (current === kind ? null : current))
+    }
   }
   const openShare = async (content: string, kind: 'original' | 'translation') => {
     try {
@@ -666,7 +691,18 @@ export function RequirementOnePage({
                 <Button type="button" variant="secondary" size="sm" className={copiedSection === 'original' ? 'btn-copy-done' : ''} disabled={!hasTranscript} onClick={() => void handleCopy(originalLines.filter(Boolean).join('\n'), 'original')} icon={copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}>
                   {copiedSection === 'original' ? '已复制' : '复制原文'}
                 </Button>
-                <Button type="button" variant="secondary" size="sm" disabled={!hasTranscript} onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}>加入文案库</Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className={savedLibrarySection === 'original' ? 'btn-copy-done' : ''}
+                  disabled={!hasTranscript || savingLibrarySection === 'original'}
+                  loading={savingLibrarySection === 'original'}
+                  onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}
+                  icon={savedLibrarySection === 'original' ? <Check size={14} /> : <Books size={14} />}
+                >
+                  {savedLibrarySection === 'original' ? '已加入' : '加入文案库'}
+                </Button>
                 <Button type="button" variant="secondary" size="sm" disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</Button>
               </div>
             </div>
@@ -690,7 +726,18 @@ export function RequirementOnePage({
                 <Button type="button" variant="secondary" size="sm" className={copiedSection === 'translation' ? 'btn-copy-done' : ''} disabled={!hasTranslation} onClick={() => void handleCopy(translatedLines.filter(Boolean).join('\n'), 'translation')} icon={copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}>
                   {copiedSection === 'translation' ? '已复制' : '复制译文'}
                 </Button>
-                <Button type="button" variant="secondary" size="sm" disabled={!hasTranslation} onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}>加入文案库</Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className={savedLibrarySection === 'translation' ? 'btn-copy-done' : ''}
+                  disabled={!hasTranslation || savingLibrarySection === 'translation'}
+                  loading={savingLibrarySection === 'translation'}
+                  onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}
+                  icon={savedLibrarySection === 'translation' ? <Check size={14} /> : <Books size={14} />}
+                >
+                  {savedLibrarySection === 'translation' ? '已加入' : '加入文案库'}
+                </Button>
                 <Button type="button" variant="secondary" size="sm" disabled={!hasTranslation} onClick={() => void openShare(translatedLines.filter(Boolean).join('\n'), 'translation')}>分享译文</Button>
               </div>
             </div>
