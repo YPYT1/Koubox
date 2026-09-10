@@ -15,7 +15,9 @@ export class LanShareService {
   readonly transfers = new LanTransferStore()
   readonly discovery: LanDiscovery
   private server?: ReturnType<typeof createLanHttpsServer>
+  private error?: string
   private readonly incoming = new Map<string, { payload: CopySharePayload; transferId: string }>()
+  private readonly incomingListeners = new Set<(items: Array<{ id: string; senderAlias: string; names: string[]; transferId: string }>) => void>()
   private readonly remoteSessions = new Map<string, { device: LanDevice; transferId: string; sessionToken: string }>()
   private constructor(
     private readonly rootDir: string,
@@ -26,7 +28,7 @@ export class LanShareService {
     identity: LanIdentity
   ) {
     this.identity = identity
-    this.discovery = new LanDiscovery(this.identity, port)
+    this.discovery = new LanDiscovery(this.identity, () => this.getPort())
   }
   static async create(rootDir: string, port: number, alias: string, library: CopyLibraryStore, getConfig: () => { lanAutoSave: boolean; lanHistoryEnabled: boolean; lanSaveDirectory: string }): Promise<LanShareService> {
     return new LanShareService(rootDir, port, alias, library, getConfig, await loadOrCreateLanIdentity(join(rootDir, 'lan'), alias))
@@ -41,16 +43,18 @@ export class LanShareService {
         return { accepted: true }
       }
       this.incoming.set(id, { payload, transferId: transfer.id })
+      this.emitIncoming()
       return { accepted: false, waiting: true }
     }, (id) => this.transfers.get(id), (id) => {
       this.incoming.delete(id)
       const current = this.transfers.get(id)
       if (current && !['complete', 'rejected', 'error'].includes(current.status)) this.transfers.cancel(id)
-    })
-    this.discovery.start()
+    }, (error) => { this.error = `HTTPS 服务启动失败：${error.message}` })
+    this.discovery.start(undefined, (error) => { this.error = `局域网发现失败：${error.message}` })
   }
   stop(): void { this.server?.close(); this.server = undefined; this.discovery.close() }
   getPort(): number { return this.server ? ((this.server.address() as AddressInfo | null)?.port ?? this.port) : this.port }
+  getError(): string | undefined { return this.error ?? this.discovery.getError() }
   listDevices(): LanDevice[] { return this.discovery.list() }
   listTransfers(): LanTransfer[] { return this.transfers.list() }
   listIncoming(): Array<{ id: string; senderAlias: string; names: string[]; transferId: string }> {
@@ -94,11 +98,21 @@ export class LanShareService {
   decideIncoming(id: string, accept: boolean): LanTransfer | undefined {
     const pending = this.incoming.get(id); if (!pending) return undefined
     this.incoming.delete(id)
+    this.emitIncoming()
     if (accept) {
       this.acceptPayload(pending.transferId, pending.payload)
       return this.transfers.update(pending.transferId, { status: 'complete', bytesTransferred: Buffer.byteLength(JSON.stringify(pending.payload)), percent: 100 })
     }
     return this.transfers.update(pending.transferId, { status: 'rejected' })
+  }
+  subscribeIncoming(listener: (items: Array<{ id: string; senderAlias: string; names: string[]; transferId: string }>) => void): () => void {
+    this.incomingListeners.add(listener)
+    listener(this.listIncoming())
+    return () => this.incomingListeners.delete(listener)
+  }
+  private emitIncoming(): void {
+    const items = this.listIncoming()
+    for (const listener of this.incomingListeners) listener(items)
   }
   async cancel(id: string): Promise<LanTransfer | undefined> {
     const transfer = this.transfers.cancel(id)

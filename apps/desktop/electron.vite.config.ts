@@ -1,8 +1,10 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 const aliases = {
+  '@': resolve(__dirname, 'src/renderer/src'),
   '@koubox/core': resolve(__dirname, '../../packages/core/src'),
   '@koubox/license-client/types': resolve(__dirname, '../../packages/license-client/src/types.ts'),
   '@koubox/license-client': resolve(__dirname, '../../packages/license-client/src'),
@@ -29,5 +31,8 @@ export default defineConfig({
       }
     }
   },
-  renderer: { resolve: { alias: aliases }, plugins: [react()] }
+  renderer: {
+    resolve: { alias: aliases },
+    plugins: [react(), tailwindcss()]
+  }
 })

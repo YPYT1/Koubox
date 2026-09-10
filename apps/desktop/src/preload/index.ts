@@ -11,7 +11,7 @@ function requestLabel(method: string, path: string): string {
 }
 
 function isSilentMonitorGet(method: string, path: string): boolean {
-  return method === 'GET' && (path === '/runtime/memory' || path === '/runtime/gpu')
+  return method === 'GET' && (path === '/runtime/memory' || path === '/runtime/gpu' || path === '/lan/incoming')
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

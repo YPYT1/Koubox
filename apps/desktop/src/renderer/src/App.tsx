@@ -3,6 +3,7 @@ import { tools as toolCatalog, TOOL_TASK_KIND, type KouboxConfig, type RuntimeSt
 import type { LicenseCredentials, LicenseSnapshot } from '@koubox/license-client'
 import { Sidebar } from './components/Sidebar'
 import { LicenseDialog } from './components/license/LicenseDialog'
+import { LicenseNotice } from './components/license/LicenseNotice'
 import { Toast, type ToastMessage } from './components/common/Toast'
 import { HomePage } from './pages/HomePage'
 import { ModelsPage } from './pages/ModelsPage'
@@ -17,6 +18,8 @@ import { TaskHistoryPage } from './pages/TaskHistoryPage'
 import { CopyLibraryPage } from './pages/CopyLibraryPage'
 import { IncomingCopyDialog, type IncomingCopy } from './components/lan/IncomingCopyDialog'
 import { RuntimeMonitorBootstrap } from './monitor/RuntimeMonitorBootstrap'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { Toaster } from '@/components/ui/sonner'
 
 type FixedPage = 'home' | 'models' | 'copy-library' | 'settings'
 type Focus = { kind: 'fixed'; page: FixedPage } | { kind: 'tool'; toolId: ToolId; menu: string }
@@ -43,6 +46,14 @@ export function App() {
   const [incoming, setIncoming] = useState<IncomingCopy | null>(null)
   const refreshSequence = useRef(0)
   const startupRefreshStarted = useRef(false)
+  const copyLibraryLeaveGuard = useRef<((proceed: () => void) => void) | null>(null)
+  const navigateWorkspace = (proceed: () => void) => {
+    if (focus.kind === 'fixed' && focus.page === 'copy-library' && copyLibraryLeaveGuard.current) {
+      copyLibraryLeaveGuard.current(proceed)
+    } else {
+      proceed()
+    }
+  }
 
   const showToast = (text: string, type: ToastMessage['type'] = 'info') => {
     setToast({ id: String(Date.now()), text, type })
@@ -113,16 +124,11 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    let active = true
-    const poll = async () => {
-      try {
-        const items = await window.koubox.get<IncomingCopy[]>('/lan/incoming')
-        if (active && items.length > 0) setIncoming((current) => current ?? items[0])
-      } catch { /* LAN may be disabled */ }
-    }
-    void poll(); const timer = window.setInterval(() => void poll(), 2000)
-    return () => { active = false; window.clearInterval(timer) }
-  }, [])
+    if (config && !config.lanEnabled) return
+    return window.koubox.events<IncomingCopy[]>('/lan/incoming/events', (items) => {
+      if (items.length > 0) setIncoming((current) => current ?? items[0])
+    })
+  }, [config?.lanEnabled])
 
   const decideIncoming = async (accept: boolean) => {
     if (!incoming) return
@@ -282,9 +288,10 @@ export function App() {
   }
 
   return (
-    <div className="desktop-shell">
+    <TooltipProvider>
+    <div className="desktop-shell flex h-screen overflow-hidden bg-background text-foreground">
       <RuntimeMonitorBootstrap seedGpu={runtime?.gpu} />
-      <div className="app-body">
+      <div className="app-body flex min-h-0 flex-1">
         {/* 左侧可拖拽调宽工作台侧栏 */}
         <Sidebar
           tools={tools}
@@ -292,13 +299,18 @@ export function App() {
           focus={focus}
           opened={opened}
           toolStatuses={toolStatuses}
-          onSelectFixed={(page) => setFocus({ kind: 'fixed', page })}
-          onSelectTool={handleSelectToolMenu}
+          onSelectFixed={(page) => {
+            if (focus.kind === 'fixed' && focus.page === page) return
+            navigateWorkspace(() => setFocus({ kind: 'fixed', page }))
+          }}
+          onSelectTool={(toolId, menuId) => navigateWorkspace(() => handleSelectToolMenu(toolId, menuId))}
           onCloseTool={handleCloseTool}
         />
 
         {/* 主视窗 Workspace Viewport */}
-        <main className="workspace-viewport">
+        <div className="workspace-main">
+        <LicenseNotice snapshot={license} onManage={() => setLicenseEditorOpen(true)} onVerify={verifyCurrentLicense} />
+        <main className="workspace-viewport min-h-0 flex-1 overflow-auto">
           {focus.kind === 'fixed' && focus.page === 'home' && (
             <HomePage
               tools={tools}
@@ -319,7 +331,7 @@ export function App() {
             />
           )}
 
-          {focus.kind === 'fixed' && focus.page === 'copy-library' && <CopyLibraryPage onShowToast={showToast} />}
+          {focus.kind === 'fixed' && focus.page === 'copy-library' && <CopyLibraryPage onShowToast={showToast} registerLeaveGuard={(guard) => { copyLibraryLeaveGuard.current = guard }} />}
 
           {focus.kind === 'fixed' && focus.page === 'settings' && config && (
             <SettingsPage
@@ -415,10 +427,12 @@ export function App() {
             />
           )}
         </main>
+        </div>
       </div>
 
       {/* 全局反馈 Toast */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+      <Toaster position="top-right" richColors closeButton />
       <LicenseDialog
         open={licenseEditorOpen}
         snapshot={license}
@@ -428,5 +442,6 @@ export function App() {
       />
       <IncomingCopyDialog incoming={incoming} onDecision={(accept) => void decideIncoming(accept)} />
     </div>
+    </TooltipProvider>
   )
 }

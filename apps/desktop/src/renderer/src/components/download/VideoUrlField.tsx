@@ -4,6 +4,7 @@ import {
   detectPlatform
 } from '@koubox/shared'
 import { FormField } from '../common/FormControls'
+import { Input } from '@/components/ui/input'
 import {
   DOWNLOAD_PLATFORM_META,
   MATERIALS_PLATFORM_META,
@@ -56,8 +57,7 @@ export function VideoUrlField({
   return (
     <>
       <FormField label={label}>
-        <input
-          className="input-text"
+        <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}

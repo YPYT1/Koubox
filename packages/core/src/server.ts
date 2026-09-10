@@ -255,7 +255,8 @@ export async function startLocalApi(options: ServerOptions) {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       const method = request.method ?? 'GET'
-      const silentProbe = method === 'GET' && (url.pathname === '/runtime/memory' || url.pathname === '/runtime/gpu')
+      const silentProbe = (method === 'GET' && (url.pathname === '/runtime/memory' || url.pathname === '/runtime/gpu' || url.pathname === '/lan/incoming'))
+        || (method === 'OPTIONS' && url.pathname === '/lan/incoming')
       response.once('finish', () => {
         if (silentProbe) return
         apiLog.debug('API 请求完成', {
@@ -356,7 +357,7 @@ export async function startLocalApi(options: ServerOptions) {
       const tagMatch = url.pathname.match(/^\/copy-library\/tags\/([^/]+)$/)
       if (tagMatch && method === 'PUT') { const body = await readJson(request); copyLibrary.renameTag(decodeURIComponent(tagMatch[1]), typeof body.name === 'string' ? body.name : ''); return json(response, 200, { ok: true }) }
       if (tagMatch && method === 'DELETE') { copyLibrary.removeTag(decodeURIComponent(tagMatch[1])); return json(response, 200, { ok: true }) }
-      if (method === 'GET' && url.pathname === '/lan/status') return json(response, 200, lan ? { enabled: true, port: lan.getPort(), alias: lan.identity.alias, deviceId: lan.identity.deviceId, fingerprint: lan.identity.fingerprint, dataRoot: dirname(options.configFile) } : { enabled: false, dataRoot: dirname(options.configFile) })
+      if (method === 'GET' && url.pathname === '/lan/status') return json(response, 200, lan ? { enabled: true, port: lan.getPort(), alias: lan.identity.alias, deviceId: lan.identity.deviceId, fingerprint: lan.identity.fingerprint, error: lan.getError(), dataRoot: dirname(options.configFile) } : { enabled: false, dataRoot: dirname(options.configFile) })
       if (lan && method === 'GET' && url.pathname === '/lan/devices') return json(response, 200, lan.listDevices())
       if (lan && method === 'POST' && url.pathname === '/lan/discovery/announce') { lan.discovery.announce(); return json(response, 200, { ok: true }) }
       if (lan && method === 'GET' && url.pathname === '/lan/transfers') return json(response, 200, lan.listTransfers())
@@ -364,6 +365,14 @@ export async function startLocalApi(options: ServerOptions) {
         const transfer = lan.transfers.get(decodeURIComponent(url.pathname.split('/')[3]))
         response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' })
         response.write(`data: ${JSON.stringify(transfer ?? {})}\n\n`); response.end(); return
+      }
+      if (lan && method === 'GET' && url.pathname === '/lan/incoming/events') {
+        response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'Access-Control-Allow-Origin': '*' })
+        const unsubscribe = lan.subscribeIncoming((items) => {
+          if (!response.writableEnded) response.write(`data: ${JSON.stringify(items)}\n\n`)
+        })
+        request.on('close', unsubscribe)
+        return
       }
       if (lan && method === 'GET' && url.pathname === '/lan/incoming') return json(response, 200, lan.listIncoming())
       if (lan && method === 'GET' && url.pathname === '/lan/history') return json(response, 200, copyLibrary.listHistory())

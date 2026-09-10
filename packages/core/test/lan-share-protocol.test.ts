@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -92,5 +93,21 @@ describe('LAN copy protocol', () => {
     expect((await sender.cancel(pending[0]!.id))?.status).toBe('cancelled')
     expect(manual.listIncoming()).toHaveLength(0)
     manual.stop(); sender.stop(); receiverB.stop(); receiverC.stop()
+  })
+
+  it('keeps the app alive when the configured HTTPS port is already occupied', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'koubox-lan-conflict-')); roots.push(root)
+    const library = await CopyLibraryStore.open(join(root, 'library.db'), join(root, 'backups'))
+    const blocker = createServer()
+    await new Promise<void>((resolve, reject) => { blocker.once('error', reject); blocker.listen(0, '0.0.0.0', resolve) })
+    const occupiedPort = (blocker.address() as { port: number }).port
+    const service = await LanShareService.create(root, occupiedPort, 'conflict', library, () => ({ lanAutoSave: true, lanHistoryEnabled: false, lanSaveDirectory: join(root, 'share') }))
+    service.start()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(service.getPort()).toBeGreaterThan(0)
+    expect(service.getPort()).not.toBe(occupiedPort)
+    expect(service.getError()).toBeUndefined()
+    service.stop()
+    await new Promise<void>((resolve, reject) => blocker.close((error) => error ? reject(error) : resolve()))
   })
 })

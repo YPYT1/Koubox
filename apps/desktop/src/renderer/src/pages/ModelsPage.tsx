@@ -11,6 +11,7 @@ import {
 import type { KouboxConfig, RuntimeStatus } from '@koubox/shared'
 import { ASR_MODEL_CATALOG } from '@koubox/shared'
 import { Button } from '../components/common/Button'
+import { Badge } from '@/components/ui/badge'
 import { GpuMemoryLiveChart, SystemMemoryLiveChart } from '../components/common/MemoryLiveChart'
 
 type ModelsPageProps = {
@@ -105,9 +106,10 @@ export function ModelsPage({
   const isVendorOk = Boolean(vendor?.ffmpeg.ready && vendor?.ytdlp.ready)
 
   return (
-    <div className="page-container">
+    <div className="page-container models-page">
       <div className="page-header-block models-page-header">
         <div>
+          <p className="page-eyebrow">ENGINE / 本地计算</p>
           <h1>模型与计算环境</h1>
           <p>实时监控本机内存、显卡显存、媒体组件及离线 AI 模型状态</p>
         </div>
@@ -123,8 +125,10 @@ export function ModelsPage({
       </div>
 
       <div className="models-env-stack">
-        <SystemMemoryLiveChart />
-        <GpuMemoryLiveChart />
+        <div className="models-monitor-grid">
+          <SystemMemoryLiveChart />
+          <GpuMemoryLiveChart />
+        </div>
 
         <section className="env-card env-card-wide env-vendor-panel">
           <div className="env-card-head">
@@ -132,15 +136,11 @@ export function ModelsPage({
               <FolderSimple weight="bold" />
               <span>媒体处理组件</span>
             </div>
-            <span
-              className="panel-title-badge"
-              style={{
-                color: isVendorOk ? '#10b981' : '#f59e0b',
-                background: isVendorOk ? '#ecfdf5' : '#fffbeb'
-              }}
+            <Badge
+              className={isVendorOk ? 'border-transparent bg-emerald-600 text-white hover:bg-emerald-600' : 'border-transparent bg-amber-600 text-white hover:bg-amber-600'}
             >
               {isVendorOk ? '全部组件就绪' : '部分组件缺失'}
-            </span>
+            </Badge>
           </div>
 
           <div className="env-vendor-grid">

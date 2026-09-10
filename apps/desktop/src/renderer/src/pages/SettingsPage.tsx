@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react'
 import {
-  FloppyDisk,
   Question,
   X,
   CheckCircle,
@@ -25,10 +24,12 @@ import type {
   YtdlpCookieStatus,
   YtdlpMaxHeight
 } from '@koubox/shared'
-import { LICENSE_INVALID_REASON, type LicenseSnapshot } from '@koubox/license-client/types'
+import { type LicenseSnapshot } from '@koubox/license-client/types'
 import { ASR_MODEL_OPTIONS, defaultPlatformAuth } from '@koubox/shared'
 import { Button } from '../components/common/Button'
 import { FormField, PathPicker } from '../components/common/FormControls'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 
 type GuideKind = 'ytdlp' | 'ffmpeg'
 
@@ -87,7 +88,7 @@ type AppDataRoots = {
   userData: string
   logs: string
 }
-type LanStatus = { enabled: boolean; port?: number; alias?: string; fingerprint?: string; dataRoot: string }
+type LanStatus = { enabled: boolean; port?: number; alias?: string; fingerprint?: string; error?: string; dataRoot: string }
 
 type ClearAppCacheResult = {
   cancelled: boolean
@@ -97,12 +98,6 @@ type ClearAppCacheResult = {
   config?: KouboxConfig
 }
 
-function formatLocalTime(value: string | null): string {
-  if (!value) return '—'
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
-  }).format(new Date(value))
-}
 
 const guides: Record<GuideKind, {
   title: string
@@ -187,7 +182,6 @@ export function SettingsPage({
 }: SettingsPageProps) {
   const initialRefreshStartedRef = useRef(false)
   const [guide, setGuide] = useState<GuideKind | null>(null)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [detecting, setDetecting] = useState(false)
   const [openingLogin, setOpeningLogin] = useState<YtdlpCookiePlatformId | null>(null)
   const [checkingCookies, setCheckingCookies] = useState(false)
@@ -215,7 +209,6 @@ export function SettingsPage({
   const [appDataRoots, setAppDataRoots] = useState<AppDataRoots | null>(null)
   const [lanStatus, setLanStatus] = useState<LanStatus | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
-  const [licenseClock, setLicenseClock] = useState(Date.now())
   const [secretClickCount, setSecretClickCount] = useState(0)
   const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number }>>([])
   const secretClickTimerRef = useRef<number | null>(null)
@@ -306,19 +299,6 @@ export function SettingsPage({
       .then((status) => setLanStatus(status))
       .catch(() => setLanStatus(null))
   }, [])
-
-  useEffect(() => {
-    if (license?.phase !== 'grace') return
-    const timer = window.setInterval(() => setLicenseClock(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [license?.phase])
-
-  const graceRemaining = license?.graceEndsAt
-    ? Math.max(0, Date.parse(license.graceEndsAt) - licenseClock)
-    : 0
-  const graceTime = `${String(Math.floor(graceRemaining / 3_600_000)).padStart(2, '0')}:${String(Math.floor(graceRemaining / 60_000) % 60).padStart(2, '0')}:${String(Math.floor(graceRemaining / 1_000) % 60).padStart(2, '0')}`
-  const licenseReason = license?.invalidCode ? LICENSE_INVALID_REASON[license.invalidCode] : '授权服务暂时无法确认当前凭据'
-  const graceHours = license ? Math.round(license.graceDurationMs / 3_600_000) : 2
 
   const handleClearCache = async () => {
     setClearingCache(true)
@@ -433,6 +413,27 @@ export function SettingsPage({
     }
   }
 
+  const handleSectionJump = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault()
+    const link = event.currentTarget
+    const page = link.closest('.settings-page')
+    const viewport = page?.closest<HTMLElement>('.workspace-viewport')
+    const navigation = link.closest('nav')
+    const section = page?.querySelector<HTMLDetailsElement>(link.hash)
+    if (!viewport || !navigation || !section) return
+
+    section.open = true
+    const navigationStyle = window.getComputedStyle(navigation)
+    const offset = navigationStyle.position === 'sticky'
+      ? (Number.parseFloat(navigationStyle.top) || 0) + navigation.offsetHeight + 12
+      : 12
+    viewport.scrollTo({
+      top: viewport.scrollTop + section.getBoundingClientRect().top - viewport.getBoundingClientRect().top - viewport.clientTop - offset,
+      behavior: 'instant'
+    })
+    section.querySelector('summary')?.focus({ preventScroll: true })
+  }
+
   const handleDetect = async () => {
     setDetecting(true)
     try {
@@ -447,9 +448,10 @@ export function SettingsPage({
   }
 
   return (
-    <div className="page-container" style={{ maxWidth: 840 }}>
+    <div className="page-container settings-page">
       <div className="page-header-block models-page-header">
         <div>
+          <p className="page-eyebrow">PREFERENCES / 偏好设置</p>
           <h1>全局设置</h1>
           <p>配置输出目录、语种默认值、下载参数，以及高级运行选项</p>
         </div>
@@ -465,30 +467,24 @@ export function SettingsPage({
         </Button>
       </div>
 
-      {license && (license.phase === 'grace' || license.phase === 'locked') && (
-        <div className={`license-alert license-alert-${license.phase}`} role="alert">
-          <div className="license-alert-content">
-            <strong>{license.phase === 'locked' ? '授权已暂停，需要更新凭据' : `授权需要续期（仍可使用 ${graceHours} 小时）`}</strong>
-            <span>
-              {license.phase === 'locked'
-                ? `宽限已在 ${formatLocalTime(license.graceEndsAt)} 结束。进行中的任务已取消；已有输出不会删除。输入一组正确的新凭据后会立即恢复。`
-                : `${licenseReason}。剩余 ${graceTime}；请在 ${formatLocalTime(license.graceEndsAt)} 前输入新凭据。到期后才会取消任务并暂停新操作。`}
-            </span>
-          </div>
-          <Button className="license-alert-action" type="button" variant={license.phase === 'locked' ? 'danger' : 'primary'} onClick={onOpenLicenseEditor}>输入新凭据</Button>
-        </div>
-      )}
 
+      <nav className="settings-jump-nav" aria-label="设置分区">
+        <a href="#settings-storage" onClick={handleSectionJump}>文件与存储</a>
+        <a href="#settings-defaults" onClick={handleSectionJump}>任务默认</a>
+        <a href="#settings-download" onClick={handleSectionJump}>下载与登录</a>
+        <a href="#settings-sharing" onClick={handleSectionJump}>局域网分享</a>
+        <a href="#settings-advanced" onClick={handleSectionJump}>高级选项</a>
+      </nav>
       <form className="settings-form-stack" onSubmit={onSave}>
-        <div className="panel-box">
-          <div className="panel-title">
-            <h3>文件与存储路径</h3>
-            <span className="panel-title-badge">本地配置</span>
-          </div>
+        <details id="settings-storage" className="panel-box settings-collapsible" open>
+          <summary className="panel-title settings-section-summary">
+            <span className="settings-summary-copy"><h3>文件与存储路径</h3></span>
+            <CaretDown size={16} weight="bold" />
+          </summary>
 
+          <div className="settings-storage-grid">
           <FormField
             label="默认成果输出目录"
-            hint="下载的素材、提取的音频以及生成的 SRT 默认归档到此目录。ASR 模型路径在「模型与环境」中单独设置。"
           >
             <PathPicker
               value={config.outputDirectory}
@@ -500,11 +496,6 @@ export function SettingsPage({
 
           <FormField
             label="清理缓存"
-            hint={
-              appDataRoots
-                ? `${appDataRoots.mode === 'packaged' ? '打包模式' : '开发模式'}：日志在 ${appDataRoots.logs}；用户数据在 ${appDataRoots.userData}。会清理登录状态与任务记录；磁盘 Cache 下次启动清干净。不会删除模型、工具与输出视频。`
-                : '清理缓存、登录状态与任务记录。不会删除模型、工具与输出视频。'
-            }
           >
             <Button
               type="button"
@@ -519,6 +510,8 @@ export function SettingsPage({
             </Button>
           </FormField>
 
+          </div>
+          <div className="settings-runtime-grid">
           <FormField
             label="yt-dlp 目录"
             labelAction={(
@@ -566,16 +559,17 @@ export function SettingsPage({
             />
             <VendorIntegrity check={runtime?.vendor.ffmpeg} />
           </FormField>
-        </div>
-
-        <div className="panel-box">
-          <div className="panel-title">
-            <h3>任务默认</h3>
-            <span className="panel-title-badge">语种与行为</span>
           </div>
+        </details>
+
+        <details id="settings-defaults" className="panel-box settings-collapsible" open>
+          <summary className="panel-title settings-section-summary">
+            <span className="settings-summary-copy"><h3>任务默认</h3></span>
+            <CaretDown size={16} weight="bold" />
+          </summary>
 
           <FormField label="翻译目标语言">
-            <input className="input-text" value="简体中文（固定）" disabled readOnly />
+            <Input value="简体中文（固定）" disabled readOnly />
           </FormField>
 
           <FormField label="ASR 语种" hint="Whisper 识别语种。繁体与简体在识别阶段均映射为中文。">
@@ -610,17 +604,16 @@ export function SettingsPage({
             />
             <span>任务完成后自动打开输出文件夹</span>
           </label>
-        </div>
+        </details>
 
-        <div className="panel-box">
-          <div className="panel-title">
-            <h3>下载与平台登录</h3>
-            <span className="panel-title-badge">公开解析优先</span>
-          </div>
+        <details id="settings-download" className="panel-box settings-collapsible" open>
+          <summary className="panel-title settings-section-summary">
+            <span className="settings-summary-copy"><h3>下载与平台登录</h3></span>
+            <CaretDown size={16} weight="bold" />
+          </summary>
 
           <FormField label="代理地址" hint="例如 http://127.0.0.1:7897；公开解析、应用内登录验证和 yt-dlp 下载共用此代理。">
-            <input
-              className="input-text"
+            <Input
               value={config.ytdlpProxy}
               onChange={(e) => onChange({ ...config, ytdlpProxy: e.target.value })}
               placeholder="http://127.0.0.1:7897"
@@ -795,42 +788,37 @@ export function SettingsPage({
           </FormField>
 
           <FormField label="附加参数" hint="按空格拆分为命令行参数，例如 --geo-bypass --sleep-interval 2">
-            <input
-              className="input-text"
+            <Input
               value={config.ytdlpExtraArgs}
               onChange={(e) => onChange({ ...config, ytdlpExtraArgs: e.target.value })}
               placeholder="--geo-bypass"
             />
           </FormField>
-        </div>
+        </details>
 
-        <div className={`panel-box advanced-panel ${advancedOpen ? 'open' : ''}`}>
-          <button
-            type="button"
-            className="advanced-toggle"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            aria-expanded={advancedOpen}
-          >
-            <span>
-              <strong>高级</strong>
-              <small>调试、并发、Whisper chunk、Python 路径</small>
-            </span>
-            <CaretDown size={16} weight="bold" className={advancedOpen ? 'rotated' : ''} />
-          </button>
+        <details id="settings-sharing" className="panel-box settings-collapsible lan-settings-panel" open>
+          <summary className="panel-title settings-section-summary">
+            <span className="settings-summary-copy"><h3>局域网文案分享</h3></span>
+            <CaretDown size={16} weight="bold" />
+          </summary>
+          <FormField label="启用局域网分享"><div className="switch-field"><span className="switch-field-label">{config.lanEnabled ? '已启用' : '已关闭'}</span><Switch checked={config.lanEnabled} onCheckedChange={(checked) => onChange({ ...config, lanEnabled: checked })} /></div></FormField>
+          <div className="settings-inline-grid"><FormField label="广播别名"><Input value={config.lanAlias} onChange={(e) => onChange({ ...config, lanAlias: e.target.value })} /></FormField><FormField label="服务端口"><Input type="number" min={1} max={65535} value={config.lanPort} onChange={(e) => onChange({ ...config, lanPort: Math.max(1, Number(e.target.value) || 53318) })} /></FormField></div>
+          <FormField label="自动保存接收内容"><div className="switch-field"><span className="switch-field-label">{config.lanAutoSave ? '收到后直接保存' : '收到后询问'}</span><Switch checked={config.lanAutoSave} onCheckedChange={(checked) => onChange({ ...config, lanAutoSave: checked })} /></div></FormField>
+          <FormField label="保存目录"><div className="settings-path-row"><Input value={config.lanSaveDirectory} onChange={(e) => onChange({ ...config, lanSaveDirectory: e.target.value })} /><Button type="button" variant="secondary" size="sm" onClick={() => void handleSelectPath('lanSaveDirectory', '选择分享保存目录')}>选择</Button></div></FormField>
+          <FormField label="保存分享历史"><div className="switch-field"><span className="switch-field-label">{config.lanHistoryEnabled ? '已记录' : '不记录'}</span><Switch checked={config.lanHistoryEnabled} onCheckedChange={(checked) => onChange({ ...config, lanHistoryEnabled: checked })} /></div></FormField>
+          <div className="lan-status-panel">
+            <span className={lanStatus?.error ? 'lan-status-error' : ''}>服务状态：{lanStatus?.error ? `异常 · ${lanStatus.error}` : lanStatus?.enabled ? `运行中 · 端口 ${lanStatus.port}` : '未启用'}{lanStatus?.alias ? ` · ${lanStatus.alias}` : ''}</span>
+            <span>设备指纹：{lanStatus?.fingerprint ?? '读取中…'}</span>
+            <span>数据根目录：{appDataRoots?.userData ?? '读取中…'}</span>
+          </div>
+        </details>
 
-          {advancedOpen && (
-            <div className="advanced-body">
-              <div className="panel-box settings-subpanel">
-                <div className="section-heading"><div><strong>局域网文案分享</strong><small>仅与其他口播匣互通，接收内容会进入文案库。</small></div></div>
-                <FormField label="启用局域网分享"><div className="switch-field" onClick={() => onChange({ ...config, lanEnabled: !config.lanEnabled })}><span className="switch-field-label">{config.lanEnabled ? '已启用' : '已关闭'}</span><button type="button" role="switch" aria-checked={config.lanEnabled} className={`ui-switch ${config.lanEnabled ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
-                <div className="settings-inline-grid"><FormField label="广播别名"><input className="input-text" value={config.lanAlias} onChange={(e) => onChange({ ...config, lanAlias: e.target.value })} /></FormField><FormField label="服务端口"><input className="input-text" type="number" min={1} max={65535} value={config.lanPort} onChange={(e) => onChange({ ...config, lanPort: Math.max(1, Number(e.target.value) || 53318) })} /></FormField></div>
-                <FormField label="自动保存接收内容"><div className="switch-field" onClick={() => onChange({ ...config, lanAutoSave: !config.lanAutoSave })}><span className="switch-field-label">{config.lanAutoSave ? '收到后直接保存' : '收到后询问'}</span><button type="button" role="switch" aria-checked={config.lanAutoSave} className={`ui-switch ${config.lanAutoSave ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
-                <FormField label="保存目录"><div className="settings-path-row"><input className="input-text" value={config.lanSaveDirectory} onChange={(e) => onChange({ ...config, lanSaveDirectory: e.target.value })} /><Button type="button" variant="secondary" size="sm" onClick={() => void handleSelectPath('lanSaveDirectory', '选择分享保存目录')}>选择</Button></div></FormField>
-                <FormField label="保存分享历史"><div className="switch-field" onClick={() => onChange({ ...config, lanHistoryEnabled: !config.lanHistoryEnabled })}><span className="switch-field-label">{config.lanHistoryEnabled ? '已记录' : '不记录'}</span><button type="button" role="switch" aria-checked={config.lanHistoryEnabled} className={`ui-switch ${config.lanHistoryEnabled ? 'on' : ''}`}><span className="ui-switch-thumb" /></button></div></FormField>
-                <div className="muted-text">服务状态：{lanStatus?.enabled ? `运行中 · 端口 ${lanStatus.port}` : '未启用'}{lanStatus?.alias ? ` · ${lanStatus.alias}` : ''}</div>
-                <div className="muted-text">设备指纹：{lanStatus?.fingerprint ?? '读取中…'}</div>
-                <div className="muted-text">数据根目录：{appDataRoots?.userData ?? '读取中…'}</div>
-              </div>
+        <details id="settings-advanced" className="panel-box settings-collapsible advanced-panel">
+          <summary className="panel-title settings-section-summary">
+            <span className="settings-summary-copy"><h3>高级</h3></span>
+            <CaretDown size={16} weight="bold" />
+          </summary>
+          <div className="advanced-body">
               <div className="debug-mode-row">
                 <div
                   className="switch-field"
@@ -872,8 +860,7 @@ export function SettingsPage({
               </div>
 
               <FormField label="最大并发任务数" hint="同时运行的流水线数量，受显存限制，建议从 1 开始。">
-                <input
-                  className="input-text"
+                <Input
                   type="number"
                   min={1}
                   step={1}
@@ -931,8 +918,7 @@ export function SettingsPage({
               */}
 
               <FormField label="Whisper chunk_length_s" hint="长音频可适当增大；显存不足时可减小。">
-                <input
-                  className="input-text"
+                <Input
                   type="number"
                   min={1}
                   step={1}
@@ -946,18 +932,11 @@ export function SettingsPage({
                 />
               </FormField>
 
-              <FormField label="Python 可执行文件" hint="留空则使用打包内置解释器或开发环境的 uv。">
-                <PathPicker
-                  value={config.pythonExecutable}
-                  onChange={(val) => onChange({ ...config, pythonExecutable: val })}
-                  onBrowse={() =>
-                    handleSelectFile('pythonExecutable', '选择 python.exe', [
-                      { name: 'Python', extensions: ['exe'] },
-                      { name: '所有文件', extensions: ['*'] }
-                    ])
-                  }
-                  placeholder="例如 C:/Python312/python.exe"
-                />
+              <FormField label="Python 运行环境" hint="固定使用 D:\\Project\\Koubox 主分支的 python/.venv，不支持切换或回退。">
+                <div className="fixed-runtime-path" title={config.pythonExecutable}>
+                  <span>{config.pythonExecutable}</span>
+                  <small>主分支固定环境</small>
+                </div>
               </FormField>
 
               {/* 隐藏的授权入口按钮 */}
@@ -980,16 +959,14 @@ export function SettingsPage({
                   ))}
                 </button>
               </div>
-            </div>
-          )}
-        </div>
+          </div>
+        </details>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Button
             variant="primary"
             size="lg"
             type="submit"
-            icon={<FloppyDisk size={18} weight="bold" />}
           >
             保存配置更改
           </Button>

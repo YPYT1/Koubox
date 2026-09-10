@@ -1286,17 +1286,11 @@ export class TaskManager {
 
   private resolvePythonCommand(): { command: string; prefix: string[] } {
     const configured = this.options.getConfig().pythonExecutable.trim()
-    if (configured && existsSync(configured)) {
-      return { command: configured, prefix: ['-m', 'koubox_runtime'] }
+    const command = configured
+    if (!command || !existsSync(command)) {
+      throw new Error(`Python 运行环境不存在：${command || join(this.options.pythonProjectDirectory, '.venv', 'Scripts', 'python.exe')}`)
     }
-    const venvPython = join(this.options.pythonProjectDirectory, '.venv', 'Scripts', 'python.exe')
-    if (existsSync(venvPython)) {
-      return { command: venvPython, prefix: ['-m', 'koubox_runtime'] }
-    }
-    if (this.options.bundledPythonExecutable && existsSync(this.options.bundledPythonExecutable)) {
-      return { command: this.options.bundledPythonExecutable, prefix: ['-m', 'koubox_runtime'] }
-    }
-    return { command: 'uv', prefix: ['run', '--project', this.options.pythonProjectDirectory, 'python', '-m', 'koubox_runtime'] }
+    return { command, prefix: ['-m', 'koubox_runtime'] }
   }
 
   private workerEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {

@@ -10,10 +10,10 @@ import {
 } from '../../monitor/runtimeMonitor'
 
 /** 图表走线比下方阴影更深，文字颜色由 CSS 控制为黑色系 */
-const CHART_GOLD = {
-  line: '#C9B07A',
-  fillTop: 'rgba(212, 188, 130, 0.2)',
-  fillBottom: 'rgba(212, 188, 130, 0.04)'
+const CHART_BLUE = {
+  line: '#2563EB',
+  fillTop: 'rgba(37, 99, 235, 0.25)',
+  fillBottom: 'rgba(37, 99, 235, 0.04)'
 }
 
 function formatGiB(mib?: number): string {
@@ -80,11 +80,11 @@ function drawChart(canvas: HTMLCanvasElement, samples: MonitorPoint[], windowMs:
   const totalMiB = visible[visible.length - 1]?.totalMiB ?? visible[0]?.totalMiB ?? 1024
   const maxY = totalMiB > 0 ? totalMiB : Math.max(...visible.map((item) => item.usedMiB), 1024)
 
-  ctx.fillStyle = '#f8fafc'
+  ctx.fillStyle = '#fafafa'
   ctx.fillRect(0, 0, width, height)
 
-  ctx.strokeStyle = 'rgba(15, 23, 42, 0.08)'
-  ctx.fillStyle = 'rgba(100, 116, 139, 0.8)'
+  ctx.strokeStyle = 'rgba(24, 24, 27, 0.08)'
+  ctx.fillStyle = 'rgba(82, 82, 91, 0.9)'
   ctx.font = '10px var(--font-sans, system-ui, sans-serif)'
   ctx.textAlign = 'right'
   ctx.lineWidth = 1
@@ -131,8 +131,8 @@ function drawChart(canvas: HTMLCanvasElement, samples: MonitorPoint[], windowMs:
   ctx.closePath()
 
   const gradient = ctx.createLinearGradient(0, pad.top, 0, baseline)
-  gradient.addColorStop(0, CHART_GOLD.fillTop)
-  gradient.addColorStop(1, CHART_GOLD.fillBottom)
+  gradient.addColorStop(0, CHART_BLUE.fillTop)
+  gradient.addColorStop(1, CHART_BLUE.fillBottom)
   ctx.fillStyle = gradient
   ctx.fill()
 
@@ -141,7 +141,7 @@ function drawChart(canvas: HTMLCanvasElement, samples: MonitorPoint[], windowMs:
     if (index === 0) ctx.moveTo(point.x, point.y)
     else ctx.lineTo(point.x, point.y)
   })
-  ctx.strokeStyle = CHART_GOLD.line
+  ctx.strokeStyle = CHART_BLUE.line
   ctx.lineWidth = 1.75
   ctx.lineJoin = 'round'
   ctx.stroke()

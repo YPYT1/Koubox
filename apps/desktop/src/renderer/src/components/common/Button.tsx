@@ -1,5 +1,7 @@
 import React from 'react'
-import { CircleNotch } from '@phosphor-icons/react'
+import { Loader2 } from 'lucide-react'
+import { Button as ShadcnButton } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export type ButtonVariant = 'primary' | 'primary-blue' | 'secondary' | 'danger' | 'ghost'
 export type ButtonSize = 'sm' | 'md' | 'lg'
@@ -12,6 +14,20 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   children?: React.ReactNode
 }
 
+const variantMap = {
+  primary: 'default',
+  'primary-blue': 'default',
+  secondary: 'outline',
+  danger: 'destructive',
+  ghost: 'ghost'
+} as const
+
+const sizeMap = {
+  sm: 'sm',
+  md: 'default',
+  lg: 'lg'
+} as const
+
 export function Button({
   variant = 'secondary',
   size = 'md',
@@ -20,34 +36,18 @@ export function Button({
   disabled,
   children,
   className = '',
-  style,
   ...props
 }: ButtonProps) {
-  let variantClass = 'btn-secondary'
-  if (variant === 'primary') variantClass = 'btn-primary'
-  else if (variant === 'primary-blue') variantClass = 'btn-primary blue'
-  else if (variant === 'danger') variantClass = 'btn-danger'
-  else if (variant === 'ghost') variantClass = 'btn-ghost'
-
-  const sizeStyles: Record<ButtonSize, React.CSSProperties> = {
-    sm: { height: 32, padding: '0 10px', fontSize: 12 },
-    md: { height: 38, padding: '0 14px', fontSize: 12.5 },
-    lg: { height: 44, padding: '0 20px', fontSize: 13.5 }
-  }
-
   return (
-    <button
-      className={`${variantClass} ${className}`}
-      style={{ ...sizeStyles[size], ...style }}
+    <ShadcnButton
+      variant={variantMap[variant]}
+      size={sizeMap[size]}
       disabled={disabled || loading}
+      className={cn(className)}
       {...props}
     >
-      {loading ? (
-        <CircleNotch className="spin" size={size === 'sm' ? 14 : 16} />
-      ) : (
-        icon
-      )}
-      {children && <span>{children}</span>}
-    </button>
+      {loading ? <Loader2 className="size-4 animate-spin" /> : icon}
+      {children ? <span>{children}</span> : null}
+    </ShadcnButton>
   )
 }

@@ -85,10 +85,15 @@ export class RuntimeStore {
   ) {}
 
   private applyPinned(config: KouboxConfig): KouboxConfig {
-    // 打包后锁定工具路径，但允许用户自定义模型路径
+    // 主分支运行资源固定，源码副本只保存应用代码和配置。
     if (!this.pinBundledPaths) return config
     return {
       ...config,
+      modelsDirectory: this.defaults.modelsDirectory,
+      asrModelDirectory: this.defaults.asrModelDirectory,
+      asrLightModelDirectory: this.defaults.asrLightModelDirectory,
+      translationModelDirectory: this.defaults.translationModelDirectory,
+      demucsModelDirectory: this.defaults.demucsModelDirectory,
       ytdlpDirectory: this.defaults.ytdlpDirectory,
       denoDirectory: this.defaults.denoDirectory,
       ffmpegDirectory: this.defaults.ffmpegDirectory,
@@ -198,7 +203,8 @@ export class RuntimeStore {
     if (!Number.isFinite(config.whisperChunkLengthS) || config.whisperChunkLengthS < 1) {
       config.whisperChunkLengthS = this.defaults.whisperChunkLengthS
     }
-    if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
+    if (this.defaults.pythonExecutable) config.pythonExecutable = this.defaults.pythonExecutable
+    else if (typeof config.pythonExecutable !== 'string') config.pythonExecutable = this.defaults.pythonExecutable
     if (typeof config.debugMode !== 'boolean') config.debugMode = this.defaults.debugMode
     if (typeof config.lanEnabled !== 'boolean') config.lanEnabled = this.defaults.lanEnabled
     if (typeof config.lanAlias !== 'string' || !config.lanAlias.trim()) config.lanAlias = this.defaults.lanAlias

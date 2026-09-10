@@ -98,9 +98,13 @@ function usePortableUserData(): void {
 
 usePortableUserData()
 
+// 开发模式只复用主分支的运行环境；模型、vendor、Python venv 不从当前副本寻找。
+const MAIN_BRANCH_ROOT = 'D:\\Project\\Koubox'
+
 function findModelsDirectory(): string {
-  return process.env.KOUBOX_MODELS_DIR
-    ?? (app.isPackaged ? join(process.resourcesPath, 'models') : resolve(process.cwd(), '../../models'))
+  const directory = app.isPackaged ? join(process.resourcesPath, 'models') : join(MAIN_BRANCH_ROOT, 'models')
+  if (!existsSync(directory)) throw new Error(`运行环境缺少模型目录：${directory}`)
+  return directory
 }
 
 function findWindowIcon(): string {
@@ -110,9 +114,11 @@ function findWindowIcon(): string {
 }
 
 function findVendorDirectory(): string {
-  return app.isPackaged
+  const directory = app.isPackaged
     ? join(process.resourcesPath, 'vendor')
-    : resolve(process.cwd(), '../../vendor')
+    : join(MAIN_BRANCH_ROOT, 'vendor')
+  if (!existsSync(directory)) throw new Error(`运行环境缺少 vendor 目录：${directory}`)
+  return directory
 }
 
 function findProjectDirectory(): string {
@@ -120,11 +126,17 @@ function findProjectDirectory(): string {
 }
 
 function findPythonProjectDirectory(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'python') : resolve(process.cwd(), '../../python')
+  const directory = app.isPackaged ? join(process.resourcesPath, 'python') : join(MAIN_BRANCH_ROOT, 'python')
+  if (!existsSync(directory)) throw new Error(`运行环境缺少 Python 项目：${directory}`)
+  return directory
 }
 
 function findBundledPythonExecutable(): string | undefined {
-  return app.isPackaged ? join(process.resourcesPath, 'python', 'Scripts', 'python.exe') : undefined
+  const executable = app.isPackaged
+    ? join(process.resourcesPath, 'python', 'Scripts', 'python.exe')
+    : join(MAIN_BRANCH_ROOT, 'python', '.venv', 'Scripts', 'python.exe')
+  if (!existsSync(executable)) throw new Error(`运行环境缺少 Python：${executable}`)
+  return executable
 }
 
 function patchBundledPythonHome(): void {
@@ -309,7 +321,7 @@ async function createWindow(): Promise<void> {
       translationMaxNewTokens: 4096,
       translationTopP: 0.8,
       whisperChunkLengthS: 30,
-      pythonExecutable: '',
+      pythonExecutable: findBundledPythonExecutable()!,
       debugMode: false,
       lanEnabled: true,
       lanAlias: '口播匣',
@@ -326,11 +338,11 @@ async function createWindow(): Promise<void> {
       directory,
       fileStem,
       onLine,
-      pythonExecutable: findBundledPythonExecutable() ?? join(findPythonProjectDirectory(), '.venv', 'Scripts', 'python.exe'),
+      pythonExecutable: findBundledPythonExecutable()!,
       pythonSourceDirectory: join(findPythonProjectDirectory(), 'src'),
       ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin')
     }),
-    pinBundledPaths: app.isPackaged,
+    pinBundledPaths: true,
     resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: resolveFacebookAnonymousWithChromium,
     resolvePlatformAuthentication,

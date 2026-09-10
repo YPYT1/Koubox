@@ -7,9 +7,9 @@ import type { LanIdentity } from './identity.js'
 export type IncomingHandler = (id: string, payload: CopySharePayload) => { accepted: boolean; waiting?: boolean }
 export type CancelHandler = (id: string) => void
 
-export function createLanHttpsServer(identity: LanIdentity, port: number, onIncoming: IncomingHandler, getTransfer?: (id: string) => unknown, onCancel?: CancelHandler): https.Server {
+export function createLanHttpsServer(identity: LanIdentity, port: number, onIncoming: IncomingHandler, getTransfer?: (id: string) => unknown, onCancel?: CancelHandler, onError?: (error: Error) => void): https.Server {
   const sessions = new Map<string, string>()
-  return https.createServer({ key: identity.privateKey, cert: identity.certificate }, async (request, response) => {
+  const server = https.createServer({ key: identity.privateKey, cert: identity.certificate }, async (request, response) => {
     const url = new URL(request.url ?? '/', 'https://koubox.local')
     if (request.method === 'GET' && /^\/v1\/transfers\/[^/]+$/.test(url.pathname)) {
       const token = url.searchParams.get('sessionToken')
@@ -38,5 +38,17 @@ export function createLanHttpsServer(identity: LanIdentity, port: number, onInco
     } catch (error) {
       response.writeHead(400, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
     }
-  }).listen(port, '0.0.0.0')
+  })
+  let fallbackAttempted = false
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    if (!fallbackAttempted && (error.code === 'EACCES' || error.code === 'EADDRINUSE')) {
+      fallbackAttempted = true
+      // ponytail: one OS-assigned fallback port; configurable port probing only when users need strict port pinning.
+      server.listen(0, '0.0.0.0')
+      return
+    }
+    onError?.(error instanceof Error ? error : new Error(String(error)))
+  })
+  server.listen(port, '0.0.0.0')
+  return server
 }

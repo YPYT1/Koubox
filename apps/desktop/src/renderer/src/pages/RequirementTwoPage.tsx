@@ -339,34 +339,15 @@ export function RequirementTwoPage({
               ) : null}
             </h4>
             <div className="viral-text-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                style={{ height: 32 }}
-                onClick={() => setSrtExpanded((value) => !value)}
-              >
-                {srtExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+              <Button type="button" variant="secondary" size="sm" onClick={() => setSrtExpanded((value) => !value)} icon={srtExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}>
                 {srtExpanded ? '收起' : '展开'}
-              </button>
-              <button
-                type="button"
-                className={`btn-secondary ${copied ? 'btn-copy-done' : ''}`}
-                style={{ height: 32 }}
-                disabled={!segments.length}
-                onClick={() => void handleCopySrt()}
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
+              </Button>
+              <Button type="button" variant="secondary" size="sm" className={copied ? 'btn-copy-done' : ''} disabled={!segments.length} onClick={() => void handleCopySrt()} icon={copied ? <Check size={14} /> : <Copy size={14} />}>
                 {copied ? '已复制' : '复制 SRT'}
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                style={{ height: 32, padding: '0 14px', fontSize: 12 }}
-                disabled={!task?.artifacts.srt}
-                onClick={() => void handleExportFiles()}
-              >
+              </Button>
+              <Button type="button" variant="primary" size="sm" disabled={!task?.artifacts.srt} onClick={() => void handleExportFiles()}>
                 另存 SRT
-              </button>
+              </Button>
             </div>
           </div>
 

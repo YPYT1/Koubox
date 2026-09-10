@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { ClipboardText, Clock, FileText, FolderOpen, Trash, X, Copy, Check } from '@phosphor-icons/react'
+import { ClipboardText, Clock, FileText, FolderOpen, Trash, Copy, Check } from '@phosphor-icons/react'
 import { detectPlatform, req1UsesSeparateVocals, toUserTaskMessage, type TaskArtifacts, type TaskKind, type TaskSnapshot } from '@koubox/shared'
 import { Button } from '../components/common/Button'
+import { Switch } from '@/components/ui/switch'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 type TaskHistoryPageProps = {
   kind: TaskKind
@@ -158,12 +160,9 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
     }
   }
 
-  const handleDeleteFilesToggle = () => {
-    setDeleteFilesOnRemove((current) => {
-      const next = !current
-      writeDeleteFilesPreference(next)
-      return next
-    })
+  const handleDeleteFilesToggle = (enabled: boolean) => {
+    writeDeleteFilesPreference(enabled)
+    setDeleteFilesOnRemove(enabled)
   }
 
   const handleDelete = async (taskId: string) => {
@@ -215,22 +214,11 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
         </div>
         <div className="history-page-actions">
           <span className="history-delete-files-label">删除时同时删除文件</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={deleteFilesOnRemove}
+          <Switch
+            checked={deleteFilesOnRemove}
+            onCheckedChange={handleDeleteFilesToggle}
             aria-label="删除时同时删除文件"
-            className={`ui-switch ${deleteFilesOnRemove ? 'on' : ''}`}
-            onClick={handleDeleteFilesToggle}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                handleDeleteFilesToggle()
-              }
-            }}
-          >
-            <span className="ui-switch-thumb" />
-          </button>
+          />
           {outputDirectory && (
             <Button
               variant="secondary"
@@ -363,45 +351,45 @@ export function TaskHistoryPage({ kind, outputDirectory, onShowToast }: TaskHist
           })}
         </div>
       )}
-      {preview && (
-        <div className="history-preview-overlay" onClick={() => setPreview(null)}>
-          <div className="history-preview-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <div className="history-preview-head">
-              <h3>{preview.title}</h3>
-              <div className="history-preview-actions">
-                {preview.type === 'text' && (
-                  <button
-                    type="button"
-                    className={`btn-secondary history-preview-copy ${previewCopied ? 'is-copied' : ''}`}
-                    style={{ height: 30, padding: '0 10px', fontSize: 12 }}
-                    onClick={() => void handleCopyPreviewText()}
-                    disabled={previewTextLoading || !previewText.trim()}
-                  >
-                    {previewCopied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
-                    <span>{previewCopied ? '已复制' : '复制全文'}</span>
-                  </button>
+      <Dialog open={Boolean(preview)} onOpenChange={(open) => { if (!open) setPreview(null) }}>
+        <DialogContent className="max-w-3xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          {preview ? (
+            <>
+              <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b px-5 py-3">
+                <DialogTitle className="truncate text-base">{preview.title}</DialogTitle>
+                <div className="flex shrink-0 items-center gap-2">
+                  {preview.type === 'text' && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className={`history-preview-copy ${previewCopied ? 'is-copied' : ''}`}
+                      onClick={() => void handleCopyPreviewText()}
+                      disabled={previewTextLoading || !previewText.trim()}
+                      icon={previewCopied ? <Check size={14} weight="bold" /> : <Copy size={14} />}
+                    >
+                      {previewCopied ? '已复制' : '复制全文'}
+                    </Button>
+                  )}
+                </div>
+              </DialogHeader>
+              <div className="history-preview-body max-h-[70vh] overflow-auto px-5 py-4">
+                {preview.type === 'video' && (
+                  <video className="history-preview-video" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
                 )}
-                <button type="button" className="history-preview-close" onClick={() => setPreview(null)} aria-label="关闭预览">
-                  <X size={16} weight="bold" />
-                </button>
+                {preview.type === 'audio' && (
+                  <audio className="history-preview-audio" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
+                )}
+                {preview.type === 'text' && (
+                  previewTextLoading
+                    ? <div className="history-preview-loading">正在读取内容…</div>
+                    : <pre className="history-preview-text">{previewText || '内容为空。'}</pre>
+                )}
               </div>
-            </div>
-            <div className="history-preview-body">
-              {preview.type === 'video' && (
-                <video className="history-preview-video" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
-              )}
-              {preview.type === 'audio' && (
-                <audio className="history-preview-audio" controls preload="metadata" src={window.koubox.mediaUrl(preview.path)} />
-              )}
-              {preview.type === 'text' && (
-                previewTextLoading
-                  ? <div className="history-preview-loading">正在读取内容…</div>
-                  : <pre className="history-preview-text">{previewText || '内容为空。'}</pre>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

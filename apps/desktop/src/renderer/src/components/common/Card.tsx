@@ -1,4 +1,6 @@
 import React from 'react'
+import { Card as UiCard, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 
 export interface CardProps {
   title?: React.ReactNode
@@ -11,17 +13,17 @@ export interface CardProps {
 
 export function Card({ title, badge, actions, children, className = '', style }: CardProps) {
   return (
-    <div className={`panel-box ${className}`} style={style}>
+    <UiCard className={cn('gap-4 py-4 shadow-sm', className)} style={style}>
       {(title || badge || actions) && (
-        <div className="panel-title">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {typeof title === 'string' ? <h3>{title}</h3> : title}
+        <CardHeader className="flex flex-row items-center justify-between gap-3 px-5 py-0">
+          <div className="flex min-w-0 items-center gap-2">
+            {typeof title === 'string' ? <CardTitle className="text-base">{title}</CardTitle> : title}
             {badge}
           </div>
-          {actions && <div className="card-actions">{actions}</div>}
-        </div>
+          {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+        </CardHeader>
       )}
-      {children}
-    </div>
+      <CardContent className="px-5">{children}</CardContent>
+    </UiCard>
   )
 }

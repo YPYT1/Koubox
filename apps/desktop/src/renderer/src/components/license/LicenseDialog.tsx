@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Key, WarningCircle, X } from '@phosphor-icons/react'
+import { Key, WarningCircle } from '@phosphor-icons/react'
 import type { LicenseCredentials, LicenseSnapshot } from '@koubox/license-client'
 import { Button } from '../common/Button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 
 type LicenseDialogProps = {
   open: boolean
@@ -32,8 +35,6 @@ export function LicenseDialog({ open, snapshot, onClose, onSubmit, onVerify }: L
     setSubmitError(null)
   }, [open])
 
-  if (!open) return null
-
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setSaving(true)
@@ -62,42 +63,39 @@ export function LicenseDialog({ open, snapshot, onClose, onSubmit, onVerify }: L
   }
 
   return (
-    <div className="license-dialog-overlay" onMouseDown={onClose}>
-      <form className="license-dialog" role="dialog" aria-modal="true" aria-labelledby="license-dialog-title" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="license-dialog-head">
-          <div>
-            <span className="license-dialog-kicker"><Key size={15} weight="fill" /> 授权凭据</span>
-            <h2 id="license-dialog-title">更换 Token 与 API Key</h2>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !saving && !verifying) onClose() }}>
+      <DialogContent className="license-renewal-dialog sm:max-w-lg" showCloseButton={!saving && !verifying}>
+        <form className="grid gap-4" onSubmit={submit}>
+          <DialogHeader>
+            <DialogDescription className="inline-flex items-center gap-1.5 text-primary"><Key size={15} weight="fill" /> 授权凭据</DialogDescription>
+            <DialogTitle>更新授权，继续创作</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">填写同一组 Token 与 API Key。验证通过后自动更新授权；验证失败不会覆盖现有凭据。</p>
+          <div className="grid gap-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <span>当前 Token：<code className="text-foreground">{snapshot?.tokenMasked ?? '—'}</code></span>
+            <span>当前 API Key：<code className="text-foreground">{snapshot?.apiKeyMasked ?? '—'}</code></span>
           </div>
-          <button type="button" className="license-dialog-close" onClick={onClose} aria-label="关闭授权凭据窗口"><X size={18} /></button>
-        </div>
-        <p className="license-dialog-note">必须输入相互绑定的一整组新凭据。验证成功后才会覆盖本机旧凭据，并立即解除宽限或锁定。</p>
-        <div className="license-current-pair">
-          <span>当前 Token：<code>{snapshot?.tokenMasked ?? '—'}</code></span>
-          <span>当前 API Key：<code>{snapshot?.apiKeyMasked ?? '—'}</code></span>
-        </div>
-        <label className="form-group">
-          <span>Token</span>
-          <input className="input-text license-secret-input" value={token} onChange={(event) => { setToken(event.target.value); setSubmitError(null) }} placeholder="KB-TKN-XXXX-XXXX-XXXX" autoComplete="off" spellCheck={false} required />
-        </label>
-        <label className="form-group">
-          <span>API Key</span>
-          <input className="input-text license-secret-input" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setSubmitError(null) }} placeholder="KB-KEY-XXXX-XXXX-XXXX-XXXX-XXXX" autoComplete="off" spellCheck={false} required />
-        </label>
-        {submitError && (
-          <div className="license-dialog-error" role="alert" aria-live="assertive">
-            <WarningCircle size={18} weight="fill" />
-            <span>{submitError}</span>
+          <div className="grid gap-2">
+            <Label htmlFor="license-token">Token</Label>
+            <Input id="license-token" disabled={saving || verifying} value={token} onChange={(event) => { setToken(event.target.value); setSubmitError(null) }} placeholder="KB-TKN-XXXX-XXXX-XXXX" autoComplete="off" spellCheck={false} required />
           </div>
-        )}
-        <div className="license-dialog-actions">
-          <Button type="button" variant="secondary" onClick={onClose}>取消</Button>
-          {onVerify && (
-            <Button type="button" variant="secondary" loading={verifying} onClick={handleVerify}>立即进行认证</Button>
+          <div className="grid gap-2">
+            <Label htmlFor="license-key">API Key</Label>
+            <Input id="license-key" type="password" disabled={saving || verifying} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setSubmitError(null) }} placeholder="KB-KEY-XXXX-XXXX-XXXX-XXXX-XXXX" autoComplete="off" spellCheck={false} required />
+          </div>
+          {submitError && (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+              <WarningCircle size={18} weight="fill" />
+              <span>{submitError}</span>
+            </div>
           )}
-          <Button type="submit" variant="primary" loading={saving} disabled={!token.trim() || !apiKey.trim()}>验证并保存</Button>
-        </div>
-      </form>
-    </div>
+          <DialogFooter>
+            <Button type="button" variant="secondary" disabled={saving || verifying} onClick={onClose}>稍后处理</Button>
+            {onVerify && <Button type="button" variant="secondary" loading={verifying} disabled={saving} onClick={handleVerify}>重新验证</Button>}
+            <Button type="submit" variant="primary" loading={saving} disabled={verifying || saving || !token.trim() || !apiKey.trim()}>验证并保存</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

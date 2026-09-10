@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Copy, Table, FileText, Check, DownloadSimple, Translate } from '@phosphor-icons/react'
 import type { Transcript } from '@koubox/shared'
+import { Button } from './common/Button'
+import { cn } from '@/lib/utils'
 
 type ResultPanelProps = {
   title: string
@@ -55,51 +57,53 @@ export function ResultPanel({
 
         <div className="result-actions">
           {hasSegments && (
-            <div style={{ display: 'flex', gap: 4, marginRight: 6 }}>
-              <button
-                className={`btn-secondary ${viewMode === 'segments' ? 'active' : ''}`}
-                style={{ height: 32, padding: '0 10px', fontSize: 12 }}
+            <div className="mr-1.5 flex gap-1">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className={cn(viewMode === 'segments' && 'border-primary/40 bg-accent text-accent-foreground')}
                 onClick={() => setViewMode('segments')}
                 title="分句时间轴视图"
+                icon={<Table size={14} />}
               >
-                <Table size={14} />
-                <span>时间轴</span>
-              </button>
-              <button
-                className={`btn-secondary ${viewMode === 'text' ? 'active' : ''}`}
-                style={{ height: 32, padding: '0 10px', fontSize: 12 }}
+                时间轴
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className={cn(viewMode === 'text' && 'border-primary/40 bg-accent text-accent-foreground')}
                 onClick={() => setViewMode('text')}
                 title="纯文本视图"
+                icon={<FileText size={14} />}
               >
-                <FileText size={14} />
-                <span>文本</span>
-              </button>
+                文本
+              </Button>
             </div>
           )}
 
-          <button
-            className="btn-secondary"
-            style={{ height: 32, padding: '0 12px', fontSize: 12 }}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
             onClick={handleCopy}
+            icon={copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
           >
-            {copied ? <Check size={14} color="#10b981" /> : <Copy size={14} />}
-            <span>{copied ? '已复制' : '复制全文'}</span>
-          </button>
+            {copied ? '已复制' : '复制全文'}
+          </Button>
 
           {action && actionLabel && (
-            <button
-              className="btn-primary"
-              style={{ height: 32, padding: '0 14px', fontSize: 12 }}
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
               onClick={action}
               disabled={disabled}
+              icon={actionIcon === 'translate' ? <Translate size={14} /> : <DownloadSimple size={14} />}
             >
-              {actionIcon === 'translate' ? (
-                <Translate size={14} />
-              ) : (
-                <DownloadSimple size={14} />
-              )}
-              <span>{actionLabel}</span>
-            </button>
+              {actionLabel}
+            </Button>
           )}
         </div>
       </div>

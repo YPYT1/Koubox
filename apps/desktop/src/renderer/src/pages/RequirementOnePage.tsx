@@ -650,25 +650,12 @@ export function RequirementOnePage({
           <h3>识别文案</h3>
           <span className="viral-preview-hint">左侧原文、右侧译文按句对齐；翻译需手动触发</span>
           <div className="viral-text-actions" style={{ marginLeft: 'auto' }}>
-            <button
-              type="button"
-              className="btn-secondary"
-              style={{ height: 32 }}
-              onClick={() => setTextExpanded((value) => !value)}
-            >
-              {textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+            <Button type="button" variant="secondary" size="sm" onClick={() => setTextExpanded((value) => !value)} icon={textExpanded ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}>
               {textExpanded ? '收起' : '展开'}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              style={{ height: 32 }}
-              disabled={!canTranslate}
-              onClick={() => void handleTranslate()}
-            >
-              {translationBusy ? <CircleNotch size={14} className="spin" /> : <Translate size={14} />}
+            </Button>
+            <Button type="button" variant="secondary" size="sm" disabled={!canTranslate} onClick={() => void handleTranslate()} icon={translationBusy ? <CircleNotch size={14} className="spin" /> : <Translate size={14} />}>
               {translationBusy ? '翻译中…' : '翻译成中文'}
-            </button>
+            </Button>
           </div>
         </div>
         <div className="viral-text-grid">
@@ -676,18 +663,11 @@ export function RequirementOnePage({
             <div className="viral-text-head">
               <h4>原始文案</h4>
               <div className="viral-text-actions">
-                <button
-                  type="button"
-                  className={`btn-secondary ${copiedSection === 'original' ? 'btn-copy-done' : ''}`}
-                  style={{ height: 32 }}
-                  disabled={!hasTranscript}
-                  onClick={() => void handleCopy(originalLines.filter(Boolean).join('\n'), 'original')}
-                >
-                  {copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}
+                <Button type="button" variant="secondary" size="sm" className={copiedSection === 'original' ? 'btn-copy-done' : ''} disabled={!hasTranscript} onClick={() => void handleCopy(originalLines.filter(Boolean).join('\n'), 'original')} icon={copiedSection === 'original' ? <Check size={14} /> : <Copy size={14} />}>
                   {copiedSection === 'original' ? '已复制' : '复制原文'}
-                </button>
-                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}>加入文案库</button>
-                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</button>
+                </Button>
+                <Button type="button" variant="secondary" size="sm" disabled={!hasTranscript} onClick={() => void saveCopy(originalLines.filter(Boolean).join('\n'), 'original')}>加入文案库</Button>
+                <Button type="button" variant="secondary" size="sm" disabled={!hasTranscript} onClick={() => void openShare(originalLines.filter(Boolean).join('\n'), 'original')}>分享原文</Button>
               </div>
             </div>
             <div className="viral-line-list" ref={originalListRef} onScroll={syncScrollFromOriginal}>
@@ -707,18 +687,11 @@ export function RequirementOnePage({
             <div className="viral-text-head">
               <h4>翻译文案</h4>
               <div className="viral-text-actions">
-                <button
-                  type="button"
-                  className={`btn-secondary ${copiedSection === 'translation' ? 'btn-copy-done' : ''}`}
-                  style={{ height: 32 }}
-                  disabled={!hasTranslation}
-                  onClick={() => void handleCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}
-                >
-                  {copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}
+                <Button type="button" variant="secondary" size="sm" className={copiedSection === 'translation' ? 'btn-copy-done' : ''} disabled={!hasTranslation} onClick={() => void handleCopy(translatedLines.filter(Boolean).join('\n'), 'translation')} icon={copiedSection === 'translation' ? <Check size={14} /> : <Copy size={14} />}>
                   {copiedSection === 'translation' ? '已复制' : '复制译文'}
-                </button>
-                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}>加入文案库</button>
-                <button type="button" className="btn-secondary" style={{ height: 32 }} disabled={!hasTranslation} onClick={() => void openShare(translatedLines.filter(Boolean).join('\n'), 'translation')}>分享译文</button>
+                </Button>
+                <Button type="button" variant="secondary" size="sm" disabled={!hasTranslation} onClick={() => void saveCopy(translatedLines.filter(Boolean).join('\n'), 'translation')}>加入文案库</Button>
+                <Button type="button" variant="secondary" size="sm" disabled={!hasTranslation} onClick={() => void openShare(translatedLines.filter(Boolean).join('\n'), 'translation')}>分享译文</Button>
               </div>
             </div>
             <div className="viral-line-list" ref={translatedListRef} onScroll={syncScrollFromTranslated}>

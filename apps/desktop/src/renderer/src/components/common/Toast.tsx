@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X, CheckCircle, WarningCircle, Info } from '@phosphor-icons/react'
+import { toast as sonnerToast } from 'sonner'
 
 export interface ToastMessage {
   id: string
@@ -15,28 +15,12 @@ export interface ToastProps {
 export function Toast({ toast, onClose }: ToastProps) {
   useEffect(() => {
     if (!toast) return
-    const timer = window.setTimeout(onClose, 5000)
-    return () => window.clearTimeout(timer)
+    const opts = { id: toast.id, onDismiss: onClose, onAutoClose: onClose }
+    if (toast.type === 'success') sonnerToast.success(toast.text, opts)
+    else if (toast.type === 'warning') sonnerToast.warning(toast.text, opts)
+    else if (toast.type === 'error') sonnerToast.error(toast.text, opts)
+    else sonnerToast(toast.text, opts)
   }, [toast?.id])
 
-  if (!toast) return null
-
-  const icons = {
-    success: <CheckCircle size={17} weight="fill" color="#10b981" />,
-    warning: <WarningCircle size={17} weight="fill" color="#f59e0b" />,
-    error: <WarningCircle size={17} weight="fill" color="#ef4444" />,
-    info: <Info size={17} weight="fill" color="#0f766e" />
-  }
-
-  const type = toast.type || 'info'
-
-  return (
-    <div className="toast-notification" role="status">
-      {icons[type]}
-      <span>{toast.text}</span>
-      <button className="toast-close" onClick={onClose} aria-label="关闭">
-        <X size={14} />
-      </button>
-    </div>
-  )
+  return null
 }

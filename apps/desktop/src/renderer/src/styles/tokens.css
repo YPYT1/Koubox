@@ -1,48 +1,46 @@
 /**
- * Koubox (口播匣) Modern Clean Design Tokens
- * 质感：Apple 原生桌面工坊 + Linear 极简效能体系
+ * Koubox (口播匣) Desktop Design Tokens
+ * 质感：macOS 原生工作台，浅色、克制、强调内容与操作层级。
  */
 
 :root {
   /* 表面层级体系 (Surface Hierarchy) */
-  --bg-desktop: #f0f2f5;
-  --bg-app: #f8fafc;
+  --bg-desktop: #f5f5f5;
+  --bg-app: #ffffff;
   --bg-window: #ffffff;
-  --bg-sidebar: #fafbfd;
+  --bg-sidebar: rgba(255, 255, 255, 0.82);
   --bg-card: #ffffff;
-  --bg-card-subtle: #f8fafc;
-  --bg-card-hover: #fcfdfe;
-  --bg-hover: #f1f4f9;
-  --bg-active: #e8eef6;
+  --bg-card-subtle: #f7f7f8;
+  --bg-card-hover: #ffffff;
+  --bg-hover: rgba(37, 99, 235, 0.08);
+  --bg-active: rgba(37, 99, 235, 0.14);
   --bg-input: #ffffff;
 
   /* 边框体系 (Borders) */
-  --border-subtle: #edf1f7;
-  --border-main: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --border-focus: rgba(15, 118, 110, 0.45);
+  --border-subtle: rgba(60, 60, 67, 0.12);
+  --border-main: rgba(60, 60, 67, 0.18);
+  --border-strong: rgba(60, 60, 67, 0.32);
+  --border-focus: rgba(37, 99, 235, 0.5);
 
   /* 主品牌与语义色 (Palette) */
-  --accent-teal: #0f766e;
-  --accent-teal-soft: #ecfdf5;
-  --accent-teal-border: #a7f3d0;
-  --accent-teal-hover: #115e59;
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-primary-soft: rgba(37, 99, 235, 0.1);
+  --accent-primary-border: rgba(37, 99, 235, 0.28);
 
-  --accent-blue: #2563eb;
-  --accent-blue-soft: #eff6ff;
-  --accent-blue-border: #bfdbfe;
-  --accent-blue-hover: #1d4ed8;
+  /* Compatibility aliases keep older feature modules on the shared accent. */
+  --accent-teal: var(--accent-primary);
+  --accent-teal-soft: var(--accent-primary-soft);
+  --accent-teal-border: var(--accent-primary-border);
+  --accent-teal-hover: var(--accent-primary-hover);
+  --accent-blue: var(--accent-primary);
+  --accent-blue-soft: var(--accent-primary-soft);
+  --accent-blue-border: var(--accent-primary-border);
+  --accent-blue-hover: var(--accent-primary-hover);
 
   --accent-purple: #7c3aed;
   --accent-purple-soft: #f5f3ff;
   --accent-purple-border: #ddd6fe;
-
-  /* 进度/强调暖金（与品牌青绿区分：进度用金，操作仍用青绿） */
-  --accent-gold: #c7953a;
-  --accent-gold-bright: #e4b84a;
-  --accent-gold-deep: #a67c2d;
-  --accent-gold-soft: #fbf6ea;
-  --accent-gold-border: #e8d4a0;
 
   --status-success: #10b981;
   --status-success-soft: #ecfdf5;
@@ -52,38 +50,38 @@
   --status-danger-soft: #fef2f2;
 
   /* 文本层级体系 (Typography) */
-  --text-main: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-tertiary: #94a3b8;
+  --text-main: #202124;
+  --text-secondary: #48494d;
+  --text-muted: #65666b;
+  --text-tertiary: #707176;
   --text-inverse: #ffffff;
 
   /* 字体家族 */
-  --font-sans: "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
 
   /* 弥散阴影层级 (Diffused Elevation) */
-  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-sm: 0 2px 6px -1px rgba(15, 23, 42, 0.04), 0 1px 3px -1px rgba(15, 23, 42, 0.02);
-  --shadow-card: 0 4px 16px -2px rgba(15, 23, 42, 0.04), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
-  --shadow-card-hover: 0 16px 36px -4px rgba(15, 23, 42, 0.08), 0 6px 16px -2px rgba(15, 23, 42, 0.04);
-  --shadow-glow-teal: 0 0 0 1px rgba(15, 118, 110, 0.2), 0 8px 24px -2px rgba(15, 118, 110, 0.18);
-  --shadow-glow-blue: 0 0 0 1px rgba(37, 99, 235, 0.2), 0 8px 24px -2px rgba(37, 99, 235, 0.18);
-  --shadow-dropdown: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px -2px rgba(15, 23, 42, 0.06);
-  --shadow-toast: 0 20px 40px -8px rgba(15, 23, 42, 0.14), 0 0 0 1px rgba(15, 23, 42, 0.05);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 2px 7px rgba(0, 0, 0, 0.06);
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.06);
+  --shadow-card-hover: 0 12px 30px rgba(0, 0, 0, 0.1);
+  --shadow-glow-teal: 0 0 0 1px rgba(37, 99, 235, 0.18), 0 8px 24px rgba(37, 99, 235, 0.14);
+  --shadow-glow-blue: var(--shadow-glow-teal);
+  --shadow-dropdown: 0 18px 42px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-toast: 0 16px 36px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(60, 60, 67, 0.08);
 
   /* 倒角系统 (Radius) */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-full: 9999px;
 
   /* 侧边栏动态参数 */
-  --sidebar-width: 256px;
-  --sidebar-min: 190px;
-  --sidebar-max: 420px;
+  --sidebar-width: 252px;
+  --sidebar-min: 220px;
+  --sidebar-max: 360px;
 
   /* 过渡曲线与时间 */
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
@@ -98,10 +96,12 @@
 }
 
 /* 全局通用重置与无障碍 */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html, body, #root {
