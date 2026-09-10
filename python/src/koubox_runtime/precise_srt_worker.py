@@ -74,9 +74,11 @@ def _segments_from_aligned_result(
         raise ValueError("声学对齐没有返回词级时间戳。")
     words = _refine_oversized_aligned_words(model, audio_path, words, language)
     words = enforce_aligned_word_limits(repair_zero_duration_words(words), language)
-    return repair_zero_duration_segments(
+    segments = repair_zero_duration_segments(
         segment_words(words, language=language, pauses=pauses)
     )
+    _validate_final_segments(segments, language=language)
+    return segments
 
 
 def run(
@@ -157,16 +159,21 @@ def run(
                     language=detected_language,
                     pauses=pauses,
                 )
+                segments = _ensure_mode_a_preserves_source(
+                    segments,
+                    source_text or "",
+                    detected_language,
+                )
             except ValueError as alignment_error:
                 if detected_language != "ja":
                     raise
                 log_write(
                     "warn",
                     "precise_srt",
-                    "模式 A 常规对齐无法安全分段，使用 Janome 边界重新声学对齐",
+                    "模式 A 常规对齐无法安全分段，使用 Sudachi 边界重新声学对齐",
                     {"error": str(alignment_error)},
                 )
-                diagnostics["alignmentFallback"] = "janome-tokenized-realign"
+                diagnostics["alignmentFallback"] = "sudachi-tokenized-realign"
                 aligned = _align_text(
                     model,
                     audio_path,
@@ -174,19 +181,21 @@ def run(
                     detected_language,
                     tokenize_japanese=True,
                 )
-                segments = _segments_from_aligned_result(
-                    aligned,
-                    model=model,
-                    audio_path=audio_path,
-                    language=detected_language,
-                    pauses=pauses,
-                )
-            segments = _ensure_mode_a_preserves_source(
-                segments,
-                source_text or "",
-                detected_language,
-                compute_type=compute_type,
-            )
+                try:
+                    segments = _segments_from_aligned_result(
+                        aligned,
+                        model=model,
+                        audio_path=audio_path,
+                        language=detected_language,
+                        pauses=pauses,
+                    )
+                    segments = _ensure_mode_a_preserves_source(
+                        segments,
+                        source_text or "",
+                        detected_language,
+                    )
+                except ValueError as realignment_error:
+                    raise ValueError("模式 A 对齐结果未完整保留用户文案。") from realignment_error
         else:
             send("progress", stage="asr", percent=18, message="正在识别原始音频")
             initial = _transcribe_original(

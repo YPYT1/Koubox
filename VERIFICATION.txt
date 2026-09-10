@@ -1,0 +1,28 @@
+﻿TRAINING TARGET: Japanese subtitle boundary scorer
+CHANGED FIELD: CUDA-only boundary model weights and training pipeline; production segmenter integration remains unchanged.
+
+ARTIFACTS:
+MODIFIED_FILE=D:\Project\Koubox\MODIFIED_FILE
+DIFF_FILE=D:\Project\Koubox\DIFF_FILE
+VERIFICATION_FILE=D:\Project\Koubox\VERIFICATION.txt
+ROLLBACK_FILE=D:\Project\Koubox\ROLLBACK.sh
+MODEL=D:\Project\Koubox\models\japanese_subtitle_boundary.pt
+METRICS=D:\Project\Koubox\models\japanese_subtitle_boundary.metrics.json
+DATASET=D:\Project\Koubox\training-data\japanese_boundary_examples.jsonl
+
+BASELINE:
+Command: python\\.venv\\Scripts\\python.exe -m unittest python/tests/test_precise_srt.py
+Result: 35 tests passed (OK), exit status 0.
+
+MODIFIED:
+Command: python\\.venv\\Scripts\\python.exe python\\tools\\train_japanese_boundary_model.py
+Result: NVIDIA GeForce RTX 5070 Ti; 947846 parameters; 3802517-byte model; validation F1 0.606060606060606; peak CUDA reserved 274726912 bytes; under_one_gib_vram=true; exit status 0.
+Command: CUDA inference smoke test on unseen Japanese text
+Result: NVIDIA GeForce RTX 5070 Ti; peak CUDA reserved 26.0 MiB; exit status 0.
+
+ROLLBACK:
+Command: bash /mnt/d/Project/Koubox/ROLLBACK.sh
+Result: rollback verification passed; MODIFIED_FILE restored to modified-copy state; exit status 0.
+
+STATUS:
+The trained model is an experimental baseline. It was trained on 64 generated documents and validated on 16 separate generated documents; the existing 10 scripts were excluded from training and reserved as independent material. The model is not connected to the production SRT segmentation path because independent generalization is not yet reliable.

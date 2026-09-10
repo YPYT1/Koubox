@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import hashlib
+
+import torch
+from torch import Tensor, nn
+
+BOUNDARY_CONTEXT = 32
+CHAR_VOCAB_SIZE = 8192
+POS_CLASSES = ("名詞", "動詞", "形容詞", "助詞", "助動詞", "接頭辞", "接尾辞", "記号", "副詞", "その他")
+NUMERIC_FEATURES = 8 + len(POS_CLASSES) * 2 + 6
+
+
+def character_id(character: str) -> int:
+    digest = hashlib.blake2b(character.encode("utf-8"), digest_size=4).digest()
+    return int.from_bytes(digest, "little") % (CHAR_VOCAB_SIZE - 1) + 1
+
+
+def boundary_example(
+    text: str, position: int, segment_start: int, segment_end: int, morphemes: list[object]
+) -> tuple[list[int], list[float]]:
+    if not 0 < position < len(text):
+        raise ValueError("边界位置必须位于文本内部。")
+    left = text[max(0, position - BOUNDARY_CONTEXT // 2) : position]
+    right = text[position : position + BOUNDARY_CONTEXT // 2]
+    context = (left.rjust(BOUNDARY_CONTEXT // 2, "\0") + right.ljust(BOUNDARY_CONTEXT // 2, "\0"))
+    ids = [0 if character == "\0" else character_id(character) for character in context]
+    left_char = text[position - 1]
+    right_char = text[position]
+    features = [
+        min(position - segment_start, 32) / 32.0,
+        min(segment_end - position, 32) / 32.0,
+        1.0 if left_char in "。！？!?" else 0.0,
+        1.0 if left_char in "、，,；;：:" else 0.0,
+        1.0 if right_char in "「『（([{【" else 0.0,
+        1.0 if left_char.isspace() or right_char.isspace() else 0.0,
+        min(len(left), 16) / 16.0,
+        min(len(right), 16) / 16.0,
+    ]
+    left_morpheme = next((m for m in morphemes if m.end == position), None)
+    right_morpheme = next((m for m in morphemes if m.start == position), None)
+    left_pos = left_morpheme.part_of_speech[0] if left_morpheme is not None else "その他"
+    right_pos = right_morpheme.part_of_speech[0] if right_morpheme is not None else "その他"
+    left_detail = left_morpheme.part_of_speech[1] if left_morpheme is not None and len(left_morpheme.part_of_speech) > 1 else ""
+    right_detail = right_morpheme.part_of_speech[1] if right_morpheme is not None and len(right_morpheme.part_of_speech) > 1 else ""
+    features.extend(
+        [1.0 if left_pos == item else 0.0 for item in POS_CLASSES]
+        + [1.0 if right_pos == item else 0.0 for item in POS_CLASSES]
+        + [
+            1.0 if left_detail == "非自立" else 0.0,
+            1.0 if right_detail == "非自立" else 0.0,
+            1.0 if left_pos in {"助詞", "助動詞", "接尾辞"} else 0.0,
+            1.0 if right_pos in {"助詞", "助動詞", "接尾辞"} else 0.0,
+            1.0 if left_pos == "名詞" and right_pos == "名詞" else 0.0,
+            1.0 if left_pos == "動詞" and right_pos in {"助詞", "助動詞"} else 0.0,
+        ]
+    )
+    return ids, features
+
+
+class JapaneseBoundaryScorer(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.character_embedding = nn.Embedding(CHAR_VOCAB_SIZE, 96, padding_idx=0)
+        self.position_embedding = nn.Parameter(torch.zeros(BOUNDARY_CONTEXT, 96))
+        layer = nn.TransformerEncoderLayer(
+            d_model=96,
+            nhead=4,
+            dim_feedforward=192,
+            dropout=0.1,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=2)
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(96 + NUMERIC_FEATURES),
+            nn.Linear(96 + NUMERIC_FEATURES, 64),
+            nn.GELU(),
+            nn.Linear(64, 2),
+        )
+
+    def forward(self, character_ids: Tensor, features: Tensor) -> Tensor:
+        if character_ids.device.type != "cuda" or features.device.type != "cuda":
+            raise RuntimeError("JapaneseBoundaryScorer 必须在 CUDA 上运行。")
+        embedded = self.character_embedding(character_ids) + self.position_embedding
+        encoded = self.encoder(embedded, src_key_padding_mask=character_ids.eq(0))
+        pooled = encoded.masked_fill(character_ids.eq(0).unsqueeze(-1), 0.0).sum(dim=1)
+        lengths = character_ids.ne(0).sum(dim=1).clamp_min(1).unsqueeze(-1)
+        pooled = pooled / lengths
+        return self.classifier(torch.cat((pooled, features), dim=1))

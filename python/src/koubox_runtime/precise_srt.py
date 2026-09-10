@@ -6,13 +6,15 @@ import tomllib
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable, Sequence
 
 import soundfile as sf
 
-
+from .japanese_tokenizer import (
+    japanese_alignment_surfaces,
+    japanese_boundary_morphemes,
+)
 
 DISPLAY_STRIP_CHARS = frozenset(
     "・·･、，。！？：；「」『』\"（）()[]【】《》〈〉…—,.!?;:"
@@ -422,28 +424,86 @@ def repair_zero_duration_segments(
     *,
     minimum_duration_s: float = 0.08,
 ) -> list[dict[str, float | str]]:
-    del minimum_duration_s
-    repaired: list[dict[str, float | str]] = []
-    pending_text = ""
-    for segment in segments:
-        item = dict(segment)
-        start = float(item["start"])
-        end = float(item["end"])
-        text = str(item["text"])
-        if end - start <= 1e-6:
-            if repaired and start <= float(repaired[-1]["end"]) + 1e-6:
-                repaired[-1]["text"] = str(repaired[-1]["text"]) + text
-            else:
-                pending_text += text
+    if minimum_duration_s <= 0:
+        raise ValueError("字幕最小显示时长必须大于 0。")
+
+    clustered: list[dict[str, float | str]] = []
+    index = 0
+    while index < len(segments):
+        item = dict(segments[index])
+        if float(item["end"]) - float(item["start"]) >= minimum_duration_s:
+            clustered.append(item)
+            index += 1
             continue
-        if pending_text:
-            item["text"] = pending_text + text
-            pending_text = ""
-        repaired.append(item)
-    if pending_text:
-        if not repaired:
-            raise ValueError("声学对齐只返回零时长字幕，无法生成可靠时间轴。")
-        repaired[-1]["text"] = str(repaired[-1]["text"]) + pending_text
+
+        cluster = [item]
+        index += 1
+        while index < len(segments):
+            candidate = dict(segments[index])
+            if (
+                float(candidate["end"]) - float(candidate["start"])
+                >= minimum_duration_s
+                or float(candidate["start"]) > float(cluster[-1]["end"]) + 1e-6
+            ):
+                break
+            cluster.append(candidate)
+            index += 1
+        clustered.append(
+            {
+                "text": "".join(str(segment["text"]) for segment in cluster),
+                "start": float(cluster[0]["start"]),
+                "end": float(cluster[-1]["end"]),
+            }
+        )
+
+    repaired = [dict(segment) for segment in clustered]
+    index = 0
+    while index < len(repaired):
+        segment = repaired[index]
+        start = float(segment["start"])
+        end = float(segment["end"])
+        if end - start >= minimum_duration_s:
+            index += 1
+            continue
+
+        previous = repaired[index - 1] if index > 0 else None
+        following = repaired[index + 1] if index + 1 < len(repaired) else None
+        left_limit = (
+            float(previous["start"]) + minimum_duration_s
+            if previous is not None
+            else 0.0
+        )
+        right_limit = (
+            float(following["end"]) - minimum_duration_s
+            if following is not None
+            else max(end, start + minimum_duration_s)
+        )
+        if right_limit - left_limit < minimum_duration_s:
+            if previous is not None:
+                previous["text"] = str(previous["text"]) + str(segment["text"])
+                previous["end"] = max(float(previous["end"]), end)
+                repaired.pop(index)
+                index = max(0, index - 1)
+                continue
+            if following is not None:
+                segment["text"] = str(segment["text"]) + str(following["text"])
+                segment["end"] = max(end, float(following["end"]))
+                repaired.pop(index + 1)
+                continue
+
+        centered_start = (start + end - minimum_duration_s) / 2
+        repaired_start = min(
+            max(centered_start, left_limit),
+            right_limit - minimum_duration_s,
+        )
+        repaired_end = repaired_start + minimum_duration_s
+        if previous is not None and float(previous["end"]) > repaired_start:
+            previous["end"] = repaired_start
+        if following is not None and float(following["start"]) < repaired_end:
+            following["start"] = repaired_end
+        segment["start"] = repaired_start
+        segment["end"] = repaired_end
+        index += 1
     return repaired
 
 
@@ -590,73 +650,10 @@ def _normalize_for_equality(text: str, language: str) -> str:
     return re.sub(r"\s+", "", normalized).lower()
 
 
-def _mode_a_near_match(expected: str, actual: str) -> bool:
-    if not expected or not actual:
-        return False
-    ratio = SequenceMatcher(None, expected, actual).ratio()
-    length_delta = abs(len(expected) - len(actual))
-    max_delta = max(8, len(expected) // 25)
-    min_ratio = 0.92 if len(expected) >= 40 else 0.88
-    return ratio >= min_ratio and length_delta <= max_delta
-
-
-def _split_text_by_weights(text: str, weights: Sequence[int]) -> list[str]:
-    if not weights:
-        return []
-    if not text:
-        return ["" for _ in weights]
-    total = sum(max(1, int(weight)) for weight in weights) or len(weights)
-    raw = [len(text) * max(1, int(weight)) / total for weight in weights]
-    lengths = [int(value) for value in raw]
-    remainders = sorted(
-        range(len(weights)),
-        key=lambda index: raw[index] - lengths[index],
-        reverse=True,
-    )
-    missing = len(text) - sum(lengths)
-    for index in range(missing):
-        lengths[remainders[index % len(lengths)]] += 1
-    parts: list[str] = []
-    cursor = 0
-    for length in lengths:
-        parts.append(text[cursor : cursor + length])
-        cursor += length
-    return parts
-
-
-def _rebase_segments_to_source_text(
-    segments: Sequence[dict[str, float | str]],
-    source_text: str,
-    language: str,
-) -> list[dict[str, float | str]]:
-    """Keep segment timings, rewrite texts so Mode A still ships the user script."""
-    normalized_source = _normalize_for_equality(source_text, language)
-    weights = [
-        max(1, len(_normalize_for_equality(str(item["text"]), language)))
-        for item in segments
-    ]
-    pieces = _split_text_by_weights(normalized_source, weights)
-    rebased: list[dict[str, float | str]] = []
-    for item, piece in zip(segments, pieces):
-        text = piece
-        old = str(item["text"]).strip()
-        if (
-            text
-            and old
-            and old[-1] in "。！？!?、，,"
-            and text[-1] not in "。！？!?、，,"
-        ):
-            text += old[-1]
-        rebased.append({**item, "text": text})
-    return rebased
-
-
 def _ensure_mode_a_preserves_source(
     segments: list[dict[str, float | str]],
     source_text: str,
     language: str,
-    *,
-    compute_type: str,
 ) -> list[dict[str, float | str]]:
     expected = _normalize_for_equality(source_text, language)
     actual = _normalize_for_equality(
@@ -665,14 +662,6 @@ def _ensure_mode_a_preserves_source(
     )
     if actual == expected:
         return segments
-    if compute_type == "int8" and _mode_a_near_match(expected, actual):
-        rebased = _rebase_segments_to_source_text(segments, source_text, language)
-        rebased_actual = _normalize_for_equality(
-            "".join(str(item["text"]) for item in rebased),
-            language,
-        )
-        if rebased_actual == expected:
-            return rebased
     raise ValueError("模式 A 对齐结果未完整保留用户文案。")
 
 
@@ -683,7 +672,6 @@ def _validate_final_segments(
 ) -> None:
     if not segments:
         raise ValueError("精准 SRT 没有生成字幕片段。")
-    limits = DISPLAY_LIMITS[language]
     previous_end = -1.0
     for index, segment in enumerate(segments, start=1):
         text = str(segment["text"]).strip()
@@ -693,16 +681,10 @@ def _validate_final_segments(
             raise ValueError(f"第 {index} 条字幕为空。")
         if end <= start:
             raise ValueError(f"第 {index} 条字幕不是正时长。")
+        if end - start < 0.08:
+            raise ValueError(f"第 {index} 条字幕短于最小显示时长。")
         if start + 1e-6 < previous_end:
             raise ValueError(f"第 {index} 条字幕时间轴发生重叠或倒退。")
-        if end - start > 3.001:
-            raise ValueError(f"第 {index} 条字幕超过 3 秒。")
-        chars = len(re.sub(r"\s+", "", text))
-        if chars > int(limits["max_chars"]):
-            raise ValueError(f"第 {index} 条字幕超过语言字符上限。")
-        max_words = limits["max_words"]
-        if max_words is not None and len(text.split()) > int(max_words):
-            raise ValueError(f"第 {index} 条英文字幕超过单词上限。")
         previous_end = end
 
 
@@ -718,10 +700,7 @@ def _resolve_detected_language(result, requested_language: str) -> str:
 def prepare_alignment_text(text: str, language: str) -> str:
     if language != "ja":
         return text
-    from janome.tokenizer import Tokenizer
-
-    surfaces = [token.surface for token in Tokenizer().tokenize(text) if token.surface]
-    return " ".join(surfaces)
+    return " ".join(japanese_alignment_surfaces(text))
 
 
 def _transcribe_original(
@@ -768,6 +747,7 @@ def _align_text(
         language=stable_language,
         original_split=False,
         regroup=False,
+        token_step=0,
         verbose=None,
     )
 
@@ -788,9 +768,6 @@ def _refine_oversized_aligned_words(
     if not oversized or language != "ja":
         return list(words)
 
-    from janome.tokenizer import Tokenizer
-
-    tokenizer = Tokenizer()
     samples, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
     refined_words: list[TimedWord] = []
     with tempfile.TemporaryDirectory(prefix="koubox-srt-realign-") as temporary:
@@ -798,7 +775,10 @@ def _refine_oversized_aligned_words(
             if word not in oversized:
                 refined_words.append(word)
                 continue
-            tokens = [token.surface for token in tokenizer.tokenize(word.text) if token.surface]
+            tokens = [
+                morpheme.surface
+                for morpheme in japanese_boundary_morphemes(word.text)
+            ]
             if len(tokens) < 2:
                 refined_words.append(word)
                 continue
@@ -846,9 +826,8 @@ def _refine_oversized_aligned_words(
             safe_words.append(refined)
             continue
         tokens = [
-            token.surface
-            for token in tokenizer.tokenize(refined.text)
-            if token.surface
+            morpheme.surface
+            for morpheme in japanese_boundary_morphemes(refined.text)
         ]
         safe_words.extend(_split_aligned_word_by_tokens(refined, tokens))
     return safe_words
@@ -859,7 +838,7 @@ def _split_aligned_word_by_tokens(
 ) -> list[TimedWord]:
     """Last-resort token-boundary fallback for a stable-ts oversized word.
 
-    This never splits a Janome token internally. It is only used when local
+    This never splits a Sudachi boundary token internally. It is only used when local
     acoustic realignment of an oversized stable-ts span did not return a
     usable token sequence; the span's original acoustic interval is retained
     and apportioned across complete tokens by token length.
@@ -898,9 +877,6 @@ def enforce_aligned_word_limits(
     limits = DISPLAY_LIMITS[language]
     if language != "ja":
         return list(words)
-    from janome.tokenizer import Tokenizer
-
-    tokenizer = Tokenizer()
     result: list[TimedWord] = []
     for word in words:
         if (
@@ -909,6 +885,6 @@ def enforce_aligned_word_limits(
         ):
             result.append(word)
             continue
-        tokens = [token.surface for token in tokenizer.tokenize(word.text) if token.surface]
+        tokens = [morpheme.surface for morpheme in japanese_boundary_morphemes(word.text)]
         result.extend(_split_aligned_word_by_tokens(word, tokens))
     return result

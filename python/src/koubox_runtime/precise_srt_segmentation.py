@@ -4,6 +4,7 @@ import math
 import re
 from typing import Sequence
 
+from .japanese_tokenizer import JapaneseSplitMode, tokenize_japanese
 from .precise_srt import (
     BUILTIN_TERMINOLOGY,
     CHINESE_ATTACH_TO_PREVIOUS,
@@ -20,41 +21,33 @@ from .precise_srt import (
 
 
 def _japanese_phrase_units(words: Sequence[TimedWord]) -> list[PhraseUnit]:
-    try:
-        from janome.tokenizer import Tokenizer
-    except ImportError as error:
-        raise RuntimeError("精准 SRT 日文分段需要 Janome。") from error
-
     text = "".join(word.text for word in words)
-    tokenizer = Tokenizer()
-    phrase_ends: set[int] = set()
-    cursor = 0
-    pending_end = 0
-    for token in tokenizer.tokenize(text):
-        surface = token.surface
-        if not surface or not text.startswith(surface, cursor):
-            raise ValueError(f"Janome 无法映射识别文本：{surface!r}")
-        cursor += len(surface)
-        pos = str(token.part_of_speech).split(",")
-        head = pos[0] if pos else ""
-        detail = pos[1] if len(pos) > 1 else ""
-        if head in {"助詞", "助動詞"} or (head == "動詞" and detail == "接尾"):
-            pending_end = cursor
-            continue
-        if pending_end:
-            phrase_ends.add(pending_end)
-            pending_end = 0
-        phrase_ends.add(cursor)
-    phrase_ends.add(len(text))
-
+    morphemes = tokenize_japanese(text)
+    forced_ends: set[int] = set()
     word_ends: list[int] = []
     cursor = 0
     for word in words:
         cursor += len(word.text)
         word_ends.append(cursor)
+        if word.boundary_after in {"hard", "medium"}:
+            forced_ends.add(cursor)
+
+    phrase_ends = set(forced_ends)
+    for morpheme, next_morpheme in zip(morphemes, morphemes[1:]):
+        head = morpheme.part_of_speech[0]
+        next_head = next_morpheme.part_of_speech[0]
+        next_detail = next_morpheme.part_of_speech[1]
+        protected = (
+            head == "接頭辞"
+            or next_head in {"助詞", "助動詞", "接尾辞"}
+            or next_detail == "非自立"
+        )
+        if not protected or morpheme.end in forced_ends:
+            phrase_ends.add(morpheme.end)
+    phrase_ends.add(len(text))
+
     valid_ends = phrase_ends.intersection(word_ends)
     valid_ends.add(len(text))
-
     units: list[PhraseUnit] = []
     chunk: list[TimedWord] = []
     for word, word_end in zip(words, word_ends, strict=True):
@@ -64,7 +57,7 @@ def _japanese_phrase_units(words: Sequence[TimedWord]) -> list[PhraseUnit]:
             chunk = []
     if chunk:
         units.append(PhraseUnit(tuple(chunk)))
-    return _merge_japanese_suffix_units(units)
+    return units
 
 
 def _merge_japanese_suffix_units(units: Sequence[PhraseUnit]) -> list[PhraseUnit]:
@@ -163,6 +156,34 @@ def _unit_fits(
     )
 
 
+def _japanese_token_units(
+    unit: PhraseUnit,
+    mode: JapaneseSplitMode,
+) -> list[PhraseUnit]:
+    text = unit.text
+    token_ends = {
+        morpheme.end for morpheme in tokenize_japanese(text, mode)
+    }
+
+    word_ends: list[int] = []
+    cursor = 0
+    for word in unit.words:
+        cursor += len(word.text)
+        word_ends.append(cursor)
+    valid_ends = token_ends.intersection(word_ends)
+
+    token_units: list[PhraseUnit] = []
+    chunk: list[TimedWord] = []
+    for word, word_end in zip(unit.words, word_ends, strict=True):
+        chunk.append(word)
+        if word_end in valid_ends:
+            token_units.append(PhraseUnit(tuple(chunk)))
+            chunk = []
+    if chunk:
+        token_units.append(PhraseUnit(tuple(chunk)))
+    return token_units or [unit]
+
+
 def _split_oversized_units(
     units: Sequence[PhraseUnit],
     *,
@@ -180,13 +201,27 @@ def _split_oversized_units(
         ):
             result.append(unit)
             continue
-        if len(unit.words) == 1:
-            raise ValueError(
-                f"单个已对齐词超过{language}字幕硬限制，不能在词内拆分：{unit.words[0].text}"
-            )
+
+        if language == "ja":
+            atomic_units: list[PhraseUnit] = []
+            for c_unit in _japanese_token_units(unit, JapaneseSplitMode.C):
+                if _unit_fits(
+                    c_unit,
+                    language=language,
+                    limits=limits,
+                    max_duration_s=max_duration_s,
+                ):
+                    atomic_units.append(c_unit)
+                    continue
+                split_units = _japanese_token_units(c_unit, JapaneseSplitMode.B)
+                if len(split_units) == 1:
+                    split_units = _japanese_token_units(c_unit, JapaneseSplitMode.A)
+                atomic_units.extend(split_units)
+        else:
+            atomic_units = [PhraseUnit((word,)) for word in unit.words]
         chunk: list[TimedWord] = []
-        for word in unit.words:
-            candidate = PhraseUnit(tuple([*chunk, word]))
+        for atomic_unit in atomic_units:
+            candidate = PhraseUnit(tuple([*chunk, *atomic_unit.words]))
             if chunk and not _unit_fits(
                 candidate,
                 language=language,
@@ -194,18 +229,9 @@ def _split_oversized_units(
                 max_duration_s=max_duration_s,
             ):
                 result.append(PhraseUnit(tuple(chunk)))
-                chunk = [word]
+                chunk = list(atomic_unit.words)
             else:
-                chunk.append(word)
-            if not _unit_fits(
-                PhraseUnit(tuple(chunk)),
-                language=language,
-                limits=limits,
-                max_duration_s=max_duration_s,
-            ):
-                raise ValueError(
-                    f"单个已对齐词超过{language}字幕硬限制，不能在词内拆分：{word.text}"
-                )
+                chunk.extend(atomic_unit.words)
         if chunk:
             result.append(PhraseUnit(tuple(chunk)))
     return result
@@ -269,14 +295,28 @@ def segment_words(
             duration = selected[-1].end - selected[0].start
             chars = len(re.sub(r"\s+", "", text))
             word_count = _span_word_count(selected)
-            if duration > max_duration_s or chars > int(limits["max_chars"]):
+            indivisible_unit = len(selected) == 1 and not _unit_fits(
+                selected[0],
+                language=normalized_language,
+                limits=limits,
+                max_duration_s=max_duration_s,
+            )
+            if not indivisible_unit and (
+                duration > max_duration_s or chars > int(limits["max_chars"])
+            ):
                 continue
             max_words = limits["max_words"]
-            if max_words is not None and word_count > int(max_words):
+            if (
+                not indivisible_unit
+                and max_words is not None
+                and word_count > int(max_words)
+            ):
                 continue
 
             candidate = cost[start] + abs(chars - int(limits["target_chars"])) * 0.12
             candidate += abs(duration - 1.4) * 0.25
+            if indivisible_unit:
+                candidate += 10.0
             if start > 0:
                 tier = _pause_tier_between(units[start - 1], units[start], pauses)
                 pause_bonus = {"hard": -4.0, "medium": -2.5, "soft": -0.8}.get(

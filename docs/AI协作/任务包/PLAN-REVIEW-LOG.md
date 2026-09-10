@@ -37,5 +37,5 @@
 - 结论：`VERDICT: APPROVED`
 - 范围：实现结构、协议边界、自动纠错门槛、四语分段代码、SRT 出口、打包与可维护性。
 - 已解决：1834 行巨型文件、非日文标点边界丢失、英文/韩文整段候选丢空格、不同长度正确候选被拒、异常长候选污染、纠正失败二次失败、正常语速边缘误触发、精准 SRT 额外输出原文案文本、postflight import 后生成缓存。
-- 自动化：Python 23/23、core 58/58、typecheck、build、portable preflight/真实打包/postflight、blackbox 均通过。
+- 自动化：历史版本 Python 23/23、core 58/58、typecheck、build、portable preflight/真实打包/postflight、blackbox 均通过；Sudachi 改造后的当前版本需要重新执行。
 - 复审批准仅表示代码质量与当前实现验证通过；FLEURS 四语、快速语音 10% 改善和 RTX 2060 6GB 属于尚未完成的产品发布验收，不被 `APPROVED` 掩盖。

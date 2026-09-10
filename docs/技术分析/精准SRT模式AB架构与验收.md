@@ -1,8 +1,8 @@
 # 精准 SRT 模式 A/B 架构与验收
 
-> 状态：核心实现完成，发布验收未全部完成  
-> 日期：2026-08-29  
-> 对应任务包：[`20260829-精准SRT模式AB产品化.md`](../AI协作/任务包/20260829-精准SRT模式AB产品化.md)
+> 状态：核心实现已完成；Sudachi 改造后的当前版本回归、人工金标准、中文语义辅助基准、CUDA 日文边界模型接入、RTX 2060 实机和部分快速语速门槛仍未完成
+> 更新：2026-09-09
+> 未完成事项统一记录：[`精准SRT未完成事项总表.md`](精准SRT未完成事项总表.md)
 
 ## 当前差距
 
@@ -58,7 +58,7 @@ flowchart TD
 | 语言 | 不可拆单元 | 展示上限 |
 |------|------------|----------|
 | 中文 | 完整对齐词、审批术语、虚词组合 | 14 个有效字符 |
-| 日文 | stable-ts 词与 Janome 短语交集、审批术语 | 14 个有效字符 |
+| 日文 | `SudachiPy + SudachiDict-core` 的 C/B/A 粒度词和 POS 规则 | 14 个有效字符 |
 | 英文 | 完整单词、审批术语、功能词组合 | 8 个词且不超过 42 字符 |
 | 韩文 | 完整空格词组、审批术语 | 18 个有效字符 |
 
@@ -77,8 +77,8 @@ flowchart TD
 | core 测试 | 56/56 通过 |
 | TypeScript 类型检查 | 通过 |
 | 实验算法测试 | 27/27 通过 |
-| 产品 stable_whisper import | 未安装，符合改造前预期 |
-| 产品 Janome import | 未安装，符合改造前预期 |
+| 产品 stable_whisper import | 历史版本未安装，当前版本需要重新执行 |
+| 产品 SudachiPy/SudachiDict import | 当前版本需要重新执行；历史 Janome import 记录仅适用于旧实现 |
 
 后续每次真实运行在本文追加配置、命令、结果、资源峰值和未通过项，不以“生成了文件”替代质量验收。
 
@@ -94,7 +94,7 @@ flowchart TD
 原音频 + 用户文案
 → stable-ts/Faster-Whisper 声学对齐
 → 零时长词并入相邻真实声学区间
-→ Janome/四语原子单元
+→ Sudachi C/B/A 原子单元与 POS 规则
 → 气口与长度动态分段
 → 去展示标点
 → 正文锁定校验
@@ -155,22 +155,33 @@ flowchart TD
 
 - GPU：NVIDIA GeForce RTX 5070 Ti，16303 MiB；驱动 595.97。
 - Python 3.12.13；Torch 2.11.0+cu128；CUDA 可用。
-- stable-ts 2.19.1；Janome 0.5.0；Faster-Whisper 1.2.1。
+- stable-ts 2.19.1；日文分词使用 `SudachiPy==0.6.11` 与 `SudachiDict-core==20260723`；Faster-Whisper 1.2.1。
 - Faster-Whisper Large-v3 `model.bin` SHA256：`69F74147E3334731BC3A76048724833325D2EC74642FB52620EDA87352E3D4F1`。
 - 10 条运行的最大 GPU 增量为 4400 MiB，最大 Python 工作集为 3958.57 MiB。
 
-## 最终工程验证
+## 当前版本最终工程验证状态
 
-- Python：23/23。
-- core：58/58。
-- 全仓 typecheck：通过。
-- Electron build：通过。
-- portable preflight、真实打包、postflight：通过。
-- 便携目录：`apps/desktop/release/Koubox-0.8.2`，约 6.40 GiB，27717 个文件。
-- 包内精准 SRT 内置规则、四个拆分模块、stable-ts LICENSE/SHA256 清单存在并可 import。
-- 包内模型目录为空、精准 SRT 测试数据为 0、Python 源码缓存为 0。
-- 包内 5 个精准 SRT 源码/配置文件与当前工作树 SHA256 一致。
+历史记录中的 Python 23/23、core 58/58、typecheck、Electron build、portable preflight/postflight 和黑盒结果均对应旧版本实现。当前 Sudachi 改造后的版本尚需重新执行这些命令，并重新完成真实日文回归和便携包复验。
+
+当前明确未完成：
+
+- Sudachi 改造后的自动化测试、类型检查和构建复验；
+- Sudachi 改造后的真实日文音频回归；
+- 人工日语边界金标准；
+- 中文语义辅助基准及中日边界映射；
+- CUDA 日文边界模型离线对比和生产接入；
+- 四语快速语速质量门槛；
+- RTX 2060 6GB 实机验收；
+- 增量 fallback。
+
+便携包历史踩坑记录仍然保留，但当前发布包尚未重新生成。完整状态见《精准 SRT 未完成事项总表》。
+
+- 历史 Python：23/23；当前 Sudachi 改造版本待重新执行。
+- 历史 core：58/58；当前版本待重新执行。
+- 历史 typecheck、Electron build、portable preflight、真实打包和 postflight 均通过；当前版本待重新执行。
+- 历史便携目录 `apps/desktop/release/Koubox-0.8.2` 已清理；当前 Sudachi 改造后的发布包尚未重新生成。
+- 历史包内 import、源码哈希、空模型目录、测试数据和缓存检查曾通过；当前版本待重新执行。
 
 打包踩坑：Windows 长路径会让普通 `Remove-Item -Recurse` 在 Chromium 深层文件上部分删除后报错；脚本现先验证目标必须位于本仓库 `apps/desktop`，再尝试常规删除，失败时使用 `\\?\` .NET 扩展路径，并在继续打包前验证旧 release 已不存在。
 
-这些结果证明产品接线、当前日文回归、FLEURS 四语 test 运行和便携运行时成立；快速语音改善门槛未全通过，RTX 2060 6GB 实机仍待外部设备执行。
+这些是历史版本的工程验证记录。当前 Sudachi 改造版本的重新验证结果必须追加到《精准 SRT 未完成事项总表》和本文，不得直接沿用本节结论。

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from koubox_runtime.precise_srt import (
     TimedWord,
+    _ensure_mode_a_preserves_source,
     _punctuated_text_from_words,
     _split_aligned_word_by_tokens,
     enforce_aligned_word_limits,
@@ -278,6 +279,20 @@ class PreciseSrtContractTests(unittest.TestCase):
         self.assertNotIn("スマート", texts)
         self.assertNotIn("です", texts)
 
+    def test_japanese_compounds_and_connectors_are_not_split(self) -> None:
+        words = [
+            TimedWord(character, index * 0.08, (index + 1) * 0.08, 0.9)
+            for index, character in enumerate(
+                "信頼性基準が価格転嫁の実績を材料を作れることと確認する"
+            )
+        ]
+        segments = segment_words(words, language="ja", pauses=[])
+        texts = [str(item["text"]) for item in segments]
+        joined = "|".join(texts)
+        self.assertNotIn("信頼|性基準", joined)
+        self.assertNotIn("価格転嫁の|実績", joined)
+        self.assertNotIn("作れる|ことと", joined)
+
     def test_pause_evidence_is_limited_to_the_actual_aligned_gap(self) -> None:
         words = [
             TimedWord("気", 0.0, 0.40, 0.9),
@@ -390,6 +405,17 @@ class PreciseSrtContractTests(unittest.TestCase):
                 segments = segment_words(words, language=language, pauses=[])
                 self.assertEqual("".join(item["text"] for item in segments), expected)
 
+    def test_mode_a_mismatch_is_not_rebased_at_character_boundaries(self) -> None:
+        with self.assertRaisesRegex(ValueError, "未完整保留"):
+            _ensure_mode_a_preserves_source(
+                [
+                    {"text": "工", "start": 0.0, "end": 0.5},
+                    {"text": "場", "start": 0.5, "end": 1.0},
+                ],
+                "工場設備",
+                "ja",
+            )
+
     def test_zero_duration_cluster_is_repaired(self) -> None:
         repaired = repair_zero_duration_segments(
             [
@@ -397,10 +423,36 @@ class PreciseSrtContractTests(unittest.TestCase):
                 {"text": "後続", "start": 1.0, "end": 1.6},
             ]
         )
-        self.assertEqual(len(repaired), 1)
-        self.assertEqual(repaired[0]["text"], "前後続")
-        self.assertGreater(repaired[0]["end"], repaired[0]["start"])
+        self.assertEqual([item["text"] for item in repaired], ["前", "後続"])
+        self.assertAlmostEqual(float(repaired[0]["end"]) - float(repaired[0]["start"]), 0.08)
         self.assertEqual(repaired[-1]["end"], 1.6)
+
+    def test_millisecond_cluster_keeps_a_fine_complete_subtitle(self) -> None:
+        repaired = repair_zero_duration_segments(
+            [
+                {"text": "前文", "start": 0.0, "end": 1.0},
+                {"text": "工", "start": 1.0, "end": 1.001},
+                {"text": "場", "start": 1.001, "end": 1.004},
+                {"text": "後文", "start": 1.004, "end": 1.5},
+            ]
+        )
+        self.assertEqual([item["text"] for item in repaired], ["前文", "工場", "後文"])
+        self.assertTrue(
+            all(float(item["end"]) - float(item["start"]) >= 0.08 for item in repaired)
+        )
+
+    def test_isolated_millisecond_segment_remains_independent(self) -> None:
+        repaired = repair_zero_duration_segments(
+            [
+                {"text": "前文", "start": 0.0, "end": 0.5},
+                {"text": "工", "start": 1.0, "end": 1.001},
+                {"text": "後文", "start": 1.5, "end": 2.0},
+            ]
+        )
+        self.assertEqual([item["text"] for item in repaired], ["前文", "工", "後文"])
+        self.assertTrue(
+            all(float(item["end"]) - float(item["start"]) >= 0.08 for item in repaired)
+        )
 
     def test_zero_duration_words_merge_into_real_acoustic_span(self) -> None:
         repaired = repair_zero_duration_words(
@@ -434,7 +486,7 @@ class PreciseSrtContractTests(unittest.TestCase):
             self.assertLessEqual(len(str(item["text"])), 14)
             self.assertLessEqual(float(item["end"]) - float(item["start"]), 3.0)
 
-    def test_oversized_alignment_fallback_uses_complete_janome_tokens(self) -> None:
+    def test_oversized_alignment_fallback_uses_complete_sudachi_boundaries(self) -> None:
         split = _split_aligned_word_by_tokens(
             TimedWord("店舗機器の近くで判断するエッジ", 1.0, 2.0, 0.8),
             ["店舗", "機器", "の", "近く", "で", "判断", "する", "エッジ"],

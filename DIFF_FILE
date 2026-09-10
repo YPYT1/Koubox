@@ -1,0 +1,10 @@
+﻿diff --git "a/D:\\Project\\Koubox\\python\\src\\koubox_runtime\\japanese_boundary_model.py" "b/D:\\Project\\Koubox\\MODIFIED_FILE"
+index 4bc5c8d..1926fc4 100644
+--- "a/D:\\Project\\Koubox\\python\\src\\koubox_runtime\\japanese_boundary_model.py"
++++ "b/D:\\Project\\Koubox\\MODIFIED_FILE"
+@@ -88,3 +88,5 @@ class JapaneseBoundaryScorer(nn.Module):
+         lengths = character_ids.ne(0).sum(dim=1).clamp_min(1).unsqueeze(-1)
+         pooled = pooled / lengths
+         return self.classifier(torch.cat((pooled, features), dim=1))
++
++# Verification copy: CUDA-only boundary scorer.
