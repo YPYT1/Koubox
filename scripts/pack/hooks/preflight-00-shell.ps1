@@ -45,7 +45,7 @@ if ($freeGb -lt 25) {
 }
 Write-Host "${repoDrive}: 剩余 ${freeGb} GB"
 
-$electronDist = Join-Path $root 'node_modules\.pnpm\electron@33.4.11\node_modules\electron\dist\electron.exe'
+$electronDist = Join-Path $root 'node_modules\.pnpm\electron@33.4.11_supports-color@7.2.0\node_modules\electron\dist\electron.exe'
 Assert-PackPath $electronDist '本地 Electron（避免打包时再下载）'
 
 $proxy = "http://127.0.0.1:$ProxyPort"

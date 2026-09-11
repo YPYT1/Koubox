@@ -342,7 +342,7 @@ async function createWindow(): Promise<void> {
       pythonSourceDirectory: join(findPythonProjectDirectory(), 'src'),
       ffmpegDirectory: join(findVendorDirectory(), 'ffmpeg', 'bin')
     }),
-    pinBundledPaths: true,
+    pinBundledPaths: app.isPackaged,
     resolveTikTokBrowserMedia,
     resolveFacebookAnonymousMedia: resolveFacebookAnonymousWithChromium,
     resolvePlatformAuthentication,
